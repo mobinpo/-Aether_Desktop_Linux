@@ -14,7 +14,24 @@ The Windows edition of Aether Mobile — same interface, same icon, same core en
 
 ---
 
-## 🎉 Version 1.0.0 — first desktop release
+## 🎉 Version 1.1.0 — parity with engine core 1.5.0
+
+This release brings the bundled engine to **Aether Core 1.5.0** and adds a full UI for the
+three user-facing features that release introduced:
+
+- **Zero Trust (WARP for organizations)** — connect as a managed device of a Cloudflare
+  Zero Trust organization. Three sign-in methods: email code, service token, or an existing
+  access token. Optional Gateway proxy (off by default, because it logs your browsing).
+- **Routing rules** — block destinations outright, or send them out of your real interface
+  instead of the tunnel (banking apps, LAN services, domestic sites).
+- **In-tunnel DNS** — pick the resolvers used inside the tunnel.
+
+Zero Trust secrets are kept **in memory only**, never written to disk, and masked in logs.
+A core version gate makes sure 1.5.0 flags are only passed to an engine that understands them.
+See [SECURITY-AUDIT.md](SECURITY-AUDIT.md) for the full 0-100 security audit (score: 93/100).
+
+<details>
+<summary>Version 1.0.0 — first desktop release</summary>
 
 This is the **first** release of Aether for Windows. It is version `1.0.0` because the
 desktop edition starts its own version line, independent of the Android app.
@@ -124,10 +141,12 @@ All files are produced automatically by GitHub Actions and published to
 
 | File | Description |
 |---|---|
-| `Aether-Setup-1.0.0-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
-| `Aether-Setup-1.0.0-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
-| `Aether-Portable-1.0.0-x64.zip` | Portable, no installation, 64-bit |
-| `Aether-Portable-1.0.0-x86.zip` | Portable, no installation, 32-bit |
+</details>
+
+| `Aether-Setup-1.1.0-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
+| `Aether-Setup-1.1.0-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
+| `Aether-Portable-1.1.0-x64.zip` | Portable, no installation, 64-bit |
+| `Aether-Portable-1.1.0-x86.zip` | Portable, no installation, 32-bit |
 | `SHA256SUMS.txt` | Checksums for verifying file integrity |
 
 **Requirements:** Windows 10 build 1809 (October 2018 Update) or newer.

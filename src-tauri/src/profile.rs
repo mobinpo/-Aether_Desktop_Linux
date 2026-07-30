@@ -2,6 +2,13 @@
 //!
 //! هر تغییری در سمت اندروید باید دقیقاً همین‌جا هم اعمال شود؛ منطق ساخت
 //! آرگومان‌های خط فرمان و متغیرهای محیطیِ موتور باید بایت‌به‌بایت یکسان بماند.
+//!
+//! v10 (هسته‌ی 1.5.0): سه قابلیت جدیدِ کاربرمحورِ هسته اضافه شد و هر کدام
+//! پشت یک «قابلیت نسخه» (CoreCaps) گِیت شده‌اند تا هسته‌ی قدیمی‌تر هرگز فلگ
+//! ناشناخته نگیرد و اتصال نشکند:
+//!   * Zero Trust / WARP سازمانی  (--team, --access-*, --gateway)
+//!   * قوانین مسیریابی            (--route-block, --route-direct)
+//!   * DNS داخل تونل              (--dns)
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,6 +45,47 @@ pub enum EndpointMode { Auto, ManualPeer, ManualRange }
 #[serde(rename_all = "UPPERCASE")]
 pub enum SplitMode { Off, Include, Exclude }
 
+/// v10 (هسته‌ی 1.5.0): روش ورود به سازمان Cloudflare Zero Trust.
+///   Off          → ثبت‌نام معمولی (کاربر ناشناس WARP) — رفتار قبلی، پیش‌فرض.
+///   Email        → کد یک‌بارمصرف به ایمیل (`--access-email`).
+///   ServiceToken → توکن سرویس Access برای ماشین‌های بدون تعامل / CI
+///                  (`--access-id` + `--access-secret`).
+///   Token        → یک JWT از پیش‌گرفته‌شده (`--access-token`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AccessMode { Off, Email, ServiceToken, Token }
+
+/// قابلیت‌های هسته‌ی همراه — تعیین می‌کند کدام فلگ‌ها امن‌اند که فرستاده شوند.
+///
+/// قاعده‌ی همیشگیِ مخزن: «ارتقای خودکار هسته هرگز نباید یک انتشار را بشکند».
+/// فلگ‌های مخصوص 1.5.0 فقط وقتی به موتور می‌روند که نسخه‌ی واقعیِ سینک‌شده
+/// آن‌ها را بفهمد؛ اگر کاربر هسته‌ی قدیمی‌تری را پین کرده باشد این گزینه‌ها
+/// بی‌صدا نادیده گرفته می‌شوند تا یک فلگ ناشناخته موتور را نکشد.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreCaps {
+    pub zero_trust: bool,
+    pub routing: bool,
+    pub custom_dns: bool,
+}
+
+impl CoreCaps {
+    /// همه‌ی قابلیت‌ها خاموش — پیش‌فرضِ محافظه‌کار وقتی نسخه‌ی هسته نامعلوم است.
+    pub fn none() -> Self {
+        Self { zero_trust: false, routing: false, custom_dns: false }
+    }
+
+    /// همه‌ی قابلیت‌ها فعال — برای تست‌ها و مسیرهایی که نسخه‌ی هسته اهمیت ندارد.
+    pub fn all() -> Self {
+        Self { zero_trust: true, routing: true, custom_dns: true }
+    }
+
+    /// نگاشت نسخه‌ی هسته به قابلیت‌ها. Zero Trust / routing / --dns از 1.5.0.
+    pub fn for_version(major: u32, minor: u32) -> Self {
+        let v15 = (major, minor) >= (1, 5);
+        Self { zero_trust: v15, routing: v15, custom_dns: v15 }
+    }
+}
+
 pub const DEFAULT_MTU: u32 = 1280;
 pub const MTU_PRESETS: [u32; 5] = [1280, 1380, 1420, 1500, 8500];
 pub const KEEPALIVE_PRESETS: [u32; 4] = [0, 10, 25, 45];
@@ -69,6 +117,43 @@ pub struct ConnectionProfile {
     pub split_mode: SplitMode,
     /// در ویندوز به‌جای package name، مسیر یا نام فرآیند (`chrome.exe`).
     pub split_apps: Vec<String>,
+
+    // ====================================================================
+    //  v10 — قابلیت‌های هسته‌ی 1.5.0 (هم‌ترازی با نسخه‌ی اندروید)
+    // ====================================================================
+    /// Zero Trust: نام سازمان (تیم) Cloudflare. خالی = ثبت‌نام معمولی WARP.
+    pub team: String,
+    /// روش احراز هویتِ Zero Trust.
+    pub access_mode: AccessMode,
+    /// ایمیل برای دریافت کد یک‌بارمصرف (فقط AccessMode::Email).
+    pub access_email: String,
+    /// شناسه‌ی توکن سرویس Access (فقط AccessMode::ServiceToken). غیرمحرمانه.
+    pub access_id: String,
+    /// عبور تمام HTTP/HTTPS از پراکسیِ Gateway سازمان (فیلترینگ/لاگِ سازمانی).
+    /// پیش‌فرض خاموش — دقیقاً مثل هسته: یک هاپ اضافه و لاگ مرور را می‌افزاید.
+    pub gateway: bool,
+
+    /// قوانین مسیریابی: مقصدهایی که کاملاً مسدود می‌شوند (`--route-block`).
+    pub route_block: Vec<String>,
+    /// قوانین مسیریابی: مقصدهایی که از مسیر مستقیم (نه تونل) می‌روند
+    /// (`--route-direct`) — برای بانک، سرویس‌های LAN و سایت‌های داخلی.
+    pub route_direct: Vec<String>,
+
+    /// DNS داخل تونل (`--dns`). خالی = پیش‌فرض هسته.
+    pub dns: Vec<String>,
+
+    // ----- اسرارِ در-حافظه (هرگز روی دیسک نوشته نمی‌شوند) ----------------
+    // سخت‌سازی امنیتی: توکن سرویس و JWT حساس‌اند و مثل رفتار خودِ هسته
+    // (کش در حافظه برای طول عمر فرآیند) فقط در حافظه نگه‌داری می‌شوند.
+    // `skip_serializing` یعنی UI می‌تواند مقدار را بفرستد (deserialize مجاز)
+    // ولی هیچ‌وقت در profile.json یا پاسخ get_profile برنمی‌گردد — نه هنگام
+    // ذخیرهٔ معمول، نه هنگام Reset، نه در خروجی لاگ.
+    /// راز توکن سرویس Access (فقط AccessMode::ServiceToken).
+    #[serde(skip_serializing, default)]
+    pub access_secret: String,
+    /// JWT از پیش‌گرفته‌شده (فقط AccessMode::Token).
+    #[serde(skip_serializing, default)]
+    pub access_token: String,
 }
 
 impl Default for ConnectionProfile {
@@ -90,6 +175,16 @@ impl Default for ConnectionProfile {
             mtu: DEFAULT_MTU,
             split_mode: SplitMode::Off,
             split_apps: Vec::new(),
+            team: String::new(),
+            access_mode: AccessMode::Off,
+            access_email: String::new(),
+            access_id: String::new(),
+            gateway: false,
+            route_block: Vec::new(),
+            route_direct: Vec::new(),
+            dns: Vec::new(),
+            access_secret: String::new(),
+            access_token: String::new(),
         }
     }
 }
@@ -99,8 +194,20 @@ impl ConnectionProfile {
         self.endpoint_mode == EndpointMode::ManualPeer && !self.manual_peer.trim().is_empty()
     }
 
-    /// معادل دقیق `Profile.kt::toArgs()`
+    /// آیا این پروفایل قصد ورود به یک سازمان Zero Trust را دارد؟
+    pub fn uses_zero_trust(&self) -> bool {
+        !self.team.trim().is_empty()
+    }
+
+    /// معادل `Profile.kt::toArgs()` — رفتار قدیمی حفظ می‌شود.
+    /// همه‌ی قابلیت‌ها فعال فرض می‌شوند؛ چون فیلدهای جدید به‌طور پیش‌فرض
+    /// خالی‌اند، خروجی برای پروفایل پیش‌فرض دقیقاً مثل قبل است (قرارداد اندروید).
     pub fn to_args(&self) -> Vec<String> {
+        self.to_args_with_caps(CoreCaps::all())
+    }
+
+    /// نسخه‌ی گِیت‌شده‌ی `toArgs()` — فلگ‌های 1.5.0 فقط با هسته‌ی سازگار.
+    pub fn to_args_with_caps(&self, caps: CoreCaps) -> Vec<String> {
         let mut args: Vec<String> = Vec::new();
 
         match self.protocol {
@@ -144,6 +251,57 @@ impl ConnectionProfile {
         if self.ech { args.push("--ech".into()); args.push("auto".into()); }
         if self.keepalive > 0 { args.push("--keepalive".into()); args.push(self.keepalive.to_string()); }
 
+        // ----- Zero Trust / WARP سازمانی (هسته‌ی 1.5.0) -----------------
+        if caps.zero_trust && self.uses_zero_trust() {
+            args.push("--team".into());
+            args.push(self.team.trim().to_string());
+            match self.access_mode {
+                AccessMode::Email if !self.access_email.trim().is_empty() => {
+                    args.push("--access-email".into());
+                    args.push(self.access_email.trim().to_string());
+                }
+                AccessMode::ServiceToken
+                    if !self.access_id.trim().is_empty() && !self.access_secret.trim().is_empty() =>
+                {
+                    args.push("--access-id".into());
+                    args.push(self.access_id.trim().to_string());
+                    args.push("--access-secret".into());
+                    args.push(self.access_secret.trim().to_string());
+                }
+                AccessMode::Token if !self.access_token.trim().is_empty() => {
+                    args.push("--access-token".into());
+                    args.push(self.access_token.trim().to_string());
+                }
+                _ => {}
+            }
+            if self.gateway {
+                args.push("--gateway".into());
+            }
+        }
+
+        // ----- قوانین مسیریابی (هسته‌ی 1.5.0) ---------------------------
+        if caps.routing {
+            let block: Vec<String> = clean_list(&self.route_block);
+            if !block.is_empty() {
+                args.push("--route-block".into());
+                args.push(block.join(","));
+            }
+            let direct: Vec<String> = clean_list(&self.route_direct);
+            if !direct.is_empty() {
+                args.push("--route-direct".into());
+                args.push(direct.join(","));
+            }
+        }
+
+        // ----- DNS داخل تونل (هسته‌ی 1.5.0) -----------------------------
+        if caps.custom_dns {
+            let dns: Vec<String> = clean_list(&self.dns);
+            if !dns.is_empty() {
+                args.push("--dns".into());
+                args.push(dns.join(","));
+            }
+        }
+
         args
     }
 
@@ -172,6 +330,15 @@ impl ConnectionProfile {
             ScanMode::Ironclad => 360_000,
         }
     }
+}
+
+/// حذف فاصله‌های اضافی و ورودی‌های خالی از یک فهرست (route/dns).
+fn clean_list(items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -213,5 +380,95 @@ mod tests {
             vec!["--wg", "--balanced", "-4", "--quick-reconnect", "--noize", "gfw",
                  "--fragment", "--ech", "auto", "--keepalive", "25"]
         );
+    }
+
+    // --- v10: قابلیت‌های هسته‌ی 1.5.0 -------------------------------------
+
+    #[test]
+    fn zero_trust_email_flags() {
+        let p = ConnectionProfile {
+            team: "acme".into(),
+            access_mode: AccessMode::Email,
+            access_email: "user@acme.com".into(),
+            gateway: true,
+            ..Default::default()
+        };
+        let args = p.to_args_with_caps(CoreCaps::all());
+        assert!(args.windows(2).any(|w| w == ["--team", "acme"]));
+        assert!(args.windows(2).any(|w| w == ["--access-email", "user@acme.com"]));
+        assert!(args.contains(&"--gateway".to_string()));
+    }
+
+    #[test]
+    fn zero_trust_service_token_flags() {
+        let p = ConnectionProfile {
+            team: "acme".into(),
+            access_mode: AccessMode::ServiceToken,
+            access_id: "id-123".into(),
+            access_secret: "shh-secret".into(),
+            ..Default::default()
+        };
+        let args = p.to_args_with_caps(CoreCaps::all());
+        assert!(args.windows(2).any(|w| w == ["--access-id", "id-123"]));
+        assert!(args.windows(2).any(|w| w == ["--access-secret", "shh-secret"]));
+    }
+
+    #[test]
+    fn routing_and_dns_flags() {
+        let p = ConnectionProfile {
+            route_block: vec!["ads.example".into(), "  ".into()],
+            route_direct: vec!["bank.ir".into(), "192.168.0.0/16".into()],
+            dns: vec!["1.1.1.1".into(), "8.8.8.8".into()],
+            ..Default::default()
+        };
+        let args = p.to_args_with_caps(CoreCaps::all());
+        assert!(args.windows(2).any(|w| w == ["--route-block", "ads.example"]));
+        assert!(args.windows(2).any(|w| w == ["--route-direct", "bank.ir,192.168.0.0/16"]));
+        assert!(args.windows(2).any(|w| w == ["--dns", "1.1.1.1,8.8.8.8"]));
+    }
+
+    #[test]
+    fn old_core_never_gets_15_flags() {
+        // هسته‌ی 1.4: هیچ‌کدام از فلگ‌های 1.5.0 نباید فرستاده شوند.
+        let p = ConnectionProfile {
+            team: "acme".into(),
+            access_mode: AccessMode::Email,
+            access_email: "user@acme.com".into(),
+            route_block: vec!["ads.example".into()],
+            dns: vec!["1.1.1.1".into()],
+            ..Default::default()
+        };
+        let caps = CoreCaps::for_version(1, 4);
+        let args = p.to_args_with_caps(caps);
+        assert!(!args.iter().any(|a| a.starts_with("--team")));
+        assert!(!args.iter().any(|a| a.starts_with("--access")));
+        assert!(!args.iter().any(|a| a.starts_with("--route")));
+        assert!(!args.iter().any(|a| a == "--dns"));
+        // ولی فلگ‌های پایه باید باشند.
+        assert!(args.contains(&"--balanced".to_string()));
+    }
+
+    #[test]
+    fn caps_gate_maps_versions() {
+        assert!(!CoreCaps::for_version(1, 4).zero_trust);
+        assert!(CoreCaps::for_version(1, 5).zero_trust);
+        assert!(CoreCaps::for_version(1, 5).routing);
+        assert!(CoreCaps::for_version(2, 0).custom_dns);
+    }
+
+    #[test]
+    fn secrets_are_never_serialised_to_disk() {
+        // سخت‌سازی امنیتی: access_secret / access_token با serde(skip) هرگز
+        // در profile.json ذخیره نمی‌شوند.
+        let p = ConnectionProfile {
+            access_secret: "top-secret".into(),
+            access_token: "jwt-token".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("top-secret"));
+        assert!(!json.contains("jwt-token"));
+        assert!(!json.contains("accessSecret"));
+        assert!(!json.contains("accessToken"));
     }
 }

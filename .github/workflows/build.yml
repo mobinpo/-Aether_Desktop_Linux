@@ -141,6 +141,7 @@ jobs:
             ".github/release-notes.md"
             "README.md"
             "README.fa.md"
+            "SECURITY-AUDIT.md"
             "LICENSE"
           )
           for f in "${required[@]}"; do

@@ -187,6 +187,32 @@ impl AetherController {
     }
 
     pub fn set_profile(&mut self, profile: ConnectionProfile) -> Result<()> {
+        let mut profile = profile;
+        // v10: فیلدهای محرمانه «write-only» هستند: get_profile هرگز آن‌ها را
+        // برنمی‌گرداند، پس UI معمولاً رشتهٔ خالی می‌فرستد. خالی = «دست نزن»
+        // تا رازِ در-حافظهٔ این نشست با هر تغییر تنظیم دیگر پاک نشود.
+        if profile.access_secret.is_empty() {
+            profile.access_secret = self.profile.access_secret.clone();
+        }
+        if profile.access_token.is_empty() {
+            profile.access_token = self.profile.access_token.clone();
+        }
+        self.apply_profile(profile)
+    }
+
+    /// v10: «بازنشانی به تنظیمات پیش‌فرض» باید اسرارِ در-حافظه را هم واقعاً
+    /// پاک کند. `set_profile` رشتهٔ خالی را «دست نزن» تفسیر می‌کند (چون UI
+    /// اسرار را پس نمی‌گیرد)، پس Reset مسیر جداگانهٔ خودش را دارد؛ وگرنه
+    /// توکن سازمانی پس از Reset بی‌صدا در حافظه زنده می‌ماند.
+    pub fn reset_profile(&mut self) -> Result<ConnectionProfile> {
+        let fresh = ConnectionProfile::default();
+        self.apply_profile(fresh.clone())?;
+        DiagnosticsLog::i(TAG, "Profile reset to factory defaults (in-memory Zero Trust secrets cleared).");
+        Ok(fresh)
+    }
+
+    /// مسیر مشترک ذخیره‌سازی — هرچه از set_profile/reset_profile بیاید.
+    fn apply_profile(&mut self, profile: ConnectionProfile) -> Result<()> {
         self.store.save(&profile)?;
         let lan_toggled = profile.lan_share != self.profile.lan_share;
         self.profile = profile;

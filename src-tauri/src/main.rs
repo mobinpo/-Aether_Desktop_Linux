@@ -58,15 +58,17 @@ fn set_profile(app: State<'_, AppState>, profile: ConnectionProfile) -> Result<(
 
 /// v8: "Reset to defaults" - persists the factory profile and returns it
 /// so the UI can re-render immediately. UI language is left untouched.
+///
+/// v10: goes through the controller's dedicated reset path so the in-memory
+/// Zero Trust secrets are cleared too (a plain set_profile treats an empty
+/// secret as "keep the current one" and would silently retain the token).
 #[tauri::command]
 fn reset_profile(app: State<'_, AppState>) -> Result<ConnectionProfile, String> {
-    let fresh = ConnectionProfile::default();
     app.controller
         .lock()
         .unwrap()
-        .set_profile(fresh.clone())
-        .map_err(|e| e.to_string())?;
-    Ok(fresh)
+        .reset_profile()
+        .map_err(|e| e.to_string())
 }
 
 /// Equivalent of `onToggleConnection` in HomeScreen.kt.
@@ -123,6 +125,23 @@ fn about_info() -> serde_json::Value {
         "coreVersion": core_version(),
         "arch": std::env::consts::ARCH,
         "releasesUrl": RELEASES_URL,
+    })
+}
+
+/// v10: قابلیت‌های هستهٔ همراه — UI با این تصمیم می‌گیرد که بخش‌های
+/// Zero Trust / مسیریابی / DNS را فعال نشان بدهد یا با توضیح غیرفعال.
+/// بدون این، کاربرِ هستهٔ پین‌شدهٔ قدیمی تنطیمی را پر می‌کرد که بی‌اثر بود.
+#[tauri::command]
+fn core_caps() -> serde_json::Value {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("engine").join("aether.exe")))
+        .unwrap_or_default();
+    let caps = engine::engine_caps(&exe);
+    serde_json::json!({
+        "zeroTrust": caps.zero_trust,
+        "routing": caps.routing,
+        "customDns": caps.custom_dns,
     })
 }
 
@@ -183,6 +202,7 @@ fn main() {
             run_self_test,
             run_diagnostics,
             about_info,
+            core_caps,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aether");

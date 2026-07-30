@@ -23,6 +23,9 @@ const ORIGINAL_FEATURES = [
   'Traffic obfuscation for DPI-heavy networks',
   'Automatic reconnection with quick-reconnect to the last good gateway',
   'Local SOCKS5 proxy — CLI for Linux, Windows, macOS and Android (Termux)',
+  'Zero Trust enrolment — connect as a managed device of a Cloudflare organization (core 1.5.0)',
+  'Routing rules — block or send destinations direct instead of through the tunnel (core 1.5.0)',
+  'Selectable in-tunnel DNS resolvers (core 1.5.0)',
 ]
 
 // آنچه این نسخهٔ دسکتاپ روی پروژهٔ اصلی اضافه می‌کند (معادل PORT_IMPROVEMENTS،
@@ -37,6 +40,9 @@ const PORT_IMPROVEMENTS = [
   'Protocol, scan-mode and IP-version controls in a modern dark UI (English + فارسی)',
   'Share the tunnel over LAN — built-in HTTP + SOCKS5 proxy for laptops & other phones',
   'Professional bilingual installer (x64/x86) + portable ZIP, published automatically from GitHub Actions',
+  'Full UI for the core 1.5.0 features: Zero Trust sign-in, routing rules and in-tunnel DNS',
+  'Zero Trust secrets kept in memory only — never written to disk, masked in logs',
+  'Core version gate — 1.5.0 flags are only sent to an engine that understands them',
 ]
 
 // v17: ترجمهٔ روان فارسی هر دو فهرست بالا — وقتی زبان برنامه فارسی است
@@ -49,6 +55,9 @@ const ORIGINAL_FEATURES_FA = [
   'مبهم‌سازی ترافیک برای شبکه‌های دارای بازرسی عمیق بسته‌ها (<bdi>DPI</bdi>)',
   'اتصال مجدد خودکار همراه با بازگشت سریع به آخرین سرور سالم',
   'پروکسی محلی <bdi>SOCKS5</bdi> — خط فرمان برای لینوکس، ویندوز، مک و اندروید (<bdi>Termux</bdi>)',
+  'ورود <bdi>Zero Trust</bdi> — اتصال به‌عنوان دستگاه مدیریت‌شدهٔ یک سازمان (هستهٔ <bdi>1.5.0</bdi>)',
+  'قوانین مسیریابی — مسدودکردن یا فرستادن مقصد از مسیر مستقیم به‌جای تونل (هستهٔ <bdi>1.5.0</bdi>)',
+  'انتخاب سرورهای <bdi>DNS</bdi> داخل تونل (هستهٔ <bdi>1.5.0</bdi>)',
 ]
 
 const PORT_IMPROVEMENTS_FA = [
@@ -61,6 +70,9 @@ const PORT_IMPROVEMENTS_FA = [
   'کنترل پروتکل، حالت اسکن و نسخهٔ آی‌پی در رابط تیرهٔ مدرن (انگلیسی + فارسی)',
   'اشتراک تونل در شبکهٔ محلی — پروکسی داخلی <bdi>HTTP</bdi> و <bdi>SOCKS5</bdi> برای لپ‌تاپ و گوشی‌های دیگر',
   'نصب‌کنندهٔ حرفه‌ای دوزبانه (<bdi>x64/x86</bdi>) + نسخهٔ پرتابل <bdi>ZIP</bdi>، با انتشار خودکار از <bdi>GitHub Actions</bdi>',
+  'رابط کاربری کامل برای قابلیت‌های هستهٔ <bdi>1.5.0</bdi>: ورود <bdi>Zero Trust</bdi>، قوانین مسیریابی و <bdi>DNS</bdi> داخل تونل',
+  'اسرار <bdi>Zero Trust</bdi> فقط در حافظه می‌مانند — هرگز روی دیسک نوشته نمی‌شوند و در لاگ ماسک می‌شوند',
+  'گارد نسخهٔ هسته — فلگ‌های <bdi>1.5.0</bdi> فقط به هسته‌ای فرستاده می‌شوند که آن‌ها را می‌فهمد',
 ]
 
 // ---- آیکون‌های SVG داخلی (معادل Icons.Rounded و painterResource موبایل) ----

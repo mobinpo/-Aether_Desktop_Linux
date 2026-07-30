@@ -7,7 +7,7 @@
 //!   * منتظر ماندن برای آزادشدن پورت SOCKS5 محلی پیش از اجرای بعدی
 
 use crate::log::DiagnosticsLog;
-use crate::profile::ConnectionProfile;
+use crate::profile::{ConnectionProfile, CoreCaps};
 use anyhow::{anyhow, Result};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -27,19 +27,31 @@ pub const SHARE_HTTP_PORT: u16 = 10811;
 
 const GRACEFUL_EXIT_MS: u64 = 250;
 
-/// آیا هستهٔ همراه برنامه سوییچ --log-level (نسخهٔ 1.4.0 به بعد) را می‌فهمد؟
-/// نسخه از فایل CORE_VERSION کنار aether.exe خوانده می‌شود (همان فایلی که
-/// پنل About نشان می‌دهد). در صورت هر ابهامی محافظه‌کارانه false
-/// برمی‌گردد تا هسته‌های قدیمی با فلگ ناشناخته از کار نیفتند.
-fn engine_supports_log_level(exe: &Path) -> bool {
-    let Some(dir) = exe.parent() else { return false };
+/// نسخهٔ هستهٔ همراه برنامه — از فایل CORE_VERSION کنار aether.exe خوانده
+/// می‌شود (همان فایلی که پنل About نشان می‌دهد). در صورت هر ابهامی (0،0)
+/// برمی‌گردد تا رفتار محافظه‌کارانه باشد.
+fn engine_core_version(exe: &Path) -> (u32, u32) {
+    let Some(dir) = exe.parent() else { return (0, 0) };
     let Ok(raw) = std::fs::read_to_string(dir.join("CORE_VERSION")) else {
-        return false;
+        return (0, 0);
     };
     let mut parts = raw.trim().trim_start_matches('v').split('.');
     let major: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
     let minor: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    (major, minor) >= (1, 4)
+    (major, minor)
+}
+
+/// آیا هستهٔ همراه برنامه سوییچ --log-level (نسخهٔ 1.4.0 به بعد) را می‌فهمد؟
+/// در صورت هر ابهامی محافظه‌کارانه false برمی‌گردد تا هسته‌های قدیمی با
+/// فلگ ناشناخته از کار نیفتند.
+fn engine_supports_log_level(exe: &Path) -> bool {
+    engine_core_version(exe) >= (1, 4)
+}
+
+/// v10: قابلیت‌های هستهٔ همراه — Zero Trust / routing / --dns فقط از 1.5.0.
+pub fn engine_caps(exe: &Path) -> CoreCaps {
+    let (major, minor) = engine_core_version(exe);
+    CoreCaps::for_version(major, minor)
 }
 
 pub struct AetherProcess {
@@ -73,7 +85,10 @@ impl AetherProcess {
             return Err(anyhow!("Engine binary missing: {}", self.exe.display()));
         }
 
-        let mut args = profile.to_args();
+        // v10: فلگ‌های هستهٔ 1.5.0 (Zero Trust / routing / dns) فقط وقتی
+        // فرستاده می‌شوند که هستهٔ همراه واقعاً آن‌ها را بفهمد.
+        let caps = engine_caps(&self.exe);
+        let mut args = profile.to_args_with_caps(caps);
         // لاگر جدید هستهٔ 1.4.0 متغیر RUST_LOG را نادیده می‌گیرد و فقط از
         // سوییچ رسمی خودش دستور می‌گیرد (لاگ v12 این را ثابت کرد: هیچ
         // خط debug چاپ نشد). سطح trace تنها راه دیدن عملیاتی است که
@@ -136,7 +151,7 @@ impl AetherProcess {
             let _ = stdin.write_all(b"y\n");
         }
 
-        DiagnosticsLog::i("engine", &format!("Spawned aether.exe {}", args.join(" ")));
+        DiagnosticsLog::i("engine", &format!("Spawned aether.exe {}", redact_args(&args).join(" ")));
 
         // درنگ کردن stdout و stderr — دقیقاً مثل ترد «aether-log» در اندروید.
         if let Some(out) = child.stdout.take() { spawn_drain(out); }
@@ -250,6 +265,27 @@ fn runtime_copy_is_fresh(src: &Path, dst: &Path) -> bool {
         return false;
     }
     matches!((a.modified(), b.modified()), (Ok(s), Ok(d)) if d >= s)
+}
+
+/// v10 سخت‌سازی امنیتی: مقدار فلگ‌های محرمانه در لاگ ماندگار پوشانده می‌شود.
+/// خود فلگ دیده می‌شود (برای عیب‌یابی) ولی راز/توکن/ایمیل هرگز در
+/// فایل لاگ چرخان ثبت نمی‌شود (همان قاعدهٔ ماسک IP در diagnostics.rs).
+fn redact_args(args: &[String]) -> Vec<String> {
+    const SENSITIVE: [&str; 3] = ["--access-secret", "--access-token", "--access-email"];
+    let mut out = Vec::with_capacity(args.len());
+    let mut mask_next = false;
+    for a in args {
+        if mask_next {
+            out.push("••••••".to_string());
+            mask_next = false;
+            continue;
+        }
+        if SENSITIVE.contains(&a.as_str()) {
+            mask_next = true;
+        }
+        out.push(a.clone());
+    }
+    out
 }
 
 fn spawn_drain<R: std::io::Read + Send + 'static>(reader: R) {

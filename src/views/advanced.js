@@ -34,6 +34,14 @@ const SPLIT_MODES = [['OFF', 'Off'], ['INCLUDE', 'Only these apps'], ['EXCLUDE',
 const MTU_PRESETS = [1280, 1380, 1420, 1500]
 const KEEPALIVE_PRESETS = [0, 10, 25, 45]
 
+// v10 — هستهٔ 1.5.0: روش‌های ورود Zero Trust (همان گزینه‌های موبایل/هسته).
+const ACCESS_MODES = [
+  ['OFF', 'Off'],
+  ['EMAIL', 'Email code'],
+  ['SERVICE_TOKEN', 'Service token'],
+  ['TOKEN', 'Access token'],
+]
+
 function segmented(label, key, options, current) {
   return `
     <section class="field">
@@ -69,11 +77,25 @@ function toggle(label, key, hint, on) {
     </section>`
 }
 
-function textField(label, key, value, placeholder) {
+function textField(label, key, value, placeholder, opts = {}) {
+  const type = opts.secret ? 'password' : 'text'
+  const hint = opts.hint ? `<span class=\"field__hint\">${opts.hint}</span>` : ''
   return `
     <section class="field">
       <span class="field__label">${label}</span>
-      <input class="input ltr" dir="ltr" data-key="${key}" value="${value ?? ''}" placeholder="${placeholder}">
+      <input class="input ltr" dir="ltr" type="${type}" data-key="${key}" value="${value ?? ''}" placeholder="${placeholder}" ${opts.secret ? 'autocomplete="off"' : ''}>
+      ${hint}
+    </section>`
+}
+
+// v10: تری‌ایریای چندخطی برای فهرست‌ها (routing/dns) — هر خط یک قاعده.
+function listArea(label, key, values, placeholder, hint) {
+  return `
+    <section class="field">
+      <span class="field__label">${label}</span>
+      <textarea class="input input--area ltr" dir="ltr" data-key="${key}"
+        placeholder="${placeholder}">${(values || []).join('\n')}</textarea>
+      ${hint ? `<span class=\"field__hint\">${hint}</span>` : ''}
     </section>`
 }
 
@@ -114,6 +136,35 @@ export function renderAdvanced() {
       <span class="field__hint">${t('One executable name per line.')}</span>
     </section>
 
+    <h3 class="view__subtitle">${t('Zero Trust')}</h3>
+    <section class="field" id="caps-note" hidden>
+      <span class="field__hint" id="caps-note-text"></span>
+    </section>
+    <div id="v15-zt">
+    ${textField(t('Team name'), 'team', p.team, 'your-team', { hint: t('Connect as a managed device of a Cloudflare Zero Trust organization. Leave empty for normal WARP.') })}
+    <div id="zt-extra" ${(p.team || '').trim() ? '' : 'hidden'}>
+      ${segmented(t('Sign-in method'), 'accessMode', ACCESS_MODES, p.accessMode)}
+      <div id="zt-fields">
+        ${p.accessMode === 'EMAIL' ? textField(t('Access email'), 'accessEmail', p.accessEmail, 'user@example.com', { hint: t('A one-time code is sent to this mailbox on connect.') }) : ''}
+        ${p.accessMode === 'SERVICE_TOKEN' ? textField('Access ID', 'accessId', p.accessId, 'xxxxxxxx.access', {}) : ''}
+        ${p.accessMode === 'SERVICE_TOKEN' ? textField('Access Secret', 'accessSecret', '', '••••••', { secret: true, hint: t('Stored in memory only — never written to disk.') }) : ''}
+        ${p.accessMode === 'TOKEN' ? textField('Access Token (JWT)', 'accessToken', '', '••••••', { secret: true, hint: t('Stored in memory only — never written to disk.') }) : ''}
+      </div>
+      ${toggle(t('Gateway proxy'), 'gateway', t('Route HTTP/HTTPS through your organization\'s Gateway (adds a hop and logs browsing)'), p.gateway)}
+    </div>
+    </div>
+
+    <div id="v15-routing">
+    <h3 class="view__subtitle">${t('Routing rules')}</h3>
+    ${listArea(t('Blocked destinations'), 'routeBlock', p.routeBlock, 'ads.example.com&#10;203.0.113.0/24', t('One rule per line — domain, IP or CIDR. These connections are refused.'))}
+    ${listArea(t('Direct destinations'), 'routeDirect', p.routeDirect, 'bank-domain.ir&#10;192.168.0.0/16', t('One rule per line. These bypass the tunnel — for banking apps, LAN services and domestic sites.'))}
+    </div>
+
+    <div id="v15-dns">
+    <h3 class="view__subtitle">DNS</h3>
+    ${listArea(t('In-tunnel DNS servers'), 'dns', p.dns, '1.1.1.1&#10;9.9.9.9', t('Resolvers used inside the tunnel. Empty = engine defaults.'))}
+    </div>
+
     <section class="field field--row">
       <div>
         <span class="field__label">${t('Reset to defaults')}</span>
@@ -138,6 +189,12 @@ export function renderAdvanced() {
         x.classList.toggle('is-active', x === b)
         x.setAttribute('aria-checked', String(x === b))
       })
+      // v10: تغییر روش ورود Zero Trust فیلدهای متفاوتی می‌خواهد — بازرندر.
+      if (key === 'accessMode') {
+        const host = root.parentElement
+        host.innerHTML = ''
+        host.appendChild(renderAdvanced())
+      }
     })
   })
 
@@ -167,10 +224,24 @@ export function renderAdvanced() {
   root.querySelectorAll('.input').forEach((i) => {
     i.addEventListener('change', async () => {
       const key = i.dataset.key
-      const value = key === 'splitApps'
+      // v10: فیلدهای فهرستی — هر خط یک مقدار (مثل splitApps).
+      const LIST_KEYS = ['splitApps', 'routeBlock', 'routeDirect', 'dns']
+      const value = LIST_KEYS.includes(key)
         ? i.value.split('\n').map((x) => x.trim()).filter(Boolean)
         : i.value.trim()
       await saveProfile({ [key]: value })
+      // v10: پاک/پر شدن نام تیم، بخش Zero Trust را نشان/پنهان می‌کند.
+      if (key === 'team') {
+        const host = root.parentElement
+        host.innerHTML = ''
+        host.appendChild(renderAdvanced())
+      }
+      // سخت‌سازی امنیتی: مقدار محرمانه بعد از ذخیره از DOM پاک می‌شود تا
+      // در اسکرین‌شات/بازرسی DOM نماند (ذخیره فقط در حافظهٔ بک‌اند است).
+      if (key === 'accessSecret' || key === 'accessToken') {
+        i.value = ''
+        i.placeholder = '•••••• (saved)'
+      }
     })
   })
 
@@ -181,6 +252,34 @@ export function renderAdvanced() {
     app.profile = fresh
     rerender()
   })
+
+  // v10: قابلیت‌سنجی هسته — اگر هستهٔ همراه قدیمی‌تر از 1.5.0 باشد (مثلاً
+  // وقتی کاربر نسخهٔ هسته را در پایپ‌لاین پین کرده)، این بخش‌ها غیرفعال و
+  // با توضیح نشان داده می‌شوند تا کاربر تنظیمی را پر نکند که بی‌اثر است.
+  // خطای این فراخوانی هرگز صفحه را نمی‌شکند.
+  invoke('core_caps')
+    .then((caps) => {
+      const gate = (id, enabled) => {
+        const el = root.querySelector(id)
+        if (!el || enabled) return
+        el.querySelectorAll('input, textarea, button, select').forEach((c) => {
+          c.disabled = true
+        })
+        el.style.opacity = '0.45'
+      }
+      gate('#v15-zt', caps.zeroTrust)
+      gate('#v15-routing', caps.routing)
+      gate('#v15-dns', caps.customDns)
+      if (!caps.zeroTrust || !caps.routing || !caps.customDns) {
+        const note = root.querySelector('#caps-note')
+        const text = root.querySelector('#caps-note-text')
+        if (note && text) {
+          text.textContent = t('These features need engine core 1.5.0 or newer. The bundled core is older, so they are disabled.')
+          note.hidden = false
+        }
+      }
+    })
+    .catch(() => {})
 
   return root
 }
