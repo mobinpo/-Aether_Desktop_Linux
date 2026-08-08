@@ -64,6 +64,9 @@ export function renderHome() {
       <span class="ipbadge__value" id="ip-value">${t('Checking IP…')}</span>
     </div>
 
+    <!-- v1.2.0: نشان محافظت WebRTC — نتیجهٔ سنجش واقعی، نه ادعای تزئینی. -->
+    <p class="shield" id="shield" hidden><span class="shield__dot"></span><span id="shield-text"></span></p>
+
     <p class="uptime" id="uptime" hidden><span class="uptime__k">${t('Connected for')}</span> <span class="uptime__v ltr" dir="ltr" id="uptime-v">00:00</span></p>
 
     <div class="meta" id="meta">
@@ -167,6 +170,21 @@ export function renderHome() {
         root.querySelector('#ip-flag').innerHTML = flagHtml(null)
         root.querySelector('#ip-value').textContent = snapshot.ipLoading ? t('Checking IP…') : t('IP unavailable')
       }
+    }
+
+    // نشان محافظت WebRTC — سه حالت: در حال سنجش / محافظت‌شده / نشتی.
+    const shield = root.querySelector('#shield')
+    shield.hidden = !connected
+    if (connected) {
+      const leak = snapshot.webrtcLeak
+      const shieldState = leak === true ? 'leak' : leak === false ? 'safe' : 'unknown'
+      shield.dataset.state = shieldState
+      root.querySelector('#shield-text').textContent =
+        shieldState === 'leak'
+          ? t('WebRTC is leaking your real IP')
+          : shieldState === 'safe'
+            ? t('WebRTC protected — no IP leak')
+            : t('Checking for WebRTC leaks…')
     }
 
     // تایمر «Connected for»

@@ -12,6 +12,7 @@
 //! می‌شود تا پنل عیب‌یابی دقیقاً مثل موبایل رنگ عوض کند.
 
 use crate::engine;
+use crate::leakguard;
 use crate::log::DiagnosticsLog;
 use crate::probe;
 use crate::profile::ConnectionProfile;
@@ -25,6 +26,8 @@ pub const C_PORT: &str = "socks_port";
 pub const C_HANDSHAKE: &str = "socks_handshake";
 pub const C_TCP: &str = "tcp_via_proxy";
 pub const C_DNS: &str = "dns_http_via_tunnel";
+/// v1.2.0 — پنجمین بررسی: هیچ آی‌پی واقعی‌ای از راه UDP/WebRTC بیرون نرود.
+pub const C_LEAK: &str = "webrtc_udp_leak";
 
 /// تلاش مجدد هر ۷۵۰ms — همان مقدار اندروید.
 const RETRY_DELAY_MS: u64 = 750;
@@ -36,6 +39,7 @@ pub fn reset_checks() {
         (C_HANDSHAKE, "SOCKS5 handshake".to_string()),
         (C_TCP, "TCP via proxy (1.1.1.1:80)".to_string()),
         (C_DNS, "DNS + HTTP via tunnel".to_string()),
+        (C_LEAK, "WebRTC / UDP leak".to_string()),
     ]);
 }
 
@@ -44,6 +48,66 @@ pub struct SelfTestOutcome {
     pub ok: bool,
     pub exit: Option<probe::IpInfo>,
     pub latency_ms: Option<u64>,
+    /// v1.2.0 — نتیجهٔ سنجش نشتی WebRTC در همان خودآزما.
+    pub leak: Option<LeakReport>,
+}
+
+/// گزارش نشتی WebRTC/UDP — هم در خودآزما و هم با دکمهٔ اختصاصی پنل عیب‌یابی.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeakReport {
+    /// true یعنی یک آی‌پیِ غیرِ تونل از راه UDP مستقیم دیده شد.
+    pub leaking: bool,
+    /// آی‌پی‌ای که یک صفحهٔ وب می‌توانست ببیند (ماسک‌نشده — فقط برای UI).
+    pub ip: Option<String>,
+    pub server: Option<String>,
+    pub detail: String,
+}
+
+/// مهلت پاسخ STUN — WebRTC هم بیشتر از این صبر نمی‌کند.
+const STUN_TIMEOUT_MS: u64 = 2_500;
+
+/// همان کاری که مرورگر هنگام ساختن نامزد srflx می‌کند: یک درخواست STUN روی
+/// UDP خام. اگر جواب بیاید یعنی مسیر مستقیم باز است و آی‌پی برگشته همان چیزی
+/// است که سایت‌ها می‌بینند؛ اگر با آی‌پی خروجی تونل یکی نباشد، نشتی است.
+pub fn webrtc_leak_check(exit_ip: Option<&str>) -> LeakReport {
+    let guard = leakguard::status();
+    match probe::stun_reflexive_ip(Duration::from_millis(STUN_TIMEOUT_MS)) {
+        None => LeakReport {
+            leaking: false,
+            ip: None,
+            server: None,
+            detail: if guard.firewall_rules > 0 {
+                "no reply — Windows firewall kill-switch blocked direct UDP".to_string()
+            } else if guard.browser_policies > 0 {
+                "no reply — browser policy blocked direct UDP".to_string()
+            } else {
+                "no reply — direct UDP is blocked".to_string()
+            },
+        },
+        Some(r) => {
+            let via_tunnel = exit_ip.map(|e| e == r.reflexive_ip).unwrap_or(false);
+            // Aether's raw UDP probe is not a browser process. A browser policy
+            // intentionally does not affect this probe; when the policy is active
+            // we must not mislabel a browser as leaking just because Aether itself
+            // can open UDP. The firewall path is the hard, process-independent
+            // guarantee and is handled above when it blocks the probe.
+            let browser_policy_only = guard.firewall_rules == 0 && guard.browser_policies > 0;
+            let leaking = !via_tunnel && !browser_policy_only;
+            LeakReport {
+                leaking,
+                ip: Some(r.reflexive_ip.clone()),
+                server: Some(r.server.clone()),
+                detail: if via_tunnel {
+                    format!("STUN answered with the tunnel exit ({})", r.reflexive_ip)
+                } else if browser_policy_only {
+                    "browser WebRTC policy is active; restart the browser to reload it".to_string()
+                } else {
+                    format!("real IP {} reachable via {}", r.reflexive_ip, r.server)
+                },
+            }
+        }
+    }
 }
 
 /// معادل `Diagnostics.run()` — دروازهٔ اعلام Connected.
@@ -63,7 +127,8 @@ pub fn self_test(grace_ms: u64) -> SelfTestOutcome {
         DiagnosticsLog::update_check(C_HANDSHAKE, "FAIL", Some("skipped"));
         DiagnosticsLog::update_check(C_TCP, "FAIL", Some("skipped"));
         DiagnosticsLog::update_check(C_DNS, "FAIL", Some("skipped"));
-        return SelfTestOutcome { ok: false, exit: None, latency_ms: None };
+        DiagnosticsLog::update_check(C_LEAK, "FAIL", Some("skipped"));
+        return SelfTestOutcome { ok: false, exit: None, latency_ms: None, leak: None };
     }
 
     // ۲) دست‌دادن SOCKS5
@@ -130,7 +195,29 @@ pub fn self_test(grace_ms: u64) -> SelfTestOutcome {
         Some((info, ms)) => (Some(info), Some(ms)),
         None => (None, None),
     };
-    SelfTestOutcome { ok, exit, latency_ms }
+
+    // ۵) نشتی WebRTC — رفع ریشه‌ای ۱.۲.۰ باید *اثبات* شود، نه ادعا.
+    DiagnosticsLog::update_check(C_LEAK, "RUNNING", None);
+    let leak = webrtc_leak_check(exit.as_ref().map(|e| e.ip.as_str()));
+    if leak.leaking {
+        let masked = leak.ip.as_deref().map(mask_ip).unwrap_or_default();
+        DiagnosticsLog::update_check(C_LEAK, "FAIL", Some("real IP still reachable over UDP"));
+        DiagnosticsLog::e(
+            TAG,
+            &format!(
+                "WebRTC leak: a STUN server answered with {masked} over direct UDP. Enable the leak guard, or restart the browser so the new policy is picked up."
+            ),
+        );
+    } else {
+        DiagnosticsLog::update_check(C_LEAK, "PASS", Some(&leak.detail));
+        DiagnosticsLog::i(TAG, &format!("WebRTC / UDP leak check: clean — {}", leak.detail));
+    }
+
+    // Never report CONNECTED when the leak check failed. The previous build
+    // only painted the warning red while still declaring the tunnel healthy.
+    // That was the most dangerous part of the bug.
+    let ok = ok && !leak.leaking;
+    SelfTestOutcome { ok, exit, latency_ms, leak: Some(leak) }
 }
 
 /// v8 audit: "1.2.3.4" -> "1.2.3.xxx" for the persistent rotating log so a
@@ -231,6 +318,30 @@ pub fn run(profile: &ConnectionProfile) -> Report {
         check("Profile", Verdict::Warn, format!("Unusual MTU: {}", profile.mtu))
     });
 
+    // ۷) گارد نشتی WebRTC — v1.2.0
+    let guard = leakguard::status();
+    checks.push(if guard.engaged && guard.firewall_rules > 0 {
+        check(
+            "Leak guard",
+            Verdict::Pass,
+            format!(
+                "{} firewall rule(s) + {} browser policy value(s) active",
+                guard.firewall_rules, guard.browser_policies
+            ),
+        )
+    } else if guard.engaged {
+        check(
+            "Leak guard",
+            Verdict::Warn,
+            format!(
+                "{} browser policy value(s) active; firewall layer needs administrator rights",
+                guard.browser_policies
+            ),
+        )
+    } else {
+        check("Leak guard", Verdict::Warn, "Not engaged (expected while disconnected)")
+    });
+
     let failed = checks.iter().filter(|c| c.verdict == Verdict::Fail).count();
     let warned = checks.iter().filter(|c| c.verdict == Verdict::Warn).count();
     let summary = if failed > 0 {
@@ -282,15 +393,29 @@ mod tests {
     #[test]
     fn report_always_has_every_check() {
         let r = run(&ConnectionProfile::default());
-        assert_eq!(r.checks.len(), 6);
+        assert_eq!(r.checks.len(), 7);
         assert!(!r.summary.is_empty());
     }
 
     #[test]
-    fn reset_populates_the_four_android_checks() {
+    fn reset_populates_every_live_check() {
         reset_checks();
         let checks = DiagnosticsLog::checks();
-        assert_eq!(checks.len(), 4);
+        // ۴ بررسی اندروید + بررسی نشتی WebRTC که در ۱.۲.۰ اضافه شد.
+        assert_eq!(checks.len(), 5);
+        assert!(checks.iter().any(|c| c.id == C_LEAK));
         assert!(checks.iter().all(|c| c.state == "PENDING"));
+    }
+
+    /// وقتی هیچ پاسخی از STUN نیاید، یعنی UDP مستقیم بسته است — نشتی نداریم.
+    #[test]
+    fn no_stun_reply_is_not_a_leak() {
+        let r = LeakReport {
+            leaking: false,
+            ip: None,
+            server: None,
+            detail: "no reply — direct UDP is blocked".to_string(),
+        };
+        assert!(!r.leaking);
     }
 }

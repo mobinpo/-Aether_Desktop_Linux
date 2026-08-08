@@ -124,11 +124,11 @@ impl AetherProcess {
             .env("TMPDIR", &run_dir)
             // هستهٔ 1.4.0 بلافاصله بعد از مرحلهٔ جدید sysprofile با
             // Error: Io(code 5, Access is denied) خارج می‌شود. این دو متغیر
-            // باعث می‌شوند لاگ سطح debug و backtrace کامل از خود هسته در
-            // کنسول لاگ برنامه ثبت شود تا محل دقیق خطا معلوم شود.
+            // backtrace کامل از خود هسته در صورت خطا در کنسول لاگ برنامه ثبت شود؛
+            // سطح عادی info از تولید هزاران خط TLS در مسیر موفق جلوگیری می‌کند.
             // (برای نسخه‌های قدیمی‌تر هسته بی‌ضررند و نادیده گرفته می‌شوند.)
             .env("RUST_BACKTRACE", "full")
-            .env("RUST_LOG", "debug")
+            .env("RUST_LOG", "info")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

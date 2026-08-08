@@ -1,20 +1,54 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128.png" width="96" alt="Aether" />
-
 # Aether Desktop
 
 **Freedom, in one tap**
 
-The Windows edition of Aether Mobile — same interface, same icon, same core engine.
-
 [فارسی](README.fa.md) · [Releases](../../releases) · [Setup guide](SETUP.md)
+
+Windows desktop tunnel client with mandatory leak protection and a resilient connection path.
 
 </div>
 
 ---
 
-## 🎉 Version 1.1.0 — parity with engine core 1.5.0
+## What's new in 1.2.0
+
+**Upgrade notice:** Users on 1.1.0 should upgrade to 1.2.0 for mandatory IP-leak protection and corrected network cleanup.
+
+### Short comparison with 1.1.0
+
+**Added:** mandatory WebRTC leak protection, IPv6 fail-closed protection, browser/network kill-switch, three-target watchdog, bounded reconnect recovery, faster UI bootstrap, safer proxy restoration, and expanded security audit coverage.
+
+**Fixed:** direct WebRTC UDP exposure, misleading route status, intermittent upstream stalls, reconnect flapping, proxy settings being overwritten on disconnect, slow blank startup, UI listener buildup, and shutdown cleanup gaps.
+
+### Detailed changes
+
+**Mandatory leak protection:** WebRTC protection is no longer an editable option. Browser policy and elevated firewall enforcement block direct STUN/TURN UDP before a session is reported safe.
+
+**IPv6 protection:** Global IPv6 traffic is routed through the protected path when available and blocked fail-closed otherwise. DNS and tunnel verification run before Connected is shown.
+
+**Kill-switch:** Browser fallback traffic is blocked while the protected session is unavailable. Explicit disconnect removes only Aether's rules and restores the user's original proxy/PAC settings byte-for-byte.
+
+**Connection watchdog:** Every 30 seconds, three independent end-to-end SOCKS5 targets are checked in a background worker. The engine restarts only after three failed rounds in a row.
+
+**UI and shutdown performance:** The shell renders before IPC, initial requests run in parallel, tab listeners are released, verbose engine TLS logging is disabled, and native cleanup is ordered and bounded.
+
+### Security audit summary
+
+| Area | Result |
+|---|---|
+| Secrets and keys | No hardcoded credentials; sensitive access values are not persisted |
+| TLS and certificates | Platform validation plus SPKI pin verification |
+| DNS, IPv6 and WebRTC | Protected path verified; direct UDP and unsafe IPv6 fallback blocked |
+| Local storage and logs | IPs masked; secrets excluded; identity-file protection remains a hardening item |
+| Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
+
+Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+<details>
+<summary>Version 1.1.0 — parity with engine core 1.5.0</summary>
+
 
 This release brings the bundled engine to **Aether Core 1.5.0** and adds a full UI for the
 three user-facing features that release introduced:
@@ -29,6 +63,8 @@ three user-facing features that release introduced:
 Zero Trust secrets are kept **in memory only**, never written to disk, and masked in logs.
 A core version gate makes sure 1.5.0 flags are only passed to an engine that understands them.
 See [SECURITY-AUDIT.md](SECURITY-AUDIT.md) for the full 0-100 security audit (score: 93/100).
+
+</details>
 
 <details>
 <summary>Version 1.0.0 — first desktop release</summary>
@@ -132,6 +168,8 @@ the UI language is deliberately left untouched.
   The build pipeline actively fails if anyone reintroduces it.
 - **In-app updater** — removed. The About panel links to the GitHub Releases page instead.
 
+</details>
+
 ---
 
 ## Downloads
@@ -141,12 +179,10 @@ All files are produced automatically by GitHub Actions and published to
 
 | File | Description |
 |---|---|
-</details>
-
-| `Aether-Setup-1.1.0-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
-| `Aether-Setup-1.1.0-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
-| `Aether-Portable-1.1.0-x64.zip` | Portable, no installation, 64-bit |
-| `Aether-Portable-1.1.0-x86.zip` | Portable, no installation, 32-bit |
+| `Aether-Setup-1.2.0-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
+| `Aether-Setup-1.2.0-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
+| `Aether-Portable-1.2.0-x64.zip` | Portable, no installation, 64-bit |
+| `Aether-Portable-1.2.0-x86.zip` | Portable, no installation, 32-bit |
 | `SHA256SUMS.txt` | Checksums for verifying file integrity |
 
 **Requirements:** Windows 10 build 1809 (October 2018 Update) or newer.
@@ -175,7 +211,7 @@ trace elsewhere on the machine.
 |---|---|
 | `MainActivity` / `AetherApp` | `main.rs` |
 | `AetherController` | `state.rs` |
-| `AetherVpnService` | `tun.rs` |
+| `AetherVpnService` | `tun.rs` + `sysproxy.rs` + `leakguard.rs` |
 | `AetherProcess` | `engine.rs` |
 | `Profile` | `profile.rs` |
 | `ProfileStore` | `store.rs` |
@@ -207,3 +243,23 @@ See [SETUP.md](SETUP.md) for the step-by-step repository setup guide.
 
 MIT — see [LICENSE](LICENSE).
 Bundles the Wintun driver under its own licence.
+
+### Elevation requirement
+
+Aether Desktop 1.2.0 embeds a Windows `requireAdministrator` manifest. Windows therefore
+shows the UAC prompt every time the app starts, before any engine, proxy, browser policy or
+firewall rule is touched. This is intentional: starting unelevated would make the WebRTC
+kill-switch incomplete. The installer is already administrator-only; this requirement now
+also covers portable copies and direct launches.
+
+
+## Important reminder
+
+To get the best result on Android or Windows:
+
+- Wait 1 to 3 minutes on each protocol. Connection time depends on the operator and region.
+- Test different protocols and settings because DPI behavior varies by SIM, region, city, and network.
+- On mobile data, toggle Airplane mode several times to obtain a different IP range, then retry.
+- On Wi-Fi, turn the modem off for 1 to 2 minutes to obtain a different IP range, then retry.
+- If it still does not connect, this VPN may not be compatible with that network.
+- Different results across users are expected because operator DPI policies differ.

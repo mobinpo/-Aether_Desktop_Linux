@@ -1,223 +1,54 @@
-# ممیزی امنیتی Aether — نسخهٔ موبایل/هستهٔ مشترک و لایهٔ ویندوز
+# Aether Desktop 1.2.0 Security Audit
 
-**نسخهٔ ممیزی:** v10 · **تاریخ:** ۳۰ جولای ۲۰۲۶
-**دامنه:** هستهٔ مشترک `CluvexStudio/Aether` **1.5.0** + لایهٔ کلاینت (نسخهٔ اندروید و پورت ویندوز `1.1.0`)
-**امتیاز کل: ۹۳ / ۱۰۰** (نسخهٔ قبلی: ۹۰)
+**Scope:** Windows desktop shell, Rust control plane, bundled tunnel engine integration, local proxy bridge, firewall policy, local storage, logs, build pipeline, and bundled runtime. **Date:** 2026-08-08.
 
-> این سند ممیزی «۰ تا ۱۰۰» درخواست‌شده برای نسخهٔ موبایل است. هرجا یافته‌ای مخصوص ویندوز باشد
-> صریحاً علامت‌گذاری شده، چون منطق پروفایل/آرگومان‌ها بین دو پلتفرم بایت‌به‌بایت مشترک است.
+## Executive result
 
----
+**Score: 88/100.** No hardcoded credentials were found. The connection path has TLS/SPKI pin verification, mandatory WebRTC protection, IPv6 fail-closed protection, and a browser/network kill-switch. The remaining deductions are deliberate Windows constraints and operational risks: the system proxy is not a universal VPN route for every UDP-capable application, WARP identity files require OS-level file protection, and release artifacts should be Authenticode-signed in production.
 
-## ۱. جدول امتیاز به تفکیک محور
+| Area | Result | Evidence / remaining risk |
+|---|---|---|
+| **Secrets and keys** | **Pass** | No API keys, passwords, private keys, or access tokens are hardcoded. Zero Trust secrets are write-only and excluded from serialization. |
+| **Cryptography and protocols** | **Pass with pin rotation duty** | TLS validates the platform certificate chain and SPKI pins. The engine rejects an unpinned key. Pin rotation must ship before certificate/key rollover. |
+| **DNS, IPv4, IPv6 and WebRTC leaks** | **Pass** | DNS/HTTP verification runs through SOCKS5. WebRTC direct UDP is blocked by browser policy and firewall rules. IPv6 global traffic is protected or blocked fail-closed. |
+| **Traffic bypass** | **Pass for supported desktop path** | System HTTP/HTTPS and SOCKS-aware applications use the local bridge. Kill-switch blocks installed browsers and IPv6 fallback. Arbitrary third-party UDP applications are not transformed into TCP and remain outside the proxy model. |
+| **Local storage** | **Partial** | Profile configuration and rotating diagnostics logs are plaintext by design. Sensitive Zero Trust values are not persisted. WARP identity files need DPAPI/ACL hardening before a 100/100 score. |
+| **OS privileges and UAC** | **Pass** | `requireAdministrator` is embedded and verified. The installer is admin-only. No Android/iOS manifest is shipped in this desktop repository. |
+| **Logging and errors** | **Pass after hardening** | Persistent logs mask public IPs and do not record secrets. Engine runtime logging is `info`, not `debug`, to avoid TLS pin/hash noise and reduce startup/storage pressure. |
+| **Network configuration** | **Pass** | No cleartext control channel, no insecure certificate bypass, and no permissive proxy fallback. Public HTTP is used only for the explicit fallback IP probe and is not trusted for tunnel establishment. |
+| **Dependencies and supply chain** | **Pass with release controls** | Cargo dependencies are versioned and the CI preflight checks source, manifest, tests, and artifacts. Production releases should include reproducible lockfile verification and Authenticode signatures. |
+| **UI/runtime resilience** | **Improved** | The shell paints before IPC, initial IPC calls run in parallel, state listeners are cleared on tab changes, and expensive network work stays off the UI thread. |
 
-| # | محور | وزن | امتیاز | یافته‌های باز |
-|---|------|-----|--------|----------------|
-| ۱ | اسرار هاردکد | ۱۵ | **۱۵ / ۱۵** | — |
-| ۲ | رمزنگاری و پروتکل | ۲۰ | **۱۸ / ۲۰** | SNI به‌صورت cleartext (محدودیت سمت سرور) |
-| ۳ | نشت داده (DNS / IPv6 / WebRTC) | ۱۵ | **۱۵ / ۱۵** | — |
-| ۴ | ذخیره‌سازی محلی | ۱۵ | **۱۱ / ۱۵** | هویت WARP به‌صورت متن ساده |
-| ۵ | مجوزها و مانیفست | ۱۰ | **۱۰ / ۱۰** | — |
-| ۶ | لاگ و حریم خصوصی | ۱۰ | **۱۰ / ۱۰** | — |
-| ۷ | مرز اعتماد رابط کاربری | ۱۰ | **۹ / ۱۰** | پروکسی سیستمی در HKCU (ویندوز) |
-| ۸ | زنجیرهٔ تأمین و بیلد | ۵ | **۵ / ۵** | — |
-| | **جمع** | **۱۰۰** | **۹۳** | ۱ متوسط، ۲ کم |
+## Findings and controls
 
----
+**A01: WebRTC direct UDP exposure, fixed.** The mandatory guard applies browser policy, blocks STUN/TURN and browser UDP at the firewall when elevated, and fails closed if the leak check cannot pass. The setting is not exposed as an unsafe user toggle.
 
-## ۲. محور ۱ — اسرار هاردکد (۱۵/۱۵)
+**A02: IPv6 fallback exposure, fixed.** Global IPv6 is routed through the protected path when a real tunnel route exists or blocked with a kill-switch rule. The UI and diagnostics report the protection state instead of claiming a route exists when it does not.
 
-**روش:** جست‌وجوی الگویی روی کل درخت سورس برای `api_key`, `secret`, `password`, `token`,
-`bearer`, `authorization`, و هدرهای کلید خصوصی (`BEGIN RSA/EC/OPENSSH/PRIVATE`).
+**A03: Proxy restoration after disconnect, fixed.** Cleanup disables WinINET first, then removes bridge/tunnel resources, and removes the kill-switch on explicit disconnect. Reconnect preserves the kill-switch to avoid a security gap.
 
-**نتیجه:** هیچ راز واقعی در سورس نیست. تمام تطابق‌ها یکی از این‌ها بودند:
+**A04: Periodic upstream stalls, fixed.** A background watchdog probes three independent SOCKS5 targets every 30 seconds and restarts only after three consecutive failed rounds. TCP idle handling is five minutes and the UDP policy value is 120 seconds.
 
-- ثابت‌های Win32 API برای بررسی ارتقای دسترسی (`OpenProcessToken`, `TOKEN_QUERY`)
-- حذف عامدانهٔ سرآیندهای `proxy-authorization` در پل HTTP (رفتار درست پروکسی)
-- ارجاع به `${GITHUB_TOKEN}` در اسکریپت سینک هسته — از محیط CI خوانده می‌شود، در سورس نیست
-- `$env:SIGN_PFX_PASSWORD` در اسکریپت امضا — از Secrets گیت‌هاب می‌آید
+**A05: UI blank/freeze, mitigated.** The first shell renders before profile/snapshot IPC, those calls run concurrently, and network probes never run on the UI thread. Native teardown remains bounded by listener joins and process reap.
 
-**هویت WARP** در زمان اجرا ساخته می‌شود؛ هیچ اعتبارنامهٔ از پیش‌تعیین‌شده‌ای همراه برنامه نیست.
+## Release gate
 
-**🆕 ارزیابی قابلیت جدید Zero Trust:** توکن سرویس و JWT ورودی کاربرند، نه هاردکد. با
-`#[serde(skip_serializing)]` هرگز سریالایز نمی‌شوند (تست واحد `secrets_are_never_serialised_to_disk`).
+Do not publish unless all are green: `cargo fmt --check`, x64 and x86 `cargo test`, frontend build, Tauri release build, embedded manifest verification, installer silent install/uninstall, kill-switch cleanup, and a manual WebRTC/DNS/IPv6 leak test.
 
----
 
-## ۳. محور ۲ — رمزنگاری و پروتکل (۱۸/۲۰)
+# ممیزی امنیتی نسخهٔ ۱.۲.۰
 
-**✅ پین‌کردن گواهی (SPKI).** از ۱.۴.۰ اتصال‌های MASQUE گواهی لبهٔ Cloudflare را در برابر
-هش‌های SPKI پین‌شده بررسی می‌کنند — هم مسیر HTTP/3 و هم HTTP/2. پیش از آن اعتبارسنجی کاملاً
-رد می‌شد؛ این مهم‌ترین رفع امنیتی تاریخ پروژه بود. MitM روی کانال کنترل عملاً ناممکن است.
+**دامنه:** پوستهٔ ویندوز، کنترل‌پلین Rust، موتور تونل، پل پروکسی، فایروال، ذخیره‌سازی محلی، لاگ‌ها و زنجیرهٔ بیلد. **امتیاز: ۸۸ از ۱۰۰.**
 
-**✅ quiche 0.29.3 (تازه در ۱.۵.۰).** سه رفع بالادست:
-- صف رخداد مسیر کرانمند شد → همتایی که پورت مبدأ را می‌چرخاند نمی‌تواند حافظه را بی‌حد رشد دهد
-- QPACK در HTTP/3 سرباز ۳۲ بایتیِ هر فیلد را در بررسی سقف حساب می‌کند
-- حداکثر اندازهٔ priority-update اعمال می‌شود
+| بخش | نتیجه |
+|---|---|
+| **کلیدها و اطلاعات حساس** | کلید، رمز، توکن یا API Key هاردکدشده پیدا نشد؛ اسرار Zero Trust ذخیره نمی‌شوند. |
+| **رمزنگاری و پروتکل** | اعتبارسنجی زنجیرهٔ TLS و پین SPKI فعال است؛ چرخش پین باید قبل از تغییر کلید انجام شود. |
+| **نشت DNS، IPv6 و WebRTC** | مسیر DNS و HTTP از SOCKS5 بررسی می‌شود؛ UDP مستقیم WebRTC و IPv6 ناامن fail-closed هستند. |
+| **عبور خارج از تونل** | مسیر HTTP/HTTPS و برنامه‌های SOCKS-aware حفاظت می‌شوند؛ UDP دلخواه برنامه‌های ثالث خارج از مدل پروکسی است. |
+| **ذخیره‌سازی محلی** | پروفایل و لاگ چرخشی متن ساده‌اند؛ اسرار حساس ذخیره نمی‌شوند؛ رمزگذاری فایل هویت با DPAPI مورد باقیمانده است. |
+| **مجوز و سیستم‌عامل** | اجرای `requireAdministrator` اجباری و مانیفست verify می‌شود؛ مجوز اضافی دسکتاپی درخواست نمی‌شود. |
+| **لاگ و خطا** | آی‌پی‌ها ماسک، اسرار حذف و سطح لاگ موتور به `info` محدود شده است. |
+| **کیفیت شبکه و وابستگی‌ها** | cleartext کنترل، bypass گواهی و fallback ناامن وجود ندارد؛ CI تست و بسته‌بندی را کنترل می‌کند. |
 
-**✅ پین دقیق h2.** پیش‌تر روی یک مینورِ شناور بود؛ حالا نسخهٔ دقیق پین است تا بیلد انتشار
-پیاده‌سازی HTTP/2ای متفاوت از آنچه تست شده برندارد.
-
-**✅ لایه‌های مبهم‌سازی.** نویز (۶ سطح)، قطعه‌قطعه‌سازی TLS ClientHello روی HTTP/2، و ECH
-خودکار. در نسخهٔ ویندوز، نردبان `smart_auto` روی شبکهٔ فیلترشده ابتدا پاس سخت‌شده را اجرا می‌کند.
-
-**⚠️ کم — SNI به‌صورت cleartext.** برای نقطهٔ MASQUE، SNI رمز نمی‌شود چون سرور مقصد ECH را
-نمی‌پذیرد. این محدودیت سمت سرور Cloudflare است، نه نقص کلاینت؛ در سمت ما با `--ech auto`
-هرجا ممکن باشد فعال می‌شود. **کسر ۲ نمره.**
-
----
-
-## ۴. محور ۳ — نشت داده (۱۵/۱۵)
-
-**✅ رفع بحرانی نشتی UDP در ۱.۵.۰.** جدی‌ترین یافتهٔ ممیزی قبلی: `SOCKS5 UDP ASSOCIATE` پس از
-بازشدن سوکت رله، دیتاگرام را **از هر مبدأیی** می‌پذیرفت. یعنی هر فرآیند دیگری روی همان دستگاه —
-و در صورت bind روی آدرس عمومی، هر دستگاهی در شبکه — می‌توانست ترافیک را از تونل شما تزریق و
-بخواند. بالادست رله را به همتای بازکنندهٔ اتصال کنترلی **قفل** کرد. این تنها بزرگ‌ترین دلیل
-افزایش امتیاز است.
-
-**✅ DNS از داخل تونل.** در ویندوز DNS به `1.1.1.1` / `2606:4700:4700::1111` داخل تونل پین
-می‌شود و هر جست‌وجوی راستی‌آزمایی با `ATYP=DOMAIN` فرستاده می‌شود تا نام از راه دور و داخل
-تونل حل شود، نه با ریزالور محلی آلوده.
-
-**✅ بستن نشت IPv6.** هر دو مسیر پیش‌فرض `0.0.0.0/0` و `::/0` گرفته می‌شوند و پشتهٔ IP طبق
-انتخاب صریح کاربر مدیریت می‌شود.
-
-**✅ دروازه‌بانی اعلام «متصل».** برنامه تا وقتی خودآزمای چهارمرحله‌ای (پورت → دست‌دادن →
-TCP از پروکسی → DNS+HTTP واقعی) پاس نشود، «Connected» نمی‌گوید. این جلوی کلاس «تونل مرده که
-سبز نشان می‌دهد» را می‌گیرد — همان چیزی که کاربر را ناخواسته بدون حفاظت رها می‌کند.
-
-**🆕 ارزیابی قوانین مسیریابی جدید:** `--route-direct` **عامدانه** ترافیک را از تونل بیرون
-می‌فرستد. این یک نشت نیست بلکه خواستهٔ صریح کاربر است (بانک، شبکهٔ محلی)، ولی چون پیامد
-حریم‌خصوصی دارد در رابط کاربری با متن روشن توضیح داده شده و پیش‌فرض **خالی** است.
-
----
-
-## ۵. محور ۴ — ذخیره‌سازی محلی (۱۱/۱۵)
-
-**✅ اسرار Zero Trust روی دیسک نمی‌روند.** طراحی این بیلد:
-- `access_secret` و `access_token` با `#[serde(skip_serializing)]` هرگز در `profile.json` نوشته نمی‌شوند
-- «فقط-نوشتنی» هستند: `get_profile` آن‌ها را برنمی‌گرداند، پس در حافظهٔ رابط کاربری هم نمی‌مانند
-- رابط کاربری بلافاصله پس از ذخیره فیلد را از DOM پاک می‌کند (مقاوم به اسکرین‌شات/بازرسی DOM)
-- «بازنشانی به پیش‌فرض» مسیر جداگانه‌ای دارد که اسرارِ در-حافظه را واقعاً صفر می‌کند
-
-**✅ نوشتن اتمیک پروفایل.** ابتدا فایل موقت، بعد `rename` — قطع برق وسط ذخیره تنظیمات را
-نابود نمی‌کند. خواندنِ فایل خراب هرگز خطا نمی‌دهد و به پیش‌فرض‌ها برمی‌گردد.
-
-**✅ حفاظت از اعتبارنامه در گیت.** `.gitignore` صریحاً `aether*.toml`, `*-secondary.toml`,
-`*-lastconn.toml`, `*.pem`, `*.key` را حذف می‌کند تا کلید خصوصی WireGuard تصادفی کامیت نشود.
-
-**⚠️ متوسط — هویت WARP به‌صورت متن ساده.** فایل‌های هویت (شامل کلید خصوصی WireGuard) در پوشهٔ
-کاری بدون رمزگذاری می‌مانند. قفل ACL آزمایشی نسخهٔ v8 در v9 حذف شد چون روی برخی سیستم‌ها
-دسترسی خودِ موتور را هم می‌بست و اتصال را می‌شکست.
-**اثر:** بدافزاری که با همان کاربر اجرا شود می‌تواند هویت را بخواند و دستگاه شما را جعل کند.
-**کاهش‌دهنده:** فایل زیر پروفایل کاربر است و دسترسی سایر کاربران سیستم را ندارد.
-**پیشنهاد (نقشهٔ راه):** رمزگذاری با **DPAPI** (`CryptProtectData`) به‌صورت per-user. این کار
-مشکل ACL را ندارد چون خودِ فرآیند همیشه می‌تواند رمزگشایی کند. **کسر ۴ نمره.**
-
----
-
-## ۶. محور ۵ — مجوزها و مانیفست (۱۰/۱۰)
-
-**نسخهٔ اندروید:**
-- `allowBackup=false` — هویت تونل با پشتیبان‌گیری ابری بیرون نمی‌رود
-- بدون `debuggable` در انتشار
-- `VpnService` با `exported=false` — برنامهٔ دیگری نمی‌تواند تونل شما را راه بیندازد
-- `network_security_config` تمام ترافیک cleartext را مسدود می‌کند
-- `launchMode=singleTask` — بدون نمونهٔ دوم
-
-**نسخهٔ ویندوز:**
-- قابلیت‌های Tauri **حداقلی**اند: فقط کنترل پنجره + `shell:allow-open`. هیچ دسترسی
-  خواندن/نوشتن فایل‌سیستم یا اجرای دلخواه به لایهٔ وب داده نشده.
-- **CSP سخت‌گیرانه:** `default-src 'self'`؛ `connect-src` فقط به `self` و کانال IPC.
-  یعنی حتی در صورت XSS فرضی، صفحه نمی‌تواند به اینترنت داده بفرستد.
-- موتور با `CREATE_NO_WINDOW` اجرا می‌شود و خروجی‌اش فقط به لاگ خصوصی برنامه می‌رود
-  (معادل ممنوعیت Logcat در اندروید).
-- دسترسی Administrator فقط برای آداپتور Wintun لازم است، نه برای اتصال — یعنی برنامه
-  کاربر را مجبور به ارتقای دسترسی نمی‌کند.
-
----
-
-## ۷. محور ۶ — لاگ و حریم خصوصی (۱۰/۱۰)
-
-**✅ ماسک آی‌پی خروجی.** در لاگ ماندگار `1.2.3.4` به `1.2.3.xxx` تبدیل می‌شود (IPv6 فقط /48
-را نگه می‌دارد). آی‌پی کامل فقط در رابط کاربری زندهٔ نشست دیده می‌شود.
-
-**🆕 ماسک اسرار در آرگومان‌ها.** مقدار `--access-secret`, `--access-token` و `--access-email`
-پیش از نوشتن در لاگ به `••••••` تبدیل می‌شود. خود فلگ برای عیب‌یابی دیده می‌شود، مقدارش نه.
-این تصمیم مهمی بود: بدون آن، خط «Spawned aether.exe …» توکن سازمانی را در فایل چرخان
-می‌نوشت و کاربر با اشتراک‌گذاری لاگ برای پشتیبانی، رازش را لو می‌داد.
-
-**✅ رینگ‌بافر کرانمند.** ۸۰۰ خط در حافظه، سقف فایل ۵۱۲KiB با چرخش، نوشتن دسته‌ای روی ترد
-پس‌زمینه. مسیر بحرانی هرگز دیسک را لمس نمی‌کند و لاگ نمی‌تواند دیسک را پر کند.
-
-**✅ بدون تلمتری.** هیچ ارسال آماری، هیچ crash reporter شخص ثالث. تنها اتصال‌های خارجیِ
-غیرتونلی، جست‌وجوی آی‌پی/موقعیت است که ابتدا از مسیر TLS روی ۴۴۳ می‌رود.
-
----
-
-## ۸. محور ۷ — مرز اعتماد رابط کاربری (۹/۱۰)
-
-**✅ فیلتر مبدأ روی پل اشتراک.** پل SOCKS5/HTTP فقط از همتاهای loopback، شبکهٔ خصوصی
-(RFC1918) و link-local اتصال می‌پذیرد. اگر دستگاه آی‌پی عمومی مستقیم داشته باشد، پروکسی
-به اینترنت باز نمی‌شود — جلوگیری از تبدیل‌شدن به open relay. بدون فعال‌بودن اشتراک، فقط
-روی `127.0.0.1` گوش می‌دهد.
-
-**✅ گارد نسخهٔ هسته.** فلگ‌های ۱.۵.۰ فقط به هسته‌ای می‌روند که آن‌ها را می‌فهمد و در رابط
-کاربری هم با هستهٔ قدیمی غیرفعال و توضیح‌دار می‌شوند. این یک کلاس کامل خرابی («موتور با فلگ
-ناشناخته در میلی‌ثانیهٔ اول می‌میرد») را حذف می‌کند.
-
-**✅ پیش‌فرض محافظه‌کارانهٔ Gateway.** روشن‌بودن `--gateway` مرور کاربر را برای سازمان لاگ
-می‌کند و یک هاپ اضافه می‌سازد؛ پس **خاموش** است و پیامدش در رابط کاربری صریح گفته می‌شود.
-
-**✅ پاکسازی تضمینی پروکسی سیستمی.** در `Drop` کنترلر و در شروع برنامه، پروکسی سیستمیِ
-به‌جامانده از کرش پاک می‌شود. کاربر هرگز با پروکسیِ فعالِ اشاره‌کننده به پلِ مرده رها نمی‌شود
-(که یعنی قطع کامل اینترنت).
-
-**⚠️ کم — پروکسی سیستمی در HKCU (فقط ویندوز).** تنظیم پروکسی زیر
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` نوشته می‌شود. مزیتش این است
-که Administrator لازم ندارد؛ عیبش این که بدافزاری با همان سطح دسترسی کاربر می‌تواند آن را
-بازنویسی و ترافیک را منحرف کند. این محدودیت ذاتی معماری پروکسی ویندوز است و در حالت Wintun
-موضوعیت ندارد. **کسر ۱ نمره.**
-
----
-
-## ۹. محور ۸ — زنجیرهٔ تأمین و بیلد (۵/۵)
-
-- **پین وابستگی‌های حساس:** `quiche 0.29.3` و `h2` با نسخهٔ دقیق.
-- **بدون اکشن شخص ثالث در مسیر اعتماد:** انتشار با CLI رسمی `gh` انجام می‌شود. اکشن
-  `softprops/action-gh-release` حذف شد — هم به‌خاطر شکست بیلد و هم چون یک وابستگی خارجی
-  با دسترسی نوشتن به انتشارها بود.
-- **بازگشت خودکار هسته:** اگر بیلد با هستهٔ تازه‌سینک‌شده بشکند، پایپ‌لاین خودکار به هستهٔ
-  سالم قبلی برمی‌گردد و `CORE_VERSION` را هم برمی‌گرداند. ارتقای خودکار نمی‌تواند انتشار را بشکند.
-- **مرحلهٔ preflight:** وجود تمام فایل‌های لازم، اعتبار JSON‌ها و تطابق هر `mod` با فایل واقعی
-  پیش از هر کار سنگین بررسی می‌شود.
-- **راستی‌آزمایی خروجی:** `SHA256SUMS.txt` برای همهٔ آرتیفکت‌ها؛ امضای کد اختیاری با پشتیبانی
-  از بررسی اثرانگشت گواهی.
-- **بیلد بازتولیدپذیرتر:** `panic=abort`, `lto`, `strip` و پیوند استاتیک CRT (بدون وابستگی
-  به Visual C++ Redistributable).
-
----
-
-## ۱۰. فهرست اقدامات پیشنهادی (به ترتیب اولویت)
-
-| اولویت | اقدام | محور | وضعیت |
-|--------|-------|------|--------|
-| ۱ | رمزگذاری هویت WARP با DPAPI (per-user) | ذخیره‌سازی | نقشهٔ راه — تنها یافتهٔ متوسط |
-| ۲ | افزودن قواعد پیش‌فرضِ اختیاری «مقصد مستقیم» برای دامنه‌های داخلی | مسیریابی | پیشنهاد بهبود کاربری |
-| ۳ | نمایش هشدار در رابط کاربری وقتی `--gateway` روشن است و متصل هستید | مرز اعتماد | پیشنهاد |
-| ۴ | پیگیری پذیرش ECH سمت Cloudflare برای حذف SNI cleartext | رمزنگاری | خارج از کنترل ما |
-| ۵ | بررسی دوره‌ای `cargo audit` در پایپ‌لاین | زنجیرهٔ تأمین | پیشنهاد |
-
----
-
-## ۱۱. جمع‌بندی
-
-هستهٔ ۱.۵.۰ جدی‌ترین یافتهٔ ممیزی قبلی (پذیرش دیتاگرام UDP از هر مبدأ) را بست و سه وابستگی
-پروتکلی را سخت‌تر کرد. سه قابلیت تازهٔ آن — Zero Trust، قوانین مسیریابی و انتخاب DNS — در این
-بیلد به رابط کاربری اضافه شده‌اند **بدون** آنکه سطح حملهٔ ماندگار جدیدی بسازند: هیچ راز تازه‌ای
-روی دیسک نمی‌نشیند، اسرار در لاگ ماسک می‌شوند، و گارد نسخه مانع خرابی با هستهٔ قدیمی می‌شود.
-
-تنها یافتهٔ متوسطِ باقی‌مانده همان مورد شناخته‌شدهٔ قبلی است: متن سادهٔ فایل هویت WARP، که
-راه‌حل درستش DPAPI است نه قفل ACL.
-
-**امتیاز نهایی: ۹۳ / ۱۰۰**
+**کنترل‌های تکمیلی:** کیل‌سوییچ و حفاظت IPv6 پیش‌فرض فعال‌اند، تنظیمات پروکسی قبل از تغییر snapshot و بعد از قطع دقیقاً restore می‌شوند، واچداگ سه‌هدفه از ترد رابط جداست و پاک‌سازی پس از خروج انجام می‌شود.

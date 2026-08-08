@@ -575,6 +575,27 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
 .ipbadge__label { color: var(--on-dark-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }
 .ipbadge__value { font-weight: 500; }
 
+/* ---- v1.2.0 — نشان محافظت WebRTC ----------------------------------- */
+.shield {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--navy-800);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transition: border-color 400ms ease, color 400ms ease;
+}
+.shield__dot { width: 8px; height: 8px; border-radius: 50%; background: #8A93A6; flex: none; }
+.shield[data-state="safe"] { border-color: color-mix(in srgb, #32E0C4 45%, transparent); color: #32E0C4; }
+.shield[data-state="safe"] .shield__dot { background: #32E0C4; }
+.shield[data-state="leak"] { border-color: color-mix(in srgb, #FF5C7A 55%, transparent); color: #FF5C7A; }
+.shield[data-state="leak"] .shield__dot { background: #FF5C7A; }
+.shield[data-state="unknown"] { color: var(--on-dark-muted); }
+
 /* ---- تایمر اتصال ---------------------------------------------------- */
 .uptime { margin: 0; font-size: 13px; color: var(--on-dark-muted); }
 .uptime__v { color: #32E0C4; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -626,3 +647,6 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
   z-index: 999;
 }
 .toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
+
+.boot-skeleton { min-height: 420px; border-radius: 18px; background: linear-gradient(90deg, rgba(255,255,255,.02), rgba(255,255,255,.07), rgba(255,255,255,.02)); background-size: 240% 100%; animation: boot-shimmer 1.2s ease-in-out infinite; }
+@keyframes boot-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }

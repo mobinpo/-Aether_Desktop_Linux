@@ -33,6 +33,7 @@ const ENDPOINT_MODES = [
 const SPLIT_MODES = [['OFF', 'Off'], ['INCLUDE', 'Only these apps'], ['EXCLUDE', 'All except these']]
 const MTU_PRESETS = [1280, 1380, 1420, 1500]
 const KEEPALIVE_PRESETS = [0, 10, 25, 45]
+const RECONNECT_ATTEMPTS = Array.from({ length: 18 }, (_, i) => i + 3)
 
 // v10 — هستهٔ 1.5.0: روش‌های ورود Zero Trust (همان گزینه‌های موبایل/هسته).
 const ACCESS_MODES = [
@@ -128,6 +129,12 @@ export function renderAdvanced() {
     ${toggle('ECH', 'ech', t('Encrypted Client Hello (auto)'), p.ech)}
     ${toggle(t('Share over LAN'), 'lanShare', t('Let other devices on your network use this tunnel'), p.lanShare)}
 
+    <h3 class="view__subtitle">${t('Connection safety')}</h3>
+    ${toggle(t('Kill switch'), 'killSwitch', t('Block browser traffic if the tunnel drops'), p.killSwitch)}
+    ${toggle(t('IPv6 leak protection'), 'ipv6Protection', t('Keep the IPv6 default route protected or block it safely'), p.ipv6Protection)}
+    ${dropdown(t('Automatic reconnect attempts'), 'reconnectAttempts', RECONNECT_ATTEMPTS.map((v) => [String(v), `${v}`]), String(p.reconnectAttempts ?? 3))}
+
+
     ${dropdown(t('Split tunneling'), 'splitMode', SPLIT_MODES, p.splitMode)}
     <section class="field" id="split-apps" ${p.splitMode === 'OFF' ? 'hidden' : ''}>
       <span class="field__label">${t('Applications')}</span>
@@ -202,7 +209,7 @@ export function renderAdvanced() {
     s.addEventListener('change', async () => {
       const key = s.dataset.key
       const raw = s.value
-      const value = ['mtu', 'keepalive'].includes(key) ? Number(raw) : raw
+      const value = ['mtu', 'keepalive', 'reconnectAttempts'].includes(key) ? Number(raw) : raw
       await saveProfile({ [key]: value })
       if (key === 'endpointMode' || key === 'splitMode') {
         const host = root.parentElement

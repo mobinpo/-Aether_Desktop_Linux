@@ -136,6 +136,24 @@ pub fn socks5_stream(dest_host: &str, dest_port: u16, timeout: Duration) -> Opti
 }
 
 /// معادل `NetProbe.checkTcpViaProxy` — CONNECT به IP خام، بدون DNS.
+/// v1.2.0 watchdog: three independent end-to-end targets. A check passes
+/// when at least two targets complete through the engine SOCKS5 path, which
+/// avoids restarting a healthy tunnel because one CDN edge briefly hiccupped.
+pub fn watchdog_probe() -> bool {
+    const TARGETS: [(&str, u16); 3] = [
+        ("cloudflare.com", 80),
+        ("www.gstatic.com", 80),
+        ("1.1.1.1", 80),
+    ];
+    let passed = TARGETS
+        .iter()
+        .filter(|(host, port)| {
+            socks5_stream(*host, *port, Duration::from_secs(5)).is_some()
+        })
+        .count();
+    passed >= 2
+}
+
 pub fn tcp_via_proxy(dest_ip: &str, dest_port: u16) -> bool {
     socks5_stream(dest_ip, dest_port, CONNECT_TIMEOUT).is_some()
 }
@@ -379,6 +397,156 @@ fn json_str(body: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+// ---------------------------------------------------------------------------
+//  v1.2.0 — سنجش واقعی نشتی WebRTC (درخواست STUN مستقیم)
+// ---------------------------------------------------------------------------
+//
+//  ادعا کافی نیست. مرورگر برای ساختن نامزد srflx دقیقاً همین کار را می‌کند:
+//  یک دیتاگرام UDP خام به سرور STUN. اگر پاسخ برگردد یعنی مسیر UDP مستقیم
+//  باز است و آی‌پی داخل پاسخ همان چیزی است که هر سایتی می‌تواند ببیند.
+
+use std::net::{Ipv4Addr, UdpSocket};
+
+/// سرورهای STUN — همان‌هایی که ابزارهای عمومی «WebRTC Leak Test» می‌زنند.
+pub const STUN_SERVERS: [&str; 4] = [
+    "stun.l.google.com:19302",
+    "stun.cloudflare.com:3478",
+    "global.stun.twilio.com:3478",
+    "stun.voip.blackberry.com:3478",
+];
+
+const STUN_MAGIC: u32 = 0x2112_A442;
+const STUN_BINDING_REQUEST: u16 = 0x0001;
+const STUN_BINDING_RESPONSE: u16 = 0x0101;
+const ATTR_MAPPED_ADDRESS: u16 = 0x0001;
+const ATTR_XOR_MAPPED_ADDRESS: u16 = 0x0020;
+
+/// آنچه یک صفحهٔ وب با WebRTC از شما می‌بیند.
+#[derive(Debug, Clone)]
+pub struct StunResult {
+    pub server: String,
+    pub reflexive_ip: String,
+}
+
+/// `Some` یعنی دیتاگرام از کارت فیزیکی بیرون رفت و آی‌پی برگشته قابل دیدن
+/// است — یعنی نشتی. `None` یعنی مسیر UDP مستقیم بسته است (حالت مطلوب).
+pub fn stun_reflexive_ip(timeout: Duration) -> Option<StunResult> {
+    for server in STUN_SERVERS {
+        if let Some(ip) = stun_query(server, timeout) {
+            return Some(StunResult { server: server.to_string(), reflexive_ip: ip });
+        }
+    }
+    None
+}
+
+fn stun_query(server: &str, timeout: Duration) -> Option<String> {
+    let addr = server.to_socket_addrs().ok()?.find(|a| a.is_ipv4())?;
+    let sock = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    sock.set_read_timeout(Some(timeout)).ok()?;
+    sock.set_write_timeout(Some(timeout)).ok()?;
+
+    let txid = transaction_id();
+    let req = build_binding_request(&txid);
+    sock.send_to(&req, addr).ok()?;
+
+    let mut buf = [0u8; 512];
+    let (n, from) = sock.recv_from(&mut buf).ok()?;
+    if from.ip() != addr.ip() {
+        return None; // پاسخ از جای دیگر — نادیده.
+    }
+    parse_binding_response(&buf[..n], &txid)
+}
+
+fn build_binding_request(txid: &[u8; 12]) -> Vec<u8> {
+    let mut req = Vec::with_capacity(20);
+    req.extend_from_slice(&STUN_BINDING_REQUEST.to_be_bytes());
+    req.extend_from_slice(&0u16.to_be_bytes()); // بدون attribute
+    req.extend_from_slice(&STUN_MAGIC.to_be_bytes());
+    req.extend_from_slice(txid);
+    req
+}
+
+/// استخراج آی‌پی از پاسخ Binding (اول XOR-MAPPED-ADDRESS، بعد MAPPED-ADDRESS).
+fn parse_binding_response(msg: &[u8], txid: &[u8; 12]) -> Option<String> {
+    if msg.len() < 20 {
+        return None;
+    }
+    if u16::from_be_bytes([msg[0], msg[1]]) != STUN_BINDING_RESPONSE {
+        return None;
+    }
+    if u32::from_be_bytes([msg[4], msg[5], msg[6], msg[7]]) != STUN_MAGIC {
+        return None;
+    }
+    if msg[8..20] != *txid {
+        return None; // پاسخ کهنه یا جعلی.
+    }
+    let declared = u16::from_be_bytes([msg[2], msg[3]]) as usize;
+    let end = (20 + declared).min(msg.len());
+
+    let mut i = 20;
+    let mut fallback: Option<String> = None;
+    while i + 4 <= end {
+        let atype = u16::from_be_bytes([msg[i], msg[i + 1]]);
+        let alen = u16::from_be_bytes([msg[i + 2], msg[i + 3]]) as usize;
+        let start = i + 4;
+        let stop = start + alen;
+        if stop > end {
+            break;
+        }
+        let body = &msg[start..stop];
+        match atype {
+            ATTR_XOR_MAPPED_ADDRESS => {
+                if let Some(ip) = xor_mapped_v4(body) {
+                    return Some(ip);
+                }
+            }
+            ATTR_MAPPED_ADDRESS => {
+                if fallback.is_none() {
+                    fallback = mapped_v4(body);
+                }
+            }
+            _ => {}
+        }
+        // هر attribute تا مرز ۴ بایتی padding می‌شود.
+        i = stop + ((4 - (alen % 4)) % 4);
+    }
+    fallback
+}
+
+fn xor_mapped_v4(body: &[u8]) -> Option<String> {
+    if body.len() < 8 || body[1] != 0x01 {
+        return None; // فقط IPv4
+    }
+    let cookie = STUN_MAGIC.to_be_bytes();
+    let mut octets = [0u8; 4];
+    for k in 0..4 {
+        octets[k] = body[4 + k] ^ cookie[k];
+    }
+    Some(Ipv4Addr::from(octets).to_string())
+}
+
+fn mapped_v4(body: &[u8]) -> Option<String> {
+    if body.len() < 8 || body[1] != 0x01 {
+        return None;
+    }
+    Some(Ipv4Addr::new(body[4], body[5], body[6], body[7]).to_string())
+}
+
+/// شناسهٔ تراکنش ۹۶ بیتی — بدون وابستگی به یک کتابخانهٔ تصادفی.
+fn transaction_id() -> [u8; 12] {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut id = [0u8; 12];
+    id[..8].copy_from_slice(&nanos.to_be_bytes());
+    id[8..].copy_from_slice(&seq.to_be_bytes());
+    id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,4 +571,57 @@ mod tests {
         assert_eq!(info.ip, "5.6.7.8");
         assert_eq!(info.country_code.as_deref(), Some("NL"));
     }
+
+    // --- v1.2.0: کدک STUN (پایهٔ سنجش نشتی WebRTC) ---
+
+    #[test]
+    fn binding_request_has_the_rfc5389_header() {
+        let txid = [7u8; 12];
+        let req = build_binding_request(&txid);
+        assert_eq!(req.len(), 20);
+        assert_eq!(&req[0..2], &[0x00, 0x01]); // Binding Request
+        assert_eq!(&req[2..4], &[0x00, 0x00]); // بدون attribute
+        assert_eq!(&req[4..8], &[0x21, 0x12, 0xA4, 0x42]); // magic cookie
+        assert_eq!(&req[8..20], &txid);
+    }
+
+    #[test]
+    fn decodes_xor_mapped_address() {
+        let txid = [9u8; 12];
+        let mut msg: Vec<u8> = Vec::new();
+        msg.extend_from_slice(&0x0101u16.to_be_bytes());
+        msg.extend_from_slice(&12u16.to_be_bytes());
+        msg.extend_from_slice(&0x2112_A442u32.to_be_bytes());
+        msg.extend_from_slice(&txid);
+        msg.extend_from_slice(&0x0020u16.to_be_bytes()); // XOR-MAPPED-ADDRESS
+        msg.extend_from_slice(&8u16.to_be_bytes());
+        msg.push(0x00);
+        msg.push(0x01); // IPv4
+        msg.extend_from_slice(&[0x00, 0x00]); // پورت (بی‌اهمیت)
+        // 5.61.25.9 در XOR با magic cookie
+        let ip = [5u8, 61, 25, 9];
+        let cookie = 0x2112_A442u32.to_be_bytes();
+        for k in 0..4 {
+            msg.push(ip[k] ^ cookie[k]);
+        }
+        assert_eq!(parse_binding_response(&msg, &txid).as_deref(), Some("5.61.25.9"));
+    }
+
+    /// پاسخ با شناسهٔ تراکنش دیگر باید دور ریخته شود (ضد جعل).
+    #[test]
+    fn rejects_a_foreign_transaction_id() {
+        let txid = [1u8; 12];
+        let mut msg: Vec<u8> = Vec::new();
+        msg.extend_from_slice(&0x0101u16.to_be_bytes());
+        msg.extend_from_slice(&0u16.to_be_bytes());
+        msg.extend_from_slice(&0x2112_A442u32.to_be_bytes());
+        msg.extend_from_slice(&[2u8; 12]);
+        assert!(parse_binding_response(&msg, &txid).is_none());
+    }
+
+    #[test]
+    fn transaction_ids_never_repeat() {
+        assert_ne!(transaction_id(), transaction_id());
+    }
+
 }

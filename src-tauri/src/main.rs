@@ -4,7 +4,7 @@
 //! Module mapping from Android to Windows:
 //!   MainActivity / AetherApp -> main.rs
 //!   AetherController         -> state.rs
-//!   AetherVpnService         -> tun.rs + sysproxy.rs + share.rs
+//!   AetherVpnService         -> tun.rs + sysproxy.rs + share.rs + leakguard.rs
 //!   AetherProcess            -> engine.rs
 //!   Profile                  -> profile.rs
 //!   ProfileStore             -> store.rs
@@ -15,6 +15,7 @@
 
 mod diagnostics;
 mod engine;
+mod leakguard;
 mod log;
 mod probe;
 mod profile;
@@ -118,6 +119,22 @@ fn run_diagnostics(app: State<'_, AppState>) -> diagnostics::Report {
     diagnostics::run(&profile)
 }
 
+/// v1.2.0 — دکمهٔ «آزمایش نشتی WebRTC» در پنل عیب‌یابی.
+///
+/// همان کاری که یک صفحهٔ وب با WebRTC می‌کند: یک درخواست STUN روی UDP خام.
+/// اگر آی‌پی برگشته با آی‌پی خروجی تونل یکی نباشد، یعنی نشتی واقعی است.
+#[tauri::command]
+fn webrtc_leak_test(app: State<'_, AppState>) -> diagnostics::LeakReport {
+    let exit = app
+        .controller
+        .lock()
+        .unwrap()
+        .snapshot()
+        .ip_info
+        .and_then(|i| if i.via_tunnel { Some(i.ip) } else { None });
+    diagnostics::webrtc_leak_check(exit.as_deref())
+}
+
 #[tauri::command]
 fn about_info() -> serde_json::Value {
     serde_json::json!({
@@ -201,6 +218,7 @@ fn main() {
             get_checks,
             run_self_test,
             run_diagnostics,
+            webrtc_leak_test,
             about_info,
             core_caps,
         ])

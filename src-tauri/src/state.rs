@@ -19,6 +19,7 @@
 
 use crate::diagnostics;
 use crate::engine::{self, AetherProcess};
+use crate::leakguard::{self, LeakGuard};
 use crate::log::DiagnosticsLog;
 use crate::probe;
 use crate::profile::{ConnectionProfile, Protocol};
@@ -37,12 +38,14 @@ use std::time::{Duration, Instant};
 const TAG: &str = "state";
 
 /// همان مقادیر اندروید: MAX_RETRIES=3، BACKOFF = 2s/5s/10s.
-const MAX_RETRIES: u32 = 3;
+const DEFAULT_MAX_RETRIES: u32 = 3;
 const BACKOFF_MS: [u64; 3] = [2_000, 5_000, 10_000];
 /// پنجرهٔ گریس خودآزما — همان `OUTBOUND_GRACE_MS` (شروع سرد warp-in-warp).
 const OUTBOUND_GRACE_MS: u64 = 90_000;
 /// معادل `PORT_RELEASE_WAIT_MS` اندروید.
 const PORT_RELEASE_WAIT_MS: u64 = 3_000;
+const WATCHDOG_INTERVAL_SECS: u64 = 30;
+const WATCHDOG_FAILURE_THRESHOLD: u8 = 3;
 
 /// معادل دقیق `ConnectionState.kt` — همان هشت حالت، همان ترتیب.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +108,10 @@ pub struct Snapshot {
     pub share_http: Option<String>,
     pub ip_info: Option<IpEndpoint>,
     pub ip_loading: bool,
+    /// v1.2.0 — نتیجهٔ آخرین سنجش نشتی WebRTC. `None` = هنوز سنجیده نشده.
+    pub webrtc_leak: Option<bool>,
+    /// v1.2.0 — گارد نشتی همین حالا فعال است؟
+    pub leak_guard: bool,
 }
 
 pub struct AetherController {
@@ -122,6 +129,10 @@ pub struct AetherController {
     tunnel: Option<Tunnel>,
     share: ShareBridge,
     sysproxy_on: bool,
+    /// v1.2.0 — گارد نشتی WebRTC/UDP این نشست (Drop خودش آزادش می‌کند).
+    guard: Option<LeakGuard>,
+    /// v1.2.0 — آخرین نتیجهٔ سنجش نشتی، برای نشانِ صفحهٔ اصلی.
+    webrtc_leak: Option<bool>,
     /// نردبان تلاش‌ها — معادل `runLadder` در AetherVpnService.kt.
     plan: Vec<Candidate>,
     plan_index: usize,
@@ -136,12 +147,19 @@ pub struct AetherController {
     latency_slot: Arc<Mutex<Option<u64>>>,
     /// زمان اندازه‌گیری بعدی پینگ.
     latency_probe_at: Option<Instant>,
+    /// نتیجهٔ آخرین پروب واچداگ، خارج از حلقهٔ اصلی محاسبه می‌شود.
+    watchdog_slot: Arc<Mutex<Option<bool>>>,
+    watchdog_probe_at: Option<Instant>,
+    watchdog_failures: u8,
+    /// Firewall/registry work is deferred out of the IPC command path.
+    security_refresh_pending: bool,
 }
 
 impl AetherController {
     pub fn new(data_dir: &Path) -> Self {
         let store = ProfileStore::new(data_dir);
-        let profile = store.load();
+        let mut profile = store.load();
+        profile.normalize();
         let install_dir = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(Path::to_path_buf))
@@ -149,7 +167,7 @@ impl AetherController {
 
         let ip_slot = Arc::new(Mutex::new(IpSlot { info: None, loading: false, session: 0 }));
 
-        let me = Self {
+        let mut me = Self {
             data_dir: data_dir.to_path_buf(),
             store,
             profile,
@@ -164,6 +182,8 @@ impl AetherController {
             tunnel: None,
             share: ShareBridge::new(),
             sysproxy_on: false,
+            guard: None,
+            webrtc_leak: None,
             plan: Vec::new(),
             plan_index: 0,
             attempts: 0,
@@ -173,10 +193,21 @@ impl AetherController {
             ip_slot,
             latency_slot: Arc::new(Mutex::new(None)),
             latency_probe_at: None,
+            watchdog_slot: Arc::new(Mutex::new(None)),
+            watchdog_probe_at: None,
+            watchdog_failures: 0,
+            security_refresh_pending: false,
         };
 
         // پروکسی سیستمی به‌جامانده از کرش احتمالی جلسهٔ قبل را پاک می‌کنیم.
-        sysproxy::disable();
+        sysproxy::recover_stale();
+        // …و همین‌طور قواعد فایروال / سیاست مرورگری که گارد نشتی جا گذاشته.
+        // هیچ اثری از جلسهٔ قبلی نباید کورکورانه باقی بماند.
+        leakguard::purge_stale();
+        // Do not install network-blocking rules during ordinary app startup.
+        // The old behavior blocked Windows before a tunnel/bridge existed,
+        // which is why reopening the app could kill internet access. The
+        // guard is installed only after the SOCKS bridge is ready.
         // معادل LaunchedEffect فاز idle در MainActivity: نمایش IP واقعی کاربر از لحظهٔ اجرا.
         spawn_ip_lookup(me.ip_slot.clone(), false);
         me
@@ -188,6 +219,7 @@ impl AetherController {
 
     pub fn set_profile(&mut self, profile: ConnectionProfile) -> Result<()> {
         let mut profile = profile;
+        profile.normalize();
         // v10: فیلدهای محرمانه «write-only» هستند: get_profile هرگز آن‌ها را
         // برنمی‌گرداند، پس UI معمولاً رشتهٔ خالی می‌فرستد. خالی = «دست نزن»
         // تا رازِ در-حافظهٔ این نشست با هر تغییر تنظیم دیگر پاک نشود.
@@ -215,7 +247,21 @@ impl AetherController {
     fn apply_profile(&mut self, profile: ConnectionProfile) -> Result<()> {
         self.store.save(&profile)?;
         let lan_toggled = profile.lan_share != self.profile.lan_share;
+        let guard_toggled = profile.leak_guard != self.profile.leak_guard;
+        let kill_toggled = profile.kill_switch != self.profile.kill_switch;
+        let ipv6_toggled = profile.ipv6_protection != self.profile.ipv6_protection;
         self.profile = profile;
+        // v1.2.0: خاموش/روشن‌کردن گارد نشتی وسط یک اتصالِ فعال باید فوراً
+        // اثر کند — نه در اتصال بعدی. کاربری که سوییچ را می‌زند انتظار دارد
+        // همان لحظه محافظت شود (یا آزاد شود).
+        let safety_changed = guard_toggled || kill_toggled || ipv6_toggled;
+        if safety_changed && self.state.is_active() {
+            // Do not run reg.exe/netsh.exe while the UI IPC command is waiting.
+            // The 200ms controller tick applies it outside the settings click,
+            // preventing the white titlebar/freeze seen on safety toggles.
+            self.security_refresh_pending = true;
+            self.webrtc_leak = None;
+        }
         // Root fix for "Share over LAN shows no IP:port": flipping the switch
         // while a connection is active must rebind the bridge immediately
         // (mobile restarts its ShareBridge the same way), so the UI gets the
@@ -253,6 +299,8 @@ impl AetherController {
             share_http: self.share.http_endpoint(),
             ip_info,
             ip_loading,
+            webrtc_leak: self.webrtc_leak,
+            leak_guard: leakguard::status().engaged,
         }
     }
 
@@ -340,13 +388,28 @@ impl AetherController {
             .map(|c| c.profile.clone())
             .unwrap_or_else(|| self.profile.clone());
 
+        // ۰) گارد نشتی — *قبل* از هر چیز دیگری. ترتیب امنیتی است، نه سلیقه‌ای:
+        // تا وقتی مسیر UDP مستقیم باز است نباید مرورگر را به تونل وصل کنیم،
+        // وگرنه بین «پروکسی روشن شد» و «گارد نصب شد» یک پنجرهٔ نشتی می‌ماند.
+        if self.profile.leak_guard || self.profile.kill_switch || self.profile.ipv6_protection {
+            if let Some(mut old_guard) = self.guard.take() {
+                old_guard.disarm_without_cleanup();
+            }
+            self.guard = Some(LeakGuard::engage(&profile));
+        } else {
+            DiagnosticsLog::w(
+                TAG,
+                "Leak guard is disabled in the profile — WebRTC may expose your real IP over direct UDP.",
+            );
+        }
+
         // ۱) پل محلی HTTP/SOCKS — معادل hev-socks5-tunnel/ShareBridge (مسیر دادهٔ واقعی).
         if let Err(e) = self.share.start(engine::SHARE_SOCKS_PORT, engine::SHARE_HTTP_PORT, profile.lan_share) {
             DiagnosticsLog::e(TAG, &format!("Bridge failed to start: {e}"));
         }
 
         // ۲) پروکسی سیستمی ویندوز — معادل کارکرد VpnService (کل سیستم از تونل می‌رود).
-        self.sysproxy_on = sysproxy::enable(engine::SHARE_HTTP_PORT);
+        self.sysproxy_on = sysproxy::enable(engine::SHARE_HTTP_PORT, engine::SHARE_SOCKS_PORT);
 
         // ۳) Wintun — اختیاری. شکست آن دیگر اتصال را نمی‌کُشد (رفع ریشه‌ای گیر StartingEngine).
         if self.tunnel.is_none() {
@@ -385,11 +448,14 @@ impl AetherController {
 
     fn disconnect(&mut self) {
         self.set_state(ConnectionState::Disconnecting, "Disconnecting…");
-        self.cleanup_native();
+        self.cleanup_native(false);
         // v16: تیک‌های سبز Diagnostics باید بلافاصله بعد از دیسکانکت
         // ریست شوند تا برای اتصال بعدی آماده باشند (معادل resetChecks اندروید).
         diagnostics::reset_checks();
         self.latency_probe_at = None;
+        self.watchdog_probe_at = None;
+        self.watchdog_failures = 0;
+        *self.watchdog_slot.lock() = None;
         *self.latency_slot.lock() = None;
         self.connected_at = None;
         self.endpoint = None;
@@ -405,11 +471,21 @@ impl AetherController {
 
     /// ترتیب ۱.۲.۲: اول پروکسی سیستمی (تا مرورگر به پل مُرده نچسبد)، بعد
     /// اشتراک، بعد تونل، بعد موتور — بدون فریز.
-    fn cleanup_native(&mut self) {
+    fn cleanup_native(&mut self, preserve_kill_switch: bool) {
         if self.sysproxy_on {
             sysproxy::disable();
             self.sysproxy_on = false;
         }
+        // گارد بعد از پروکسی آزاد می‌شود: تا آخرین لحظه‌ای که مرورگر ممکن است
+        // به پل وصل باشد، مسیر UDP هم بسته می‌ماند.
+        if preserve_kill_switch {
+            if let Some(g) = self.guard.as_mut() {
+                g.release_for_reconnect();
+            }
+        } else if let Some(mut g) = self.guard.take() {
+            g.release();
+        }
+        self.webrtc_leak = None;
         self.share.stop();
         if let Some(mut t) = self.tunnel.take() {
             t.close();
@@ -421,7 +497,7 @@ impl AetherController {
     fn advance_or_fail(&mut self, why: &str) {
         DiagnosticsLog::w(TAG, &format!("{why} — tearing down this attempt."));
         // فقط موتور/مسیر داده را جمع می‌کنیم، وضعیت UI همچنان busy می‌ماند.
-        self.cleanup_native();
+        self.cleanup_native(true);
         self.verify_slot = None;
         diagnostics::reset_checks();
         self.plan_index += 1;
@@ -439,8 +515,21 @@ impl AetherController {
         }
     }
 
+    fn apply_pending_security_refresh(&mut self) {
+        if !self.security_refresh_pending { return; }
+        self.security_refresh_pending = false;
+        if self.profile.leak_guard || self.profile.kill_switch || self.profile.ipv6_protection {
+            if let Some(mut old_guard) = self.guard.take() { old_guard.disarm_without_cleanup(); }
+            self.guard = Some(LeakGuard::engage(&self.profile));
+        } else if let Some(mut guard) = self.guard.take() {
+            guard.release();
+        }
+    }
+
     /// هر ۲۰۰ms از main.rs صدا زده می‌شود — معادل حلقهٔ نظارت اندروید.
     pub fn tick(&mut self) {
+        self.apply_pending_security_refresh();
+
         match self.state {
             ConnectionState::Connecting => {
                 if !self.engine.is_alive() {
@@ -476,7 +565,17 @@ impl AetherController {
                             });
                             g.loading = false;
                         }
+                        // v1.2.0: نتیجهٔ سنجش نشتی مستقیم به نشانِ صفحهٔ اصلی می‌رود.
+                        self.webrtc_leak = out.leak.as_ref().map(|l| l.leaking);
+                        if self.webrtc_leak == Some(true) {
+                            DiagnosticsLog::w(
+                                TAG,
+                                "Tunnel is up but WebRTC still reached a STUN server directly. Restart the browser so the WebRTC policy applies, or run Aether as administrator for the firewall layer.",
+                            );
+                        }
                         self.latency_ms = out.latency_ms;
+                        self.watchdog_probe_at = Some(Instant::now() + Duration::from_secs(WATCHDOG_INTERVAL_SECS));
+                        self.watchdog_failures = 0;
                         self.connected_at = Some(Instant::now());
                         self.attempts = 0;
                         self.set_state(ConnectionState::Connected, "");
@@ -484,6 +583,12 @@ impl AetherController {
                         if out.exit.is_none() {
                             spawn_ip_lookup(self.ip_slot.clone(), true);
                         }
+                    } else if out.leak.as_ref().map(|l| l.leaking).unwrap_or(false) {
+                        // Fail closed. A tunnel that exposes the real IP is not
+                        // a successful connection, even when TCP/DNS passed.
+                        self.fail(
+                            "Connection refused: WebRTC can still reach the real IP over direct UDP. Browser and system protection could not be verified.",
+                        );
                     } else {
                         self.advance_or_fail("Tunnel started, but the end-to-end self-test failed");
                     }
@@ -492,6 +597,44 @@ impl AetherController {
                 }
             }
             ConnectionState::Connected => {
+                // v1.2.0 watchdog: every 30s run three end-to-end probes in a
+                // worker thread. Three consecutive failed rounds are required
+                // before restarting, so short network jitter is tolerated.
+                let watchdog_result = { self.watchdog_slot.lock().take() };
+                if let Some(result) = watchdog_result {
+                    if result {
+                        self.watchdog_failures = 0;
+                        DiagnosticsLog::i(TAG, "Watchdog probe passed (at least 2 of 3 targets reachable through SOCKS5).");
+                    } else {
+                        self.watchdog_failures = self.watchdog_failures.saturating_add(1);
+                        DiagnosticsLog::w(TAG, &format!("Watchdog probe failed ({}/{})", self.watchdog_failures, WATCHDOG_FAILURE_THRESHOLD));
+                        if self.watchdog_failures >= WATCHDOG_FAILURE_THRESHOLD {
+                            DiagnosticsLog::e(TAG, "Watchdog confirmed a persistent upstream failure — restarting the engine.");
+                            self.cleanup_native(true);
+                            self.watchdog_failures = 0;
+                            self.connected_at = None;
+                            self.reconnect_at = Some(Instant::now() + Duration::from_secs(2));
+                            self.set_state(ConnectionState::Reconnecting, "Watchdog reconnect…");
+                            return;
+                        }
+                    }
+                }
+                let watchdog_due = self.watchdog_probe_at
+                    .map(|t| Instant::now() >= t)
+                    .unwrap_or(true);
+                let watchdog_busy = { self.watchdog_slot.lock().is_some() };
+                if watchdog_due && !watchdog_busy {
+                    self.watchdog_probe_at = Some(Instant::now() + Duration::from_secs(WATCHDOG_INTERVAL_SECS));
+                    let slot = self.watchdog_slot.clone();
+                    std::thread::Builder::new()
+                        .name("aether-watchdog".into())
+                        .spawn(move || {
+                            let ok = probe::watchdog_probe();
+                            *slot.lock() = Some(ok);
+                        })
+                        .ok();
+                }
+
                 // v16: پینگ نمایشی قبلاً فقط یک‌بار هنگام خودآزمای اتصال اندازه
                 // گرفته می‌شد (شامل زمان دریافت HTTP در شلوغی لحظهٔ اتصال)
                 // و دیگر به‌روز نمی‌شد — برای همین عددی مثل ۸۰۰۰ms می‌ماند.
@@ -519,7 +662,8 @@ impl AetherController {
                 }
                 if !self.engine.is_alive() {
                     // معادل superviseEngine: بک‌آف پلکانی ۲/۵/۱۰ ثانیه، حداکثر ۳ تلاش.
-                    if self.attempts >= MAX_RETRIES {
+                    let max_retries = self.profile.reconnect_attempts.max(DEFAULT_MAX_RETRIES);
+                    if self.attempts >= max_retries {
                         self.fail("The engine keeps dying — giving up after repeated restarts.");
                         return;
                     }
@@ -531,7 +675,7 @@ impl AetherController {
                         TAG,
                         &format!("Engine died while connected — restarting in {}s.", backoff / 1000),
                     );
-                    let detail = format!("Attempt {} of {}", self.attempts, MAX_RETRIES);
+                    let detail = format!("Attempt {} of {}", self.attempts, max_retries);
                     self.set_state(ConnectionState::Reconnecting, &detail);
                 }
             }
@@ -544,7 +688,7 @@ impl AetherController {
                             self.plan = smart_auto::build_plan(&self.profile, probe::network_looks_filtered());
                             self.plan_index = 0;
                         }
-                        self.cleanup_native();
+                        self.cleanup_native(true);
                         if let Err(e) = self.start_candidate() {
                             let msg = e.to_string();
                             self.fail(&msg);
@@ -562,7 +706,7 @@ impl AetherController {
 
     fn fail(&mut self, why: &str) {
         DiagnosticsLog::e(TAG, why);
-        self.cleanup_native();
+        self.cleanup_native(true);
         self.error = Some(why.to_string());
         self.connected_at = None;
         self.deadline = None;
@@ -606,7 +750,7 @@ impl AetherController {
 impl Drop for AetherController {
     fn drop(&mut self) {
         // خروج برنامه هرگز نباید پروکسی سیستمی را فعال رها کند.
-        self.cleanup_native();
+        self.cleanup_native(false);
     }
 }
 

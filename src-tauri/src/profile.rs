@@ -100,6 +100,19 @@ pub struct ConnectionProfile {
     pub masque_http2: bool,
     /// اشتراک تونل با دستگاه‌های دیگر روی همان شبکه (پورت‌های 10810/10811).
     pub lan_share: bool,
+    /// v1.2.0 — هنگام قطع تونل، ترافیک مستقیم مرورگرها را قطع می‌کند.
+    pub kill_switch: bool,
+    /// v1.2.0 — IPv6 عمومی فقط از مسیر حفاظت‌شده عبور کند؛ پیش‌فرض روشن.
+    pub ipv6_protection: bool,
+    /// v1.2.0 — سقف تلاش‌های اتصال مجدد خودکار، بین ۳ تا ۲۰.
+    pub reconnect_attempts: u32,
+    /// v1.2.0 — گارد نشتی WebRTC/UDP. پیش‌فرض **روشن**.
+    ///
+    /// مسیر دادهٔ ویندوز پروکسی است و پروکسی فقط TCP را می‌گیرد؛ بدون این
+    /// گارد، WebRTC با UDP خام به سرور STUN می‌رود و آی‌پی واقعی کاربر را لو
+    /// می‌دهد (همان چیزی که در «WebRTC Leak Test» دیده می‌شد). فقط برای
+    /// موارد خیلی خاص — مثل تماس تصویری داخلِ شبکهٔ سازمانی — خاموش می‌شود.
+    pub leak_guard: bool,
     pub noize: Noize,
     pub endpoint_mode: EndpointMode,
     pub manual_peer: String,
@@ -165,6 +178,10 @@ impl Default for ConnectionProfile {
             quick_reconnect: true,
             masque_http2: false,
             lan_share: false,
+            kill_switch: true,
+            ipv6_protection: true,
+            reconnect_attempts: 3,
+            leak_guard: true,
             noize: Noize::Off,
             endpoint_mode: EndpointMode::Auto,
             manual_peer: String::new(),
@@ -190,6 +207,13 @@ impl Default for ConnectionProfile {
 }
 
 impl ConnectionProfile {
+    /// Clamp user-controlled resilience settings at the trust boundary.
+    pub fn normalize(&mut self) {
+        self.reconnect_attempts = self.reconnect_attempts.clamp(3, 20);
+        // Leak protection is mandatory and intentionally not user-editable.
+        self.leak_guard = true;
+    }
+
     pub fn has_manual_peer(&self) -> bool {
         self.endpoint_mode == EndpointMode::ManualPeer && !self.manual_peer.trim().is_empty()
     }
@@ -351,6 +375,26 @@ mod tests {
     fn default_profile_matches_android_argv() {
         let p = ConnectionProfile::default();
         assert_eq!(p.to_args(), vec!["--balanced", "-4", "--quick-reconnect"]);
+    }
+
+    /// v1.2.0: گارد نشتی باید پیش‌فرض روشن باشد و روی آرگومان‌های موتور
+    /// اثری نگذارد (یک قابلیت کاملاً سمتِ ویندوز است).
+    #[test]
+    fn safety_defaults_are_on_and_retry_limit_is_bounded() {
+        let mut p = ConnectionProfile::default();
+        assert!(p.kill_switch);
+        assert!(p.ipv6_protection);
+        assert_eq!(p.reconnect_attempts, 3);
+        p.reconnect_attempts = 99;
+        p.normalize();
+        assert_eq!(p.reconnect_attempts, 20);
+    }
+
+    #[test]
+    fn leak_guard_is_on_by_default_and_never_reaches_the_engine() {
+        let p = ConnectionProfile::default();
+        assert!(p.leak_guard);
+        assert!(!p.to_args().iter().any(|a| a.contains("leak")));
     }
 
     #[test]

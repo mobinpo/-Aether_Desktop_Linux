@@ -4,15 +4,28 @@
 //! در ویندوز:   Wintun adapter    → نشست Wintun    → ipstack        → SOCKS5 موتور
 //!
 //! رفتارهای امنیتی ۱.۲.۲ که باید عیناً حفظ شوند:
-//!   * هر دو مسیر پیش‌فرض IPv4 و IPv6 گرفته می‌شوند (نشت کلاسیک IPv6 بسته).
 //!   * DNS اجباراً از داخل تونل می‌رود و پیش از اعلام «متصل» راستی‌آزمایی می‌شود.
 //!   * Split tunnelling پیش‌فرض خاموش است.
 //!   * MTU پیش‌فرض 1280.
+//!
+//! # اصلاح ۱.۲.۰ — لاگی که دروغ می‌گفت
+//! تا ۱.۱.۰ این فایل بی‌قید‌و‌شرط می‌نوشت:
+//!   «Default routes captured: 0.0.0.0/0 and ::/0»
+//! در حالی که هیچ آدرس، مسیر یا DNS ای واقعاً نصب نمی‌شد — فقط یک آداپتور
+//! Wintun ساخته می‌شد. همین سطرِ نادرست باعث شد نشتی WebRTC ماه‌ها در لاگ
+//! نامرئی بماند: کاربر «مسیر پیش‌فرض گرفته شد» می‌دید ولی UDP همچنان از
+//! کارت فیزیکی بیرون می‌رفت.
+//!
+//! حالا این فایل فقط چیزی را گزارش می‌کند که واقعاً انجام داده است؛ و تا
+//! وقتی رلهٔ فضای‌کاربرِ TUN→SOCKS5 وصل نشده، عمداً مسیر پیش‌فرض را نمی‌گیرد
+//! (گرفتنش بدون رله یعنی سیاه‌چالهٔ کامل ترافیک). مهارِ UDP — یعنی همان چیزی
+//! که جلوی نشت WebRTC را می‌گیرد — بر عهدهٔ `leakguard.rs` است.
 
 use crate::log::DiagnosticsLog;
-use crate::profile::{ConnectionProfile, SplitMode};
+use crate::profile::{ConnectionProfile, IpVersion, SplitMode};
 use anyhow::{Context, Result};
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -68,11 +81,48 @@ impl Tunnel {
     }
 
     /// معادل `addAddress` / `addRoute` / `addDnsServer` / `addDisallowedApplication`.
+    ///
+    /// فقط کارهایی انجام و گزارش می‌شود که واقعاً روی سیستم اثر دارند.
     fn configure_routes(&self, profile: &ConnectionProfile) -> Result<()> {
-        // 0.0.0.0/0 و ::/0 هر دو گرفته می‌شوند — بستن نشت IPv6.
-        // (در اجرای واقعی این‌جا از IpHelper یا `netsh` استفاده می‌شود.)
-        DiagnosticsLog::i("tun", "Default routes captured: 0.0.0.0/0 and ::/0");
-        DiagnosticsLog::i("tun", &format!("DNS pinned to {TUN_DNS_V4} / {TUN_DNS_V6} inside the tunnel"));
+        // آدرس داخلی و DNS آداپتور — بی‌خطر و برگشت‌پذیر (آداپتور با پایان
+        // نشست از بین می‌رود). به دسترسی Administrator نیاز دارد؛ شکستش
+        // کشنده نیست، فقط صادقانه لاگ می‌شود.
+        let addr_ok = netsh(&[
+            "interface", "ipv4", "set", "address",
+            &format!("name={ADAPTER_NAME}"), "source=static",
+            &format!("address={TUN_IPV4}"), "mask=255.255.255.0",
+        ]);
+        let dns_ok = netsh(&[
+            "interface", "ipv4", "set", "dnsservers",
+            &format!("name={ADAPTER_NAME}"), "source=static",
+            &format!("address={TUN_DNS_V4}"), "register=none", "validate=no",
+        ]);
+        DiagnosticsLog::i(
+            "tun",
+            &format!(
+                "Adapter address {}: {} · in-tunnel DNS {}: {}",
+                TUN_IPV4,
+                if addr_ok { "applied" } else { "not applied (needs administrator)" },
+                TUN_DNS_V4,
+                if dns_ok { "applied" } else { "not applied (needs administrator)" },
+            ),
+        );
+
+        // ⚠ صداقت: مسیر پیش‌فرض گرفته نمی‌شود. مسیر دادهٔ فعلی پروکسی سیستمی
+        // است (TCP)، و نصب 0.0.0.0/0 روی آداپتوری که رله ندارد یعنی قطع کامل
+        // اینترنت. مهار UDP با گارد نشتی انجام می‌شود، نه با یک لاگ خوش‌بینانه.
+        DiagnosticsLog::i(
+            "tun",
+            "Default routes NOT captured — data path is the system proxy (TCP). UDP containment is handled by the leak guard.",
+        );
+        if profile.ipv6_protection {
+            DiagnosticsLog::i("tun", "IPv6 protection: global unicast is forced through the protected path or blocked by the kill-switch — no IPv6 leak.");
+        } else {
+            DiagnosticsLog::w(
+                "tun",
+                "IPv6 is enabled in the profile: IPv6 egress is left open, so only IPv4 is covered by the proxy path.",
+            );
+        }
 
         match profile.split_mode {
             SplitMode::Off => DiagnosticsLog::i("tun", "Split tunnelling: off (default)"),
@@ -115,4 +165,18 @@ impl Drop for Tunnel {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// اجرای یک دستور netsh بدون بازکردن پنجرهٔ کنسول.
+fn netsh(args: &[&str]) -> bool {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let mut cmd = Command::new("netsh");
+    cmd.args(args);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }

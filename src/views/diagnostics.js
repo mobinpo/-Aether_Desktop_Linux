@@ -46,6 +46,7 @@ export function renderDiagnostics() {
       <button class="btn" id="copy">${t('Copy logs')}</button>
       <button class="btn btn--danger" id="clear">${t('Clear')}</button>
       <button class="btn" id="env">${t('Environment check')}</button>
+      <button class="btn" id="leak">${t('WebRTC leak test')}</button>
     </div>
 
     <p class="summary" id="summary"></p>
@@ -153,6 +154,21 @@ export function renderDiagnostics() {
         <span class="check__name">${esc(c.name)}</span>
         <span class="check__detail ltr" dir="ltr">${esc(c.detail)}</span>
       </li>`).join('')
+  })
+
+  // v1.2.0 — آزمایش نشتی WebRTC روی همان مسیری که مرورگر می‌رود (UDP خام).
+  root.querySelector('#leak').addEventListener('click', async () => {
+    summaryEl.textContent = t('Testing for WebRTC leaks…')
+    try {
+      const r = await invoke('webrtc_leak_test')
+      summaryEl.textContent = r.leaking
+        ? `${t('WebRTC is leaking your real IP')} — ${r.ip ?? ''}`
+        : t('WebRTC protected — no IP leak')
+      toast(summaryEl.textContent)
+    } catch (e) {
+      summaryEl.textContent = String(e)
+    }
+    await refresh()
   })
 
   // تازه‌سازی زنده — هر ۱ ثانیه؛ پاک‌سازی در unmount.

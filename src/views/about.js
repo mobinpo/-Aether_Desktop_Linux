@@ -43,6 +43,8 @@ const PORT_IMPROVEMENTS = [
   'Full UI for the core 1.5.0 features: Zero Trust sign-in, routing rules and in-tunnel DNS',
   'Zero Trust secrets kept in memory only — never written to disk, masked in logs',
   'Core version gate — 1.5.0 flags are only sent to an engine that understands them',
+  'WebRTC leak guard (1.2.0) — browsers can no longer expose your real IP over direct UDP',
+  'Built-in WebRTC leak test (1.2.0) — a real STUN probe proves the tunnel is airtight',
 ]
 
 // v17: ترجمهٔ روان فارسی هر دو فهرست بالا — وقتی زبان برنامه فارسی است
@@ -73,6 +75,8 @@ const PORT_IMPROVEMENTS_FA = [
   'رابط کاربری کامل برای قابلیت‌های هستهٔ <bdi>1.5.0</bdi>: ورود <bdi>Zero Trust</bdi>، قوانین مسیریابی و <bdi>DNS</bdi> داخل تونل',
   'اسرار <bdi>Zero Trust</bdi> فقط در حافظه می‌مانند — هرگز روی دیسک نوشته نمی‌شوند و در لاگ ماسک می‌شوند',
   'گارد نسخهٔ هسته — فلگ‌های <bdi>1.5.0</bdi> فقط به هسته‌ای فرستاده می‌شوند که آن‌ها را می‌فهمد',
+  'گارد نشتی <bdi>WebRTC</bdi> (نسخهٔ <bdi>1.2.0</bdi>) — مرورگرها دیگر نمی‌توانند آی‌پی واقعی شما را با <bdi>UDP</bdi> مستقیم لو بدهند',
+  'آزمایش داخلی نشتی <bdi>WebRTC</bdi> (نسخهٔ <bdi>1.2.0</bdi>) — یک درخواست واقعی <bdi>STUN</bdi> که بی‌نشتی‌بودن تونل را اثبات می‌کند',
 ]
 
 // ---- آیکون‌های SVG داخلی (معادل Icons.Rounded و painterResource موبایل) ----

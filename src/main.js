@@ -30,6 +30,9 @@ export const app = {
     shareHttp: null,
     ipInfo: null,
     ipLoading: true,
+    // v1.2.0 — سنجش نشتی WebRTC: null = هنوز سنجیده نشده.
+    webrtcLeak: null,
+    leakGuard: false,
   },
   profile: null,
   tab: 'home',
@@ -220,8 +223,18 @@ async function boot() {
   wireRail()
   translateChrome()
 
-  app.profile = await invoke('get_profile')
-  app.snapshot = await invoke('get_snapshot')
+  // Paint a tiny, dependency-free shell immediately. Rendering a full view
+  // before profile IPC caused the advanced view to do expensive work twice.
+  const host = document.getElementById('view')
+  host.innerHTML = '<div class="boot-skeleton" aria-busy="true"></div>'
+
+  // Fetch initial state in parallel instead of serializing two IPC round trips.
+  const [profile, snapshot] = await Promise.all([
+    invoke('get_profile'),
+    invoke('get_snapshot'),
+  ])
+  app.profile = profile
+  app.snapshot = snapshot
 
   // جریان زندهٔ وضعیت — معادل StateFlow در اندروید (هر ۲۰۰ میلی‌ثانیه).
   let lastAccent = null
@@ -237,8 +250,11 @@ async function boot() {
     emit()
   })
 
+  // Repaint the already-visible shell with the real state once IPC returns.
   renderTab()
   emit()
 }
 
-boot()
+boot().catch((error) => {
+  console.error('Aether UI bootstrap failed', error)
+})

@@ -51,6 +51,19 @@ const FA = {
   'Download': 'دانلود',
   'Upload': 'آپلود',
 
+  // --- v1.2.0: محافظت در برابر نشتی WebRTC ---
+  'Connection safety': 'امنیت اتصال',
+  'Kill switch': 'کیل‌سوییچ',
+  'Block browser traffic if the tunnel drops': 'اگر تونل قطع شد، ترافیک مرورگرها را مسدود می‌کند',
+  'IPv6 leak protection': 'محافظت در برابر نشت IPv6',
+  'Keep the IPv6 default route protected or block it safely': 'مسیر پیش‌فرض IPv6 را داخل مسیر امن نگه می‌دارد یا ایمن مسدود می‌کند',
+  'Automatic reconnect attempts': 'تعداد تلاش‌های اتصال مجدد خودکار',
+  'WebRTC protected — no IP leak': 'WebRTC محافظت شد — بدون نشت آی‌پی',
+  'WebRTC is leaking your real IP': 'WebRTC آی‌پی واقعی شما را لو می‌دهد',
+  'Checking for WebRTC leaks…': 'در حال بررسی نشتی WebRTC…',
+  'WebRTC leak test': 'آزمایش نشتی WebRTC',
+  'Testing for WebRTC leaks…': 'در حال آزمایش نشتی WebRTC…',
+
   // --- تنظیمات پیشرفته ---
   'Language': 'زبان برنامه',
   'Scan mode': 'حالت اسکن',

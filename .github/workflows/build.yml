@@ -167,6 +167,24 @@ jobs:
           done
           echo "✓ همهٔ فایل‌های JSON معتبرند."
 
+      - name: Windows manifest and installer launch checks
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          m = Path("src-tauri/windows-manifest.xml").read_text()
+          i = Path("installer/aether.iss").read_text()
+          assert 'level="requireAdministrator"' in m, "UAC manifest is not requireAdministrator"
+          assert 'Microsoft.Windows.Common-Controls' in m, "TaskDialogIndirect dependency is missing"
+          assert 'shellexec' in i.lower(), "installer must use ShellExecute for elevated EXE"
+          st = Path("src-tauri/src/state.rs").read_text()
+          pr = Path("src-tauri/src/probe.rs").read_text()
+          assert 'WATCHDOG_INTERVAL_SECS: u64 = 30' in st
+          assert 'WATCHDOG_FAILURE_THRESHOLD: u8 = 3' in st
+          assert 'pub fn watchdog_probe' in pr
+          print("✓ UAC, runtime manifest, watchdog and installer checks passed.")
+          PY
+
       - name: Proxy Mode must not exist in the Windows edition
         shell: bash
         run: |
@@ -302,8 +320,9 @@ jobs:
 
       # تست‌ها عمداً بعد از ساخت موتور اجرا می‌شوند؛ چون tauri.conf.json
       # فایل‌های dist-engine را به‌عنوان resource لازم دارد.
+      # Fail fast here. The previous continue-on-error hid linker failures and
+      # wasted another full Tauri build before reporting the same problem.
       - name: Unit tests (engine contract parity with Android)
-        continue-on-error: true
         working-directory: src-tauri
         run: cargo test --target ${{ matrix.rust_target }}
 
@@ -317,6 +336,15 @@ jobs:
             --target ${{ matrix.rust_target }} `
             --no-bundle `
             --config '{"version":"${{ steps.ver.outputs.version }}"}'
+
+      # Tauri already owns the VERSION resource. Embed only the manifest after
+      # linking, otherwise winres + Tauri produce CVT1100 duplicate VERSION.
+      - name: Embed and verify requireAdministrator manifest
+        shell: pwsh
+        run: |
+          $exe = "src-tauri/target/${{ matrix.rust_target }}/release/aether-desktop.exe"
+          if (-not (Test-Path $exe)) { throw "Release executable not found: $exe" }
+          ./scripts/embed-manifest.ps1 -ExePath $exe
 
       - name: Stage payload
         shell: pwsh

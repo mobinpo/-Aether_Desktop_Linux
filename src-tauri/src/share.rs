@@ -37,7 +37,12 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 const TAG: &str = "share";
-const UPSTREAM_TIMEOUT: Duration = Duration::from_millis(10_000);
+/// Long-lived TCP sessions may be quiet for up to five minutes.
+const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+/// Reserved for the engine's UDP path; kept here as the single policy value.
+#[allow(dead_code)]
+const UDP_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const UPSTREAM_TIMEOUT: Duration = TCP_IDLE_TIMEOUT;
 /// bind پس از ری‌استارت ممکن است تا آزادشدن پورتِ نسل قبل چند صد میلی‌ثانیه
 /// طول بکشد؛ ۲۰ تلاش × ۱۵۰ms = حداکثر ۳ ثانیه صبر.
 const BIND_RETRIES: u32 = 20;
@@ -395,10 +400,10 @@ fn split_host_port(input: &str, default_port: u16) -> (String, u16) {
 fn relay(client: TcpStream, upstream: TcpStream, rx: Arc<AtomicU64>, tx: Arc<AtomicU64>) {
     // هر مهلت خواندن/نوشتنی که در مرحلهٔ دست‌دادن روی سوکت‌ها مانده پاک شود؛
     // یک دانلود طولانی نباید بعد از ۱۰ ثانیه سکوتِ یک طرف قطع شود.
-    let _ = client.set_read_timeout(None);
-    let _ = client.set_write_timeout(None);
-    let _ = upstream.set_read_timeout(None);
-    let _ = upstream.set_write_timeout(None);
+    let _ = client.set_read_timeout(Some(TCP_IDLE_TIMEOUT));
+    let _ = client.set_write_timeout(Some(TCP_IDLE_TIMEOUT));
+    let _ = upstream.set_read_timeout(Some(TCP_IDLE_TIMEOUT));
+    let _ = upstream.set_write_timeout(Some(TCP_IDLE_TIMEOUT));
     let client2 = match client.try_clone() {
         Ok(c) => c,
         Err(_) => return,

@@ -102,11 +102,17 @@ Filename: "{sys}\netsh.exe"; \
   Parameters: "advfirewall firewall add rule name=""Aether"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes"; \
   Flags: runhidden waituntilterminated; Tasks: firewall; StatusMsg: "{cm:ConfiguringFirewall}"
 
+; ShellExecute is required here. CreateProcess cannot launch a requireAdministrator
+; EXE from the already-elevated installer and returns ERROR_ELEVATION_REQUIRED (740).
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; \
-  Flags: nowait postinstall skipifsilent
+  Flags: nowait postinstall skipifsilent shellexec
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Aether"""; Flags: runhidden; RunOnceId: "DelFwRule"
+; v1.2.0 — قواعد گارد نشتی WebRTC هم باید با حذف برنامه پاک شوند.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Aether Leak Guard"""; Flags: runhidden; RunOnceId: "DelLeakGuardRules"
+; v1.2.0 — remove persistent browser/IPv6 kill-switch rules on uninstall.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Aether Kill Switch"""; Flags: runhidden; RunOnceId: "DelKillSwitchRules"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\Aether\logs"
