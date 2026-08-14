@@ -1,6 +1,6 @@
-# Aether Desktop 1.2.0 Security Audit
+# Aether Desktop 1.2.1 Security Audit
 
-**Scope:** Windows desktop shell, Rust control plane, bundled tunnel engine integration, local proxy bridge, firewall policy, local storage, logs, build pipeline, and bundled runtime. **Date:** 2026-08-08.
+**Scope:** Windows desktop shell, Rust control plane, bundled tunnel engine integration, local proxy bridge, firewall policy, local storage, logs, build pipeline, and bundled runtime. **Date:** 2026-08-14.
 
 ## Executive result
 
@@ -9,7 +9,7 @@
 | Area | Result | Evidence / remaining risk |
 |---|---|---|
 | **Secrets and keys** | **Pass** | No API keys, passwords, private keys, or access tokens are hardcoded. Zero Trust secrets are write-only and excluded from serialization. |
-| **Cryptography and protocols** | **Pass with pin rotation duty** | TLS validates the platform certificate chain and SPKI pins. The engine rejects an unpinned key. Pin rotation must ship before certificate/key rollover. |
+| **Cryptography and protocols** | **Pass with pin rotation duty** | Core 1.6.0 validates the data plane before exposing the proxy and automatically recovers MASQUE/WireGuard tunnels.  TLS validates the platform certificate chain and SPKI pins. The engine rejects an unpinned key. Pin rotation must ship before certificate/key rollover. |
 | **DNS, IPv4, IPv6 and WebRTC leaks** | **Pass** | DNS/HTTP verification runs through SOCKS5. WebRTC direct UDP is blocked by browser policy and firewall rules. IPv6 global traffic is protected or blocked fail-closed. |
 | **Traffic bypass** | **Pass for supported desktop path** | System HTTP/HTTPS and SOCKS-aware applications use the local bridge. Kill-switch blocks installed browsers and IPv6 fallback. Arbitrary third-party UDP applications are not transformed into TCP and remain outside the proxy model. |
 | **Local storage** | **Partial** | Profile configuration and rotating diagnostics logs are plaintext by design. Sensitive Zero Trust values are not persisted. WARP identity files need DPAPI/ACL hardening before a 100/100 score. |
@@ -36,7 +36,7 @@
 Do not publish unless all are green: `cargo fmt --check`, x64 and x86 `cargo test`, frontend build, Tauri release build, embedded manifest verification, installer silent install/uninstall, kill-switch cleanup, and a manual WebRTC/DNS/IPv6 leak test.
 
 
-# ممیزی امنیتی نسخهٔ ۱.۲.۰
+# ممیزی امنیتی نسخهٔ ۱.۲.۱
 
 **دامنه:** پوستهٔ ویندوز، کنترل‌پلین Rust، موتور تونل، پل پروکسی، فایروال، ذخیره‌سازی محلی، لاگ‌ها و زنجیرهٔ بیلد. **امتیاز: ۸۸ از ۱۰۰.**
 

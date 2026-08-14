@@ -48,12 +48,12 @@ git push -u origin main
 **الف) submodule (توصیه‌شده)**
 ```bash
 git submodule add https://github.com/CluvexStudio/Aether native/aether
-git -C native/aether checkout v1.4
-git add .gitmodules native/aether && git commit -m "chore: vendor core v1.4"
+git -C native/aether checkout v1.6.0
+git add .gitmodules native/aether && git commit -m "chore: vendor core v1.6.0"
 ```
 
 **ب) vendor کامل** — دقیقاً مثل مخزن اندروید: محتوای `native/aether` را
-از همان مخزن کپی کنید و فایل `CORE_VERSION` را روی `1.4` بگذارید.
+از همان مخزن کپی کنید و فایل `CORE_VERSION` را روی `1.6.0` بگذارید.
 
 در هر دو حالت، `scripts/sync-core.sh` از این به بعد خودش هسته را بالا می‌برد.
 

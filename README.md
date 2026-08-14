@@ -12,17 +12,23 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 
 ---
 
-## What's new in 1.2.0
+## What's new in 1.2.1
 
-**Upgrade notice:** Users on 1.1.0 should upgrade to 1.2.0 for mandatory IP-leak protection and corrected network cleanup.
+**Upgrade notice:** Upgrade to 1.2.1 for the bundled Aether Core 1.6.0, stronger tunnel validation, and automatic engine-level recovery. All 1.2.0 leak protections remain enabled.
 
-### Short comparison with 1.1.0
+### Short comparison with 1.2.0
 
-**Added:** mandatory WebRTC leak protection, IPv6 fail-closed protection, browser/network kill-switch, three-target watchdog, bounded reconnect recovery, faster UI bootstrap, safer proxy restoration, and expanded security audit coverage.
+**Added:** the complete Aether Core 1.6.0 source and build baseline, end-to-end data-plane validation before a gateway is trusted, automatic MASQUE/WireGuard recovery, last-good-gateway reuse, MASQUE HTTP/2 ClientHello fragmentation, and updated bilingual release documentation.
 
-**Fixed:** direct WebRTC UDP exposure, misleading route status, intermittent upstream stalls, reconnect flapping, proxy settings being overwritten on disconnect, slow blank startup, UI listener buildup, and shutdown cleanup gaps.
+**Changed:** the desktop release is now 1.2.1, the core baseline and bundled CORE_VERSION are 1.6.0, CI builds the supplied 1.6.0 engine source, and rollback/sync metadata starts from that same verified baseline.
 
 ### Detailed changes
+
+**Core 1.6.0 integration:** `native/aether` now contains the supplied 1.6.0 engine and its Quiche dependency. The desktop build, portable payload, About panel, rollback path, and CI core artifact all resolve the same `CORE_VERSION`.
+
+**Connection reliability:** Core 1.6.0 validates real data flow before opening the local proxy, reconnects MASQUE and WireGuard after tunnel loss, and retries the last working gateway before launching a full scan.
+
+**Censorship resistance:** MASQUE can fall back from HTTP/3 to HTTP/2 and optionally fragment TLS ClientHello. Existing desktop controls for HTTP/2, fragmentation, ECH, quick reconnect, keepalive, Zero Trust, routing, and in-tunnel DNS remain wired to the engine.
 
 **Mandatory leak protection:** WebRTC protection is no longer an editable option. Browser policy and elevated firewall enforcement block direct STUN/TURN UDP before a session is reported safe.
 
@@ -179,10 +185,10 @@ All files are produced automatically by GitHub Actions and published to
 
 | File | Description |
 |---|---|
-| `Aether-Setup-1.2.0-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
-| `Aether-Setup-1.2.0-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
-| `Aether-Portable-1.2.0-x64.zip` | Portable, no installation, 64-bit |
-| `Aether-Portable-1.2.0-x86.zip` | Portable, no installation, 32-bit |
+| `Aether-Setup-1.2.1-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
+| `Aether-Setup-1.2.1-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
+| `Aether-Portable-1.2.1-x64.zip` | Portable, no installation, 64-bit |
+| `Aether-Portable-1.2.1-x86.zip` | Portable, no installation, 32-bit |
 | `SHA256SUMS.txt` | Checksums for verifying file integrity |
 
 **Requirements:** Windows 10 build 1809 (October 2018 Update) or newer.
@@ -246,7 +252,7 @@ Bundles the Wintun driver under its own licence.
 
 ### Elevation requirement
 
-Aether Desktop 1.2.0 embeds a Windows `requireAdministrator` manifest. Windows therefore
+Aether Desktop 1.2.1 embeds a Windows `requireAdministrator` manifest. Windows therefore
 shows the UAC prompt every time the app starts, before any engine, proxy, browser policy or
 firewall rule is touched. This is intentional: starting unelevated would make the WebRTC
 kill-switch incomplete. The installer is already administrator-only; this requirement now

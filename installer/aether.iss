@@ -5,7 +5,7 @@
 ; ============================================================================
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.2.1"
 #endif
 #ifndef MyArch
   #define MyArch "x64"

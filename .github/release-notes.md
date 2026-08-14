@@ -1,16 +1,18 @@
-# Aether Desktop 1.2.0
+# Aether Desktop 1.2.1
 
 ## What's new
 
-### Short comparison with 1.1.0
+### Short comparison with 1.2.0
 
-**Upgrade notice:** Upgrade from 1.1.0 to 1.2.0 for mandatory IP-leak protection and corrected network cleanup.
+**Upgrade notice:** Upgrade to 1.2.1 for the bundled Aether Core 1.6.0 and its validated, self-recovering tunnel path. The 1.2.0 leak protections remain mandatory.
 
-**Added:** mandatory WebRTC protection, IPv6 fail-closed protection, browser/network kill-switch, three-target watchdog, bounded reconnect recovery, faster UI bootstrap, exact proxy restoration, and an expanded bilingual security audit.
+**Added:** vendored Aether Core 1.6.0, end-to-end data-plane validation, automatic MASQUE/WireGuard recovery, last-good-gateway reuse, HTTP/2 ClientHello fragmentation, and aligned sync/rollback/build metadata.
 
-**Fixed:** direct WebRTC UDP exposure, misleading route reporting, intermittent upstream stalls, reconnect flapping, proxy/PAC corruption after disconnect, blank startup, UI listener buildup, verbose startup logging, and incomplete shutdown cleanup.
+**Preserved:** mandatory WebRTC and IPv6 fail-closed protection, browser/network kill-switch, three-target desktop watchdog, exact proxy/PAC restoration, bounded shutdown, and bilingual security controls from 1.2.0.
 
 ### Detailed changes
+
+**Core 1.6.0:** The supplied engine source is bundled under `native/aether`; CI, rollback, portable packaging, and runtime version reporting now share the 1.6.0 baseline. The engine validates real tunnel data, reconnects automatically, retries the last good gateway, and supports MASQUE HTTP/2 ClientHello fragmentation.
 
 **Mandatory leak protection:** WebRTC protection cannot be disabled from the UI. Browser policy and elevated firewall enforcement block direct STUN/TURN UDP before the connection is considered safe.
 
@@ -36,17 +38,19 @@ Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
 
 <div dir="rtl">
 
-## تازه‌های نسخهٔ ۱.۲.۰
+## تازه‌های نسخهٔ ۱.۲.۱
 
-### مقایسهٔ خلاصه با نسخهٔ ۱.۱.۰
+### مقایسهٔ خلاصه با نسخهٔ ۱.۲.۰
 
-**یادآوری ارتقا:** از نسخهٔ ۱.۱.۰ به نسخهٔ ۱.۲.۰ بروزرسانی کنید تا محافظت اجباری نشت آی‌پی و پاک‌سازی اصلاح‌شدهٔ شبکه را دریافت کنید.
+**یادآوری ارتقا:** برای هستهٔ همراه Aether Core 1.6.0 و مسیر تونل اعتبارسنجی‌شده و خودترمیم به نسخهٔ ۱.۲.۱ بروزرسانی کنید. محافظت‌های اجباری نسخهٔ ۱.۲.۰ حفظ شده‌اند.
 
-**افزوده شد:** محافظت اجباری WebRTC، حفاظت fail-closed در برابر IPv6، کیل‌سوییچ مرورگر و شبکه، واچداگ سه‌هدفه، بازیابی اتصال با سقف تلاش، شروع سریع‌تر رابط، بازگردانی دقیق پروکسی و ممیزی امنیتی دو‌زبانهٔ گسترده‌تر.
+**افزوده شد:** هستهٔ vendorشدهٔ ۱.۶.۰، بررسی واقعی data-plane، بازیابی خودکار MASQUE/WireGuard، استفاده از آخرین gateway سالم، fragmentation روی HTTP/2 و هم‌ترازی کامل sync، rollback و build.
 
-**رفع شد:** افشای UDP مستقیم WebRTC، گزارش گمراه‌کنندهٔ مسیر، گیرکردن خروجی، نوسان اتصال مجدد، خراب‌شدن پروکسی و PAC بعد از قطع، صفحهٔ سفید شروع، انباشته‌شدن listenerهای رابط، لاگ سنگین هنگام شروع و پاک‌سازی ناقص هنگام خروج.
+**حفظ شد:** محافظت اجباری WebRTC و IPv6، کیل‌سوییچ، واچداگ سه‌هدفهٔ دسکتاپ، بازگردانی دقیق proxy/PAC، خروج محدود به زمان و کنترل‌های امنیتی دوزبانهٔ نسخهٔ ۱.۲.۰.
 
 ### جزئیات تغییرها
+
+**هستهٔ ۱.۶.۰:** سورس ارسالی موتور در `native/aether` قرار گرفت و CI، rollback، بسته‌بندی پرتابل و نمایش نسخهٔ runtime همگی از baseline یکسان ۱.۶.۰ استفاده می‌کنند. موتور عبور واقعی داده را تأیید می‌کند، خودکار reconnect می‌شود، آخرین gateway سالم را دوباره امتحان می‌کند و fragmentation پیام ClientHello روی HTTP/2 را دارد.
 
 **محافظت اجباری در برابر نشت:** محافظت WebRTC از رابط کاربری خاموش‌شدنی نیست. سیاست مرورگر و فایروال با دسترسی مدیر، UDP مستقیم STUN/TURN را پیش از امن اعلام‌شدن اتصال مسدود می‌کنند.
 
