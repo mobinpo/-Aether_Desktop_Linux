@@ -49,6 +49,7 @@ fn engine_supports_log_level(exe: &Path) -> bool {
 }
 
 /// v10: قابلیت‌های هستهٔ همراه — Zero Trust / routing / --dns فقط از 1.5.0.
+/// v11: پروکسی بالادست، تشخیص نام میزبان و بازثبت هویت فقط از 1.7.0.
 pub fn engine_caps(exe: &Path) -> CoreCaps {
     let (major, minor) = engine_core_version(exe);
     CoreCaps::for_version(major, minor)
@@ -119,7 +120,8 @@ impl AetherProcess {
         let mut cmd = Command::new(&self.exe);
         cmd.args(&args)
             .current_dir(&run_dir)
-            .envs(profile.to_env())
+            // v11: متغیرهای هستهٔ 1.7.0 هم مثل فلگ‌ها گِیت شده‌اند.
+            .envs(profile.to_env_with_caps(caps))
             .env("HOME", &run_dir)
             .env("TMPDIR", &run_dir)
             // هستهٔ 1.4.0 بلافاصله بعد از مرحلهٔ جدید sysprofile با
@@ -271,7 +273,9 @@ fn runtime_copy_is_fresh(src: &Path, dst: &Path) -> bool {
 /// خود فلگ دیده می‌شود (برای عیب‌یابی) ولی راز/توکن/ایمیل هرگز در
 /// فایل لاگ چرخان ثبت نمی‌شود (همان قاعدهٔ ماسک IP در diagnostics.rs).
 fn redact_args(args: &[String]) -> Vec<String> {
-    const SENSITIVE: [&str; 3] = ["--access-secret", "--access-token", "--access-email"];
+    // v11: مقدار --upstream می‌تواند user:pass پروکسی کاربر را داشته باشد.
+    const SENSITIVE: [&str; 4] =
+        ["--access-secret", "--access-token", "--access-email", "--upstream"];
     let mut out = Vec::with_capacity(args.len());
     let mut mask_next = false;
     for a in args {

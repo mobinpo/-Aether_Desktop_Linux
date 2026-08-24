@@ -1,112 +1,85 @@
-# Aether Desktop 1.2.1
+# Aether Desktop 1.2.2
 
 ## What's new
 
-### Short comparison with 1.2.0
+**Upgrade notice:** Upgrade to 1.2.2 for the bundled Aether Core 1.7.0. Domain routing rules now match the real host name behind the Wintun driver, Aether can dial out through another proxy or VPN on the same PC, and a device identity Cloudflare has stopped accepting is replaced instead of leaving you with a tunnel that handshakes but carries nothing. Every 1.2.0 and 1.2.1 protection stays enabled.
 
-**Upgrade notice:** Upgrade to 1.2.1 for the bundled Aether Core 1.6.0 and its validated, self-recovering tunnel path. The 1.2.0 leak protections remain mandatory.
+### Short comparison with 1.2.1
 
-**Added:** vendored Aether Core 1.6.0, end-to-end data-plane validation, automatic MASQUE/WireGuard recovery, last-good-gateway reuse, HTTP/2 ClientHello fragmentation, and aligned sync/rollback/build metadata.
+**Added:** the complete Aether Core 1.7.0 source and build baseline; an **Upstream proxy** control (`--upstream`) for chaining Aether behind another VPN or proxy already running on the machine; host-name matching for domain routing rules, read from the TLS server name or HTTP `Host` header; automatic replacement of a refused WARP identity; and a 1.7.0 capability gate covering the new flag and the new environment variables.
 
-**Preserved:** mandatory WebRTC and IPv6 fail-closed protection, browser/network kill-switch, three-target desktop watchdog, exact proxy/PAC restoration, bounded shutdown, and bilingual security controls from 1.2.0.
+**Changed:** the desktop release is now 1.2.2; the root `CORE_VERSION`, the vendored `native/aether/CORE_VERSION` and the sync baseline are 1.7.0; an HTTP upstream proxy switches MASQUE to HTTP/2 automatically because HTTP CONNECT cannot carry UDP; the `--upstream` value is masked in the persistent log alongside the Zero Trust secrets; and WARP×2 (`gool`) now builds its two hops on two different Cloudflare edges.
+
+**Preserved:** mandatory WebRTC and IPv6 fail-closed protection, the browser/network kill-switch, the three-target watchdog, exact proxy/PAC restoration, bounded shutdown, in-memory-only Zero Trust secrets, and the rule that a flag or variable is never sent to an engine that does not understand it.
 
 ### Detailed changes
 
-**Core 1.6.0:** The supplied engine source is bundled under `native/aether`; CI, rollback, portable packaging, and runtime version reporting now share the 1.6.0 baseline. The engine validates real tunnel data, reconnects automatically, retries the last good gateway, and supports MASQUE HTTP/2 ClientHello fragmentation.
+**Core 1.7.0 integration:** `native/aether` contains the supplied 1.7.0 engine and its Quiche dependency. The desktop build, portable payload, About panel, rollback path, and CI core artifact all resolve the same `CORE_VERSION`, and the sync baseline for the patched probers was reseeded from 1.7.0.
 
-**Mandatory leak protection:** WebRTC protection cannot be disabled from the UI. Browser policy and elevated firewall enforcement block direct STUN/TURN UDP before the connection is considered safe.
+**Upstream proxy (new):** Advanced → *Upstream proxy* accepts `socks5://host:port`, `socks5://user:pass@host:port`, `http://host:port` or a bare `host:port` (read as SOCKS5). The engine then dials every outbound connection — the endpoint scan, registration calls and the ECH lookup included — through that proxy. The address is validated in the UI and again in Rust, so an unusable value is never handed to the engine: the engine would only log one line and silently continue without a proxy, which is exactly the failure a user cannot see. A SOCKS5 proxy with UDP associate carries MASQUE, WireGuard and WARP×2; an HTTP proxy is TCP-only, so MASQUE is moved to HTTP/2 for you and the panel says so.
 
-**IPv6 protection:** Global IPv6 is protected by the tunnel when a valid route exists and blocked fail-closed otherwise.
+**Domain routing rules now work behind Wintun:** on Windows the data plane is always the TUN driver, so the local proxy used to receive a bare IP address and every domain rule quietly missed. Core 1.7.0 reads the name from the first bytes of the connection (TLS SNI or HTTP `Host`) and decides on that, while still connecting to the address the client asked for. The new *Match domain rules by real host name* switch is on by default and only turns the behaviour off.
 
-**Kill-switch:** Browser fallback traffic is blocked while the protected session is unavailable. Disconnect removes only Aether rules and restores the exact pre-session proxy and PAC values.
+**A refused identity is replaced, not tolerated:** Cloudflare can stop accepting a saved device. The handshake keeps succeeding in that state and no traffic passes. The engine now detects the refusal and registers a fresh device; the new *Replace a refused identity* switch is on by default and lets you opt out and be told instead.
 
-**Connection watchdog:** Three independent SOCKS5 targets are probed every 30 seconds in the background. Restart occurs only after three consecutive failed rounds.
+**WARP×2 uses two distinct edges:** nested WARP now picks two different Cloudflare endpoints for the outer and inner hop and rescans instead of tunnelling an edge through itself. Expect an occasional extra scan round on very restrictive networks, especially with a narrow manual address range.
 
-**Startup and shutdown:** The shell renders before IPC, initial state calls run in parallel, engine logging uses `info`, and native cleanup is ordered and bounded.
+**Version gate extended:** `CoreCaps` gained 1.7.0 capabilities. On an older pinned core the new flag and variables are never sent and the matching UI sections are disabled with an explanation, exactly like the 1.5.0 features.
+
+**Logging:** `--upstream` joins `--access-secret`, `--access-token` and `--access-email` in the redaction list, so proxy credentials never reach the rotating log file.
 
 ### Security audit summary
 
 | Area | Result |
 |---|---|
-| Secrets and keys | No hardcoded credentials; sensitive access values are not persisted |
+| Secrets and keys | No hardcoded credentials; sensitive access values and upstream proxy credentials are not persisted |
 | TLS and certificates | Platform validation plus SPKI pin verification |
 | DNS, IPv6 and WebRTC | Protected path verified; direct UDP and unsafe IPv6 fallback blocked |
-| Local storage and logs | IPs masked; secrets excluded; identity-file encryption remains a hardening item |
+| Local storage and logs | IPs masked; secrets excluded; identity-file protection remains a hardening item |
 | Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
 
 Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
 
 <div dir="rtl">
 
-## تازه‌های نسخهٔ ۱.۲.۱
+## تازه‌های نسخهٔ ۱.۲.۲
 
-### مقایسهٔ خلاصه با نسخهٔ ۱.۲.۰
+**یادآوری ارتقا:** نسخهٔ ۱.۲.۲ با هستهٔ Aether Core 1.7.0 می‌آید: قواعد مسیریابی دامنه‌ای دیگر پشت درایور Wintun هم کار می‌کنند، اِتِر می‌تواند پشت یک VPN یا پروکسیِ دیگر روی همین ویندوز زنجیره شود، و هویتی که Cloudflare دیگر قبولش ندارد جایگزین می‌شود تا دیگر گرفتار تونلی نشوید که دست می‌دهد ولی ترافیک رد نمی‌کند. تمام محافظت‌های ۱.۲.۰ و ۱.۲.۱ سر جایش است.
 
-**یادآوری ارتقا:** برای هستهٔ همراه Aether Core 1.6.0 و مسیر تونل اعتبارسنجی‌شده و خودترمیم به نسخهٔ ۱.۲.۱ بروزرسانی کنید. محافظت‌های اجباری نسخهٔ ۱.۲.۰ حفظ شده‌اند.
+### مقایسهٔ خلاصه با نسخهٔ ۱.۲.۱
 
-**افزوده شد:** هستهٔ vendorشدهٔ ۱.۶.۰، بررسی واقعی data-plane، بازیابی خودکار MASQUE/WireGuard، استفاده از آخرین gateway سالم، fragmentation روی HTTP/2 و هم‌ترازی کامل sync، rollback و build.
+**افزوده شد:** سورس کامل هستهٔ Aether Core 1.7.0 و baseline بیلد آن؛ کنترل **پروکسی بالادست** (`--upstream`) برای زنجیره‌کردن اِتِر پشت یک VPN یا پروکسیِ در حال اجرا؛ تطبیق قواعد دامنه با نام واقعی میزبان (TLS SNI یا هدر `Host`)؛ ثبت خودکار هویت تازه وقتی هویت قدیمی رد می‌شود؛ و گیت قابلیت 1.7.0 برای فلگ و متغیرهای جدید.
 
-**حفظ شد:** محافظت اجباری WebRTC و IPv6، کیل‌سوییچ، واچداگ سه‌هدفهٔ دسکتاپ، بازگردانی دقیق proxy/PAC، خروج محدود به زمان و کنترل‌های امنیتی دوزبانهٔ نسخهٔ ۱.۲.۰.
+**تغییر کرد:** نسخهٔ دسکتاپ به ۱.۲.۲؛ `CORE_VERSION` ریشه و `native/aether/CORE_VERSION` و baseline همگام‌سازی به 1.7.0؛ با پروکسی بالادستِ HTTP خودکار MASQUE روی HTTP/2 می‌رود (چون HTTP CONNECT توان حمل UDP ندارد)؛ مقدار `--upstream` در لاگ ماندگار ماسک می‌شود؛ و WARP×2 (`gool`) دو هاپ خود را روی دو لبهٔ متفاوت Cloudflare می‌سازد.
+
+**حفظ شد:** محافظت اجباری WebRTC و IPv6 (fail-closed)، کیل‌سوییچ، واچداگ سه‌هدفه، بازگردانی دقیق proxy/PAC، خروج محدود به زمان، نگه‌داری اسرار Zero Trust فقط در حافظه، و قاعدهٔ «هیچ فلگ یا متغیری به هسته‌ای که نمی‌فهمد فرستاده نمی‌شود».
 
 ### جزئیات تغییرها
 
-**هستهٔ ۱.۶.۰:** سورس ارسالی موتور در `native/aether` قرار گرفت و CI، rollback، بسته‌بندی پرتابل و نمایش نسخهٔ runtime همگی از baseline یکسان ۱.۶.۰ استفاده می‌کنند. موتور عبور واقعی داده را تأیید می‌کند، خودکار reconnect می‌شود، آخرین gateway سالم را دوباره امتحان می‌کند و fragmentation پیام ClientHello روی HTTP/2 را دارد.
+**یکپارچه‌سازی هستهٔ ۱.۷.۰:** پوشهٔ `native/aether` اکنون سورس ۱.۷.۰ و وابستگی Quiche را دارد. بیلد دسکتاپ، payload پرتابل، پنل درباره، مسیر rollback و artifact هسته در CI همگی یک `CORE_VERSION` واحد می‌خوانند و baseline پروبرهای پچ‌شده از خود ۱.۷.۰ دوباره کاشته شده است.
 
-**محافظت اجباری در برابر نشت:** محافظت WebRTC از رابط کاربری خاموش‌شدنی نیست. سیاست مرورگر و فایروال با دسترسی مدیر، UDP مستقیم STUN/TURN را پیش از امن اعلام‌شدن اتصال مسدود می‌کنند.
+**پروکسی بالادست (تازه):** پیشرفته ← *پروکسی بالادست* قالب‌های `socks5://host:port`، `socks5://user:pass@host:port`، `http://host:port` و یا فقط `host:port` (معنای SOCKS5) را می‌پذیرد. هسته همهٔ اتصال‌های خروجی‌اش — از جمله اسکن نقطهٔ اتصال، ثبت‌نام و جستجوی ECH — را از همان پروکسی می‌گیرد. مقدار ورودی هم در رابط کاربری و هم در Rust اعتبارسنجی می‌شود؛ مقدار نامعتبر هرگز به موتور نمی‌رسد، چون خود موتور فقط یک خط خطا می‌نویسد و بی‌صدا بدون پروکسی ادامه می‌دهد. پروکسی SOCKS5 با UDP associate هر سه پروتکل را حمل می‌کند؛ پروکسی HTTP فقط TCP است، پس MASQUE خودکار روی HTTP/2 می‌رود و پنل هم همین را می‌گوید.
 
-**محافظت IPv6:** IPv6 عمومی در صورت وجود مسیر معتبر از تونل حفاظت‌شده عبور می‌کند و در غیر این صورت fail-closed مسدود می‌شود.
+**قواعد دامنه‌ای دیگر پشت Wintun کار می‌کنند:** در ویندوز مسیر داده همیشه درایور TUN است؛ پس پروکسی محلی فقط یک آی‌پی می‌دید و قواعد دامنه بی‌صدا بی‌اثر می‌شدند. هستهٔ 1.7.0 نام میزبان را از بایت‌های اول اتصال می‌خواند و تصمیم را بر همان می‌گیرد، در عین حال اتصال همان نشانی‌ درخواستی مشتری را دنبال می‌کند. کلید *تطبیق قواعد دامنه با نام واقعی میزبان* پیش‌فرض روشن است.
 
-**کیل‌سوییچ:** ترافیک بازگشتی مرورگرها هنگام نبود مسیر امن مسدود است. قطع اتصال فقط قواعد Aether را پاک می‌کند و مقادیر دقیق پروکسی و PAC قبل از اتصال را برمی‌گرداند.
+**هویتِ ردشده جایگزین می‌شود:** Cloudflare می‌تواند دستگاه ذخیره‌شده را دیگر نپذیرد؛ در این حالت دست‌دادن موفق است ولی هیچ ترافیکی عبور نمی‌کند. موتور این رد را تشخیص می‌دهد و دستگاه تازه ثبت می‌کند؛ کلید *جایگزینی هویتِ ردشده* پیش‌فرض روشن است و می‌توانید خاموشش کنید تا فقط خبرتان کند.
 
-**واچداگ اتصال:** سه مقصد مستقل SOCKS5 هر ۳۰ ثانیه در پس‌زمینه بررسی می‌شوند و راه‌اندازی مجدد فقط پس از سه دور شکست متوالی انجام می‌شود.
+**WARP×2 روی دو لبهٔ متفاوت:** وارپ تودرتو دیگر یک لبه را درون خودش تونل نمی‌کند و برای هاپ بیرونی و درونی دو نقطهٔ جدا انتخاب می‌کند. روی شبکه‌های سخت‌گیر — مخصوصاً با رنج دستی باریک — ممکن است یک دور اسکن اضافه لازم شود.
 
-**شروع و خروج:** پوسته قبل از IPC نمایش داده می‌شود، درخواست‌های اولیه موازی‌اند، لاگ موتور روی `info` است و پاک‌سازی native مرتب و محدود به زمان انجام می‌شود.
+**گسترش گیت نسخه:** به `CoreCaps` قابلیت‌های 1.7.0 اضافه شد. روی هستهٔ پین‌شدهٔ قدیمی‌تر، فلگ و متغیرهای جدید فرستاده نمی‌شوند و بخش‌های مربوطه در رابط کاربری با توضیح غیرفعال می‌شوند — دقیقاً مثل قابلیت‌های 1.5.0.
+
+**لاگ:** `--upstream` کنار `--access-secret`، `--access-token` و `--access-email` در فهرست ماسک قرار گرفته؛ اعتبارنامهٔ پروکسی هرگز در فایل لاگ نمی‌نشیند.
 
 ### خلاصهٔ ممیزی امنیتی
 
 | بخش | نتیجه |
 |---|---|
-| کلیدها و اسرار | اعتبارنامهٔ هاردکدشده وجود ندارد؛ مقادیر حساس ذخیره نمی‌شوند |
+| کلیدها و اسرار | اعتبارنامهٔ هاردکدشده وجود ندارد؛ مقادیر حساس و اعتبارنامهٔ پروکسی ذخیره نمی‌شوند |
 | TLS و گواهی‌ها | اعتبارسنجی سیستم‌عامل به‌همراه پین SPKI |
-| DNS، IPv6 و WebRTC | مسیر حفاظت‌شده بررسی می‌شود؛ UDP مستقیم و IPv6 ناامن مسدود است |
-| ذخیره‌سازی و لاگ | آی‌پی‌ها ماسک و اسرار حذف می‌شوند؛ رمزگذاری فایل هویت هنوز مورد سخت‌سازی است |
+| DNS، IPv6 و WebRTC | مسیر حفاظت‌شده بررسی می‌شود؛ UDP مستقیم و مسیر ناامن IPv6 مسدود است |
+| ذخیره‌سازی و لاگ | آی‌پی‌ها ماسک و اسرار حذف می‌شوند؛ حفاطت فایل هویتی هنوز نیازمند سخت‌سازی است |
 | مجوزها و بیلد | UAC اجباری است؛ CI سورس، تست، مانیفست، نصاب و پاک‌سازی را بررسی می‌کند |
 
 گزارش کامل: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
 
-</div>
-
----
-
-<details>
-<summary>Previous release: 1.1.0</summary>
-
-The previous release introduced the first complete desktop UI, protocol selection, live connection diagnostics, network sharing, bilingual support, and the initial security controls. Its full historical notes remain in the repository history.
-
-</details>
-
-
-## Important reminder
-
-To get the best result on Android or Windows:
-
-- Wait 1 to 3 minutes on each protocol. Connection time depends on the operator and region.
-- Test different protocols and settings because DPI behavior varies by SIM, region, city, and network.
-- On mobile data, toggle Airplane mode several times to obtain a different IP range, then retry.
-- On Wi-Fi, turn the modem off for 1 to 2 minutes to obtain a different IP range, then retry.
-- If it still does not connect, this VPN may not be compatible with that network.
-- Different results across users are expected because operator DPI policies differ.
-
-<div dir="rtl">
-
-## یادآوری مهم
-
-یه یادآوری مهم که حتماً بخونیدش 👇
-برای اینکه اپ (چه نسخه اندروید چه ویندوز) براتون وصل شه، این چند تا نکته رو رعایت کنید تا بهترین نتیجه رو بگیرید:
-⏳ رو هر پروتکل ۱ تا ۳ دقیقه صبر کنید تا وصل شه. بسته به اپراتور و منطقه‌تون این زمان فرق داره، عجله نکنید.
-🔄 پروتکل‌ها و تنظیمات مختلف رو تست کنید. چرا؟ چون DPI هر سیم‌کارت با سیم‌کارت دیگه، هر منطقه با منطقه دیگه و هر شهر با شهر دیگه فرق داره.
-📱 اگه با موبایل وصل نشدید: چند بار گوشی رو ببرید رو حالت هواپیما و برگردونید تا رنج آی‌پی‌تون عوض شه، بعد دوباره پروتکل‌های مختلف رو تست کنید. خلاصه باید قلق DPI اپراتور و منطقه خودتون دستتون بیاد 😉
-📶 اگه با وای‌فای هستید: مودم رو ۱ تا ۲ دقیقه خاموش کنید تا رنج آی‌پی عوض شه، بعد دوباره با پروتکل‌ها و تنظیمات مختلف امتحان کنید.
-❌ اگه بازم وصل نشد، یعنی این وی‌پی‌ان با نت شما جواب نمی‌ده و باید برید سراغ وی‌پی‌انی که با نت شما سازگاره.
-⚠️ و نکته آخر: بعضی از کاربرا میگن این اپ مشکل داره و واسشون کار نمیکنه. اگه مشکل از خود اپ بود، نباید برای هیچ‌کس کار می‌کرد! برای خیلی‌ها داره کار می‌کنه و هر کسی تجربه متفاوتی داره. پس اگه برای شما وصل نمی‌شه، مشکل از Aether نیست؛ مشکل از DPI ایه که رو اپراتور شماست و جلوی کار کردن اپ رو می‌گیره.
 </div>

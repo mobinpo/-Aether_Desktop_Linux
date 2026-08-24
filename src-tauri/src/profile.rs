@@ -9,6 +9,13 @@
 //!   * Zero Trust / WARP سازمانی  (--team, --access-*, --gateway)
 //!   * قوانین مسیریابی            (--route-block, --route-direct)
 //!   * DNS داخل تونل              (--dns)
+//!
+//! v11 (هسته‌ی 1.7.0): سه قابلیت جدید هسته اضافه شد و مثل قبل هر کدام پشت
+//! «قابلیت نسخه» (CoreCaps) گِیت شده‌اند تا هسته‌ی 1.6.0 یا قدیمی‌تر هرگز
+//! فلگ یا متغیرِ ناشناخته نبیند:
+//!   * پروکسی بالادست            (--upstream / AETHER_UPSTREAM)
+//!   * تشخیص نام از بایت‌های اول  (AETHER_ROUTE_SNIFF, AETHER_ROUTE_SNIFF_MS)
+//!   * جایگزینی هویتِ ردشده       (AETHER_REPROVISION)
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -66,23 +73,107 @@ pub struct CoreCaps {
     pub zero_trust: bool,
     pub routing: bool,
     pub custom_dns: bool,
+    /// v11 — پروکسی بالادست (`--upstream`) از هسته‌ی 1.7.0.
+    pub upstream: bool,
+    /// v11 — تشخیص نام میزبان از بایت‌های اول برای قواعد دامنه‌ای و
+    /// جایگزینی خودکار هویتی که Cloudflare قبولش ندارد. هر دو از 1.7.0.
+    pub route_sniff: bool,
 }
 
 impl CoreCaps {
     /// همه‌ی قابلیت‌ها خاموش — پیش‌فرضِ محافظه‌کار وقتی نسخه‌ی هسته نامعلوم است.
     pub fn none() -> Self {
-        Self { zero_trust: false, routing: false, custom_dns: false }
+        Self {
+            zero_trust: false,
+            routing: false,
+            custom_dns: false,
+            upstream: false,
+            route_sniff: false,
+        }
     }
 
     /// همه‌ی قابلیت‌ها فعال — برای تست‌ها و مسیرهایی که نسخه‌ی هسته اهمیت ندارد.
     pub fn all() -> Self {
-        Self { zero_trust: true, routing: true, custom_dns: true }
+        Self {
+            zero_trust: true,
+            routing: true,
+            custom_dns: true,
+            upstream: true,
+            route_sniff: true,
+        }
     }
 
-    /// نگاشت نسخه‌ی هسته به قابلیت‌ها. Zero Trust / routing / --dns از 1.5.0.
+    /// نگاشت نسخه‌ی هسته به قابلیت‌ها. Zero Trust / routing / --dns از 1.5.0
+    /// و پروکسی بالادست / تشخیص نام / بازثبت هویت از 1.7.0.
     pub fn for_version(major: u32, minor: u32) -> Self {
         let v15 = (major, minor) >= (1, 5);
-        Self { zero_trust: v15, routing: v15, custom_dns: v15 }
+        let v17 = (major, minor) >= (1, 7);
+        Self {
+            zero_trust: v15,
+            routing: v15,
+            custom_dns: v15,
+            upstream: v17,
+            route_sniff: v17,
+        }
+    }
+}
+
+/// v11 (هسته‌ی 1.7.0) — نوع پروکسی بالادست.
+///
+/// SOCKS5 با UDP associate هر سه پروتکل را حمل می‌کند؛ HTTP CONNECT فقط
+/// TCP است، پس تنها مسیرِ کارآمد از آن، MASQUE روی HTTP/2 است (همان جدولِ
+/// `Docs/DOCS.en.md` خودِ هسته).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamKind {
+    Socks5,
+    Http,
+}
+
+/// آینه‌ی `upstream::Upstream::parse` هسته‌ی 1.7.0.
+///
+/// چرا اینجا تکرار شده: اگر رشته‌ی کاربر بی‌معنا باشد هسته فقط یک خط خطا
+/// لاگ می‌کند و **بی‌صدا** بدون پروکسی ادامه می‌دهد؛ آن‌وقت کاربر خیال
+/// می‌کند ترافیکش از پروکسی می‌رود. با این تابع، مقدار نامعتبر هرگز به
+/// آرگومان‌ها راه پیدا نمی‌کند و UI هم می‌تواند همان لحظه هشدار بدهد.
+///
+/// قواعد دقیقاً مثل هسته: طرح‌واره‌ی خالی = `socks5`، پورت الزامی،
+/// IPv6 داخل `[]`، و `user:pass@` اختیاری با آخرین `@` به‌عنوان مرز.
+pub fn parse_upstream(raw: &str) -> Option<(UpstreamKind, String)> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let (scheme, rest) = match raw.split_once("://") {
+        Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
+        None => ("socks5".to_string(), raw),
+    };
+
+    let kind = match scheme.as_str() {
+        "socks5" | "socks5h" | "socks" => UpstreamKind::Socks5,
+        "http" | "https" => UpstreamKind::Http,
+        _ => return None,
+    };
+
+    let endpoint = match rest.rsplit_once('@') {
+        Some((_credentials, endpoint)) => endpoint,
+        None => rest,
+    };
+    let endpoint = endpoint.trim_end_matches('/');
+
+    let (host, port) = if let Some(tail) = endpoint.strip_prefix('[') {
+        let (host, tail) = tail.split_once(']')?;
+        (host, tail.strip_prefix(':')?)
+    } else {
+        endpoint.rsplit_once(':')?
+    };
+
+    if host.is_empty() {
+        return None;
+    }
+    match port.parse::<u16>() {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some((kind, raw.to_string())),
     }
 }
 
@@ -155,6 +246,25 @@ pub struct ConnectionProfile {
     /// DNS داخل تونل (`--dns`). خالی = پیش‌فرض هسته.
     pub dns: Vec<String>,
 
+    // ====================================================================
+    //  v11 — قابلیت‌های هسته‌ی 1.7.0
+    // ====================================================================
+    /// پروکسی بالادست (`--upstream`): هسته همه‌ی اتصال‌های بیرونی‌اش را از
+    /// این پروکسی می‌گیرد تا بتوان اِتِر را پشت یک VPN یا پروکسیِ در حال
+    /// اجرا روی همین ویندوز زنجیره کرد. خالی = اتصال مستقیم (پیش‌فرض).
+    pub upstream: String,
+    /// تشخیص نام میزبان از بایت‌های اول (`AETHER_ROUTE_SNIFF`).
+    ///
+    /// در ویندوز مسیر داده همیشه Wintun است؛ یعنی وقتی قاعده‌ی دامنه‌ای
+    /// داریم پروکسی فقط یک آی‌پی می‌بیند و قواعد دامنه بی‌اثر می‌شدند.
+    /// هسته‌ی 1.7.0 نام را از SNI یا هدر Host می‌خواند. پیش‌فرض **روشن** —
+    /// دقیقاً مثل خود هسته.
+    pub route_sniff: bool,
+    /// جایگزینی خودکار هویتی که Cloudflare دیگر نمی‌پذیرد
+    /// (`AETHER_REPROVISION`). پیش‌فرض روشن: وگرنه تونل دست می‌دهد ولی
+    /// هیچ ترافیکی عبور نمی‌کند.
+    pub reprovision: bool,
+
     // ----- اسرارِ در-حافظه (هرگز روی دیسک نوشته نمی‌شوند) ----------------
     // سخت‌سازی امنیتی: توکن سرویس و JWT حساس‌اند و مثل رفتار خودِ هسته
     // (کش در حافظه برای طول عمر فرآیند) فقط در حافظه نگه‌داری می‌شوند.
@@ -200,6 +310,9 @@ impl Default for ConnectionProfile {
             route_block: Vec::new(),
             route_direct: Vec::new(),
             dns: Vec::new(),
+            upstream: String::new(),
+            route_sniff: true,
+            reprovision: true,
             access_secret: String::new(),
             access_token: String::new(),
         }
@@ -221,6 +334,18 @@ impl ConnectionProfile {
     /// آیا این پروفایل قصد ورود به یک سازمان Zero Trust را دارد؟
     pub fn uses_zero_trust(&self) -> bool {
         !self.team.trim().is_empty()
+    }
+
+    /// v11 — پروکسی بالادستِ معتبر، یا None اگر خالی/نامعتبر باشد.
+    pub fn upstream_proxy(&self) -> Option<(UpstreamKind, String)> {
+        parse_upstream(&self.upstream)
+    }
+
+    /// v11 — آیا پروکسی بالادست فقط TCP است؟ HTTP CONNECT نمی‌تواند UDP
+    /// حمل کند، پس MASQUE باید روی HTTP/2 برود و WireGuard/WARP×2 از این
+    /// نوع پروکسی رد نمی‌شوند.
+    pub fn upstream_is_tcp_only(&self) -> bool {
+        matches!(self.upstream_proxy(), Some((UpstreamKind::Http, _)))
     }
 
     /// معادل `Profile.kt::toArgs()` — رفتار قدیمی حفظ می‌شود.
@@ -326,13 +451,39 @@ impl ConnectionProfile {
             }
         }
 
+        // ----- پروکسی بالادست (هسته‌ی 1.7.0) ----------------------------
+        // مقدار نامعتبر عمداً فرستاده نمی‌شود؛ هسته آن را بی‌صدا نادیده
+        // می‌گیرد و کاربر گمان می‌کند زنجیره برقرار است.
+        if caps.upstream {
+            if let Some((_, value)) = self.upstream_proxy() {
+                args.push("--upstream".into());
+                args.push(value);
+            }
+        }
+
         args
     }
 
-    /// معادل دقیق `Profile.kt::toEnv()`
+    /// معادل دقیق `Profile.kt::toEnv()` — رفتار قدیمی حفظ می‌شود.
     pub fn to_env(&self) -> BTreeMap<String, String> {
+        self.to_env_with_caps(CoreCaps::all())
+    }
+
+    /// v11 — نسخه‌ی گِیت‌شده‌ی `toEnv()`. متغیرهای 1.7.0 فقط به هسته‌ای
+    /// فرستاده می‌شوند که آن‌ها را می‌فهمد؛ همان قاعده‌ی همیشگیِ «هیچ‌چیز
+    /// ناشناخته‌ای به موتور نفرست».
+    pub fn to_env_with_caps(&self, caps: CoreCaps) -> BTreeMap<String, String> {
         let mut env = BTreeMap::new();
-        env.insert("AETHER_MASQUE_HTTP2".into(), if self.masque_http2 { "1".into() } else { "0".into() });
+
+        // HTTP CONNECT هیچ UDP‌ای حمل نمی‌کند؛ با پروکسی بالادستِ HTTP تنها
+        // مسیر کارآمد MASQUE روی HTTP/2 است. پس همان چیزی که هسته با
+        // `--h2` می‌فهمد را خودمان روشن می‌کنیم تا کاربر با یک تونلِ خاموش
+        // تنها نماند.
+        let force_h2 = caps.upstream && self.upstream_is_tcp_only();
+        env.insert(
+            "AETHER_MASQUE_HTTP2".into(),
+            if self.masque_http2 || force_h2 { "1".into() } else { "0".into() },
+        );
 
         let range = self.manual_range.trim();
         if self.endpoint_mode == EndpointMode::ManualRange && !range.is_empty() {
@@ -340,6 +491,17 @@ impl ConnectionProfile {
             env.insert("AETHER_MASQUE_CIDRS".into(), range.to_string());
             env.insert("AETHER_WG_CIDRS".into(), range.to_string());
         }
+
+        // ----- هسته‌ی 1.7.0 ---------------------------------------------
+        if caps.route_sniff {
+            if !self.route_sniff {
+                env.insert("AETHER_ROUTE_SNIFF".into(), "0".into());
+            }
+            if !self.reprovision {
+                env.insert("AETHER_REPROVISION".into(), "0".into());
+            }
+        }
+
         env
     }
 
@@ -375,6 +537,11 @@ mod tests {
     fn default_profile_matches_android_argv() {
         let p = ConnectionProfile::default();
         assert_eq!(p.to_args(), vec!["--balanced", "-4", "--quick-reconnect"]);
+        // v11: پروفایل پیش‌فرض هیچ متغیر جدیدی هم اضافه نمی‌کند.
+        assert_eq!(
+            p.to_env().keys().cloned().collect::<Vec<String>>(),
+            vec!["AETHER_MASQUE_HTTP2".to_string()]
+        );
     }
 
     /// v1.2.0: گارد نشتی باید پیش‌فرض روشن باشد و روی آرگومان‌های موتور
@@ -498,6 +665,103 @@ mod tests {
         assert!(CoreCaps::for_version(1, 5).zero_trust);
         assert!(CoreCaps::for_version(1, 5).routing);
         assert!(CoreCaps::for_version(2, 0).custom_dns);
+        // v11: قابلیت‌های هستهٔ 1.7.0 روی هستهٔ 1.6.0 خاموش‌اند.
+        assert!(!CoreCaps::for_version(1, 6).upstream);
+        assert!(!CoreCaps::for_version(1, 6).route_sniff);
+        assert!(CoreCaps::for_version(1, 7).upstream);
+        assert!(CoreCaps::for_version(1, 7).route_sniff);
+        assert!(CoreCaps::for_version(2, 0).upstream);
+    }
+
+    // --- v11: قابلیت‌های هستهٔ 1.7.0 -------------------------------------
+
+    #[test]
+    fn upstream_parser_mirrors_the_core() {
+        assert_eq!(
+            parse_upstream("127.0.0.1:1080").map(|(k, _)| k),
+            Some(UpstreamKind::Socks5)
+        );
+        assert_eq!(
+            parse_upstream("socks5://alice:s3cret@127.0.0.1:1080").map(|(k, _)| k),
+            Some(UpstreamKind::Socks5)
+        );
+        assert_eq!(
+            parse_upstream("HTTP://proxy.example:8080/").map(|(k, _)| k),
+            Some(UpstreamKind::Http)
+        );
+        assert_eq!(
+            parse_upstream("socks5h://[::1]:1080").map(|(k, _)| k),
+            Some(UpstreamKind::Socks5)
+        );
+        // بی‌پورت، طرح‌وارهٔ ناشناس، پورت صفر و پورت غیرعددی رد می‌شوند.
+        assert!(parse_upstream("127.0.0.1").is_none());
+        assert!(parse_upstream("ftp://127.0.0.1:21").is_none());
+        assert!(parse_upstream("127.0.0.1:0").is_none());
+        assert!(parse_upstream("127.0.0.1:https").is_none());
+        assert!(parse_upstream("   ").is_none());
+    }
+
+    #[test]
+    fn upstream_flag_only_reaches_a_17_core_and_only_when_valid() {
+        let p = ConnectionProfile {
+            upstream: " socks5://127.0.0.1:1080 ".into(),
+            ..Default::default()
+        };
+        let args = p.to_args_with_caps(CoreCaps::all());
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--upstream", "socks5://127.0.0.1:1080"]));
+        // هستهٔ 1.6.0 این فلگ را نمی‌شناسد.
+        assert!(!p
+            .to_args_with_caps(CoreCaps::for_version(1, 6))
+            .iter()
+            .any(|a| a == "--upstream"));
+        // مقدار بی‌معنا هرگز فرستاده نمی‌شود.
+        let bad = ConnectionProfile { upstream: "not a proxy".into(), ..Default::default() };
+        assert!(!bad.to_args().iter().any(|a| a == "--upstream"));
+    }
+
+    #[test]
+    fn an_http_upstream_forces_masque_over_http2() {
+        let p = ConnectionProfile {
+            upstream: "http://proxy.example:8080".into(),
+            ..Default::default()
+        };
+        assert!(p.upstream_is_tcp_only());
+        assert_eq!(p.to_env().get("AETHER_MASQUE_HTTP2").map(String::as_str), Some("1"));
+        // با پروکسی SOCKS5 انتخاب کاربر دست‌نخورده می‌ماند (UDP عبور می‌کند).
+        let s = ConnectionProfile {
+            upstream: "socks5://127.0.0.1:1080".into(),
+            ..Default::default()
+        };
+        assert!(!s.upstream_is_tcp_only());
+        assert_eq!(s.to_env().get("AETHER_MASQUE_HTTP2").map(String::as_str), Some("0"));
+        // روی هستهٔ 1.6.0 اجباری در کار نیست چون --upstream هم فرستاده نمی‌شود.
+        assert_eq!(
+            p.to_env_with_caps(CoreCaps::for_version(1, 6))
+                .get("AETHER_MASQUE_HTTP2")
+                .map(String::as_str),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn sniffing_and_reprovision_are_on_by_default_and_opt_out_only() {
+        let p = ConnectionProfile::default();
+        assert!(p.route_sniff);
+        assert!(p.reprovision);
+        let env = p.to_env();
+        assert!(!env.contains_key("AETHER_ROUTE_SNIFF"));
+        assert!(!env.contains_key("AETHER_REPROVISION"));
+
+        let off = ConnectionProfile { route_sniff: false, reprovision: false, ..Default::default() };
+        let env = off.to_env();
+        assert_eq!(env.get("AETHER_ROUTE_SNIFF").map(String::as_str), Some("0"));
+        assert_eq!(env.get("AETHER_REPROVISION").map(String::as_str), Some("0"));
+        // روی هستهٔ 1.6.0 هیچ‌کدام فرستاده نمی‌شوند.
+        let old = off.to_env_with_caps(CoreCaps::for_version(1, 6));
+        assert!(!old.contains_key("AETHER_ROUTE_SNIFF"));
+        assert!(!old.contains_key("AETHER_REPROVISION"));
     }
 
     #[test]

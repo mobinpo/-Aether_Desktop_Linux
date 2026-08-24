@@ -148,6 +148,8 @@ fn about_info() -> serde_json::Value {
 /// v10: قابلیت‌های هستهٔ همراه — UI با این تصمیم می‌گیرد که بخش‌های
 /// Zero Trust / مسیریابی / DNS را فعال نشان بدهد یا با توضیح غیرفعال.
 /// بدون این، کاربرِ هستهٔ پین‌شدهٔ قدیمی تنطیمی را پر می‌کرد که بی‌اثر بود.
+/// v11: پروکسی بالادست و تشخیص نام میزبان (هستهٔ 1.7.0) هم همین‌جا گزارش
+/// می‌شوند تا پنل پیشرفته آن‌ها را روی هستهٔ قدیمی‌تر خاکستری کند.
 #[tauri::command]
 fn core_caps() -> serde_json::Value {
     let exe = std::env::current_exe()
@@ -159,6 +161,8 @@ fn core_caps() -> serde_json::Value {
         "zeroTrust": caps.zero_trust,
         "routing": caps.routing,
         "customDns": caps.custom_dns,
+        "upstream": caps.upstream,
+        "routeSniff": caps.route_sniff,
     })
 }
 

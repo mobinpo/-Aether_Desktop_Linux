@@ -7,6 +7,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { app, saveProfile, rerender } from '../main.js'
 import { t, getLang, setLang, LANGS } from '../i18n.js'
 
+// v11 (هستهٔ 1.7.0):
+//   * پروکسی بالادست (--upstream) — زنجیره‌کردن اِتِر پشت یک VPN/پروکسی دیگر.
+//   * تطبیق قواعد دامنه‌ای از روی نام واقعی میزبان (SNI/Host) پشت Wintun.
+//   * ثبت دوبارهٔ خودکار هویتی که Cloudflare دیگر قبولش ندارد.
 const PROTOCOLS = [
   ['SMART', 'Smart'],
   ['MASQUE', 'MASQUE'],
@@ -42,6 +46,42 @@ const ACCESS_MODES = [
   ['SERVICE_TOKEN', 'Service token'],
   ['TOKEN', 'Access token'],
 ]
+
+// v11 — آینهٔ دقیق parse_upstream در profile.rs (و upstream.rs هسته).
+// فقط برای بازخورد زنده به کاربر است؛ تصمیم نهایی همیشه سمت Rust گرفته می‌شود.
+export function parseUpstream(raw) {
+  const value = (raw || '').trim()
+  if (!value) return null
+  const at = value.indexOf('://')
+  const scheme = at === -1 ? 'socks5' : value.slice(0, at).toLowerCase()
+  const rest = at === -1 ? value : value.slice(at + 3)
+  let kind
+  if (['socks5', 'socks5h', 'socks'].includes(scheme)) kind = 'socks5'
+  else if (['http', 'https'].includes(scheme)) kind = 'http'
+  else return null
+
+  const cut = rest.lastIndexOf('@')
+  let endpoint = cut === -1 ? rest : rest.slice(cut + 1)
+  endpoint = endpoint.replace(/\/+$/, '')
+
+  let host
+  let port
+  if (endpoint.startsWith('[')) {
+    const end = endpoint.indexOf(']')
+    if (end === -1 || endpoint[end + 1] !== ':') return null
+    host = endpoint.slice(1, end)
+    port = endpoint.slice(end + 2)
+  } else {
+    const colon = endpoint.lastIndexOf(':')
+    if (colon === -1) return null
+    host = endpoint.slice(0, colon)
+    port = endpoint.slice(colon + 1)
+  }
+  if (!host || !/^[0-9]{1,5}$/.test(port)) return null
+  const number = Number(port)
+  if (number < 1 || number > 65535) return null
+  return { kind, host, port: number }
+}
 
 function segmented(label, key, options, current) {
   return `
@@ -165,11 +205,27 @@ export function renderAdvanced() {
     <h3 class="view__subtitle">${t('Routing rules')}</h3>
     ${listArea(t('Blocked destinations'), 'routeBlock', p.routeBlock, 'ads.example.com&#10;203.0.113.0/24', t('One rule per line — domain, IP or CIDR. These connections are refused.'))}
     ${listArea(t('Direct destinations'), 'routeDirect', p.routeDirect, 'bank-domain.ir&#10;192.168.0.0/16', t('One rule per line. These bypass the tunnel — for banking apps, LAN services and domestic sites.'))}
+    <div id="v17-sniff">
+    ${toggle(t('Match domain rules by real host name'), 'routeSniff', t('Reads the name from the first bytes (TLS SNI or HTTP Host), so domain rules keep working even though Windows hands the tunnel an IP address'), p.routeSniff !== false)}
+    </div>
     </div>
 
     <div id="v15-dns">
     <h3 class="view__subtitle">DNS</h3>
     ${listArea(t('In-tunnel DNS servers'), 'dns', p.dns, '1.1.1.1&#10;9.9.9.9', t('Resolvers used inside the tunnel. Empty = engine defaults.'))}
+    </div>
+
+    <div id="v17-upstream">
+    <h3 class="view__subtitle">${t('Upstream proxy')}</h3>
+    ${textField(t('Proxy address'), 'upstream', p.upstream, 'socks5://127.0.0.1:1080', { hint: t('Aether dials out through this proxy — use it to chain behind another VPN or proxy already running on this PC. Empty = direct.') })}
+    <section class="field">
+      <span class="field__hint" id="upstream-note"></span>
+    </section>
+    </div>
+
+    <div id="v17-identity">
+    <h3 class="view__subtitle">${t('Account identity')}</h3>
+    ${toggle(t('Replace a refused identity'), 'reprovision', t('If Cloudflare stops accepting the saved device, register a fresh one instead of handshaking a tunnel that carries no traffic'), p.reprovision !== false)}
     </div>
 
     <section class="field field--row">
@@ -228,7 +284,34 @@ export function renderAdvanced() {
     })
   })
 
+  // v11 — پیام زندهٔ پروکسی بالادست: مقدار نامعتبر را هسته بی‌صدا دور
+  // می‌ریزد، پس همین‌جا به کاربر گفته می‌شود. پروکسی HTTP هم UDP حمل
+  // نمی‌کند، پس تنها MASQUE روی HTTP/2 از آن رد می‌شود.
+  const upstreamNote = () => {
+    const el = root.querySelector('#upstream-note')
+    const input = root.querySelector('[data-key="upstream"]')
+    if (!el || !input) return
+    const raw = input.value.trim()
+    if (!raw) {
+      el.textContent = ''
+      return
+    }
+    const parsed = parseUpstream(raw)
+    if (!parsed) {
+      el.textContent = t('That is not a proxy address Aether can use. Expected socks5://host:port or http://host:port — the port is required.')
+      return
+    }
+    el.textContent =
+      parsed.kind === 'http'
+        ? t('An HTTP proxy cannot carry UDP, so MASQUE is switched to HTTP/2 automatically and WireGuard / WARP×2 will not pass through it. Use a SOCKS5 proxy for those.')
+        : t('SOCKS5 with UDP support carries every protocol: MASQUE, WireGuard and WARP×2.')
+  }
+  upstreamNote()
+
   root.querySelectorAll('.input').forEach((i) => {
+    i.addEventListener('input', () => {
+      if (i.dataset.key === 'upstream') upstreamNote()
+    })
     i.addEventListener('change', async () => {
       const key = i.dataset.key
       // v10: فیلدهای فهرستی — هر خط یک مقدار (مثل splitApps).
@@ -277,11 +360,19 @@ export function renderAdvanced() {
       gate('#v15-zt', caps.zeroTrust)
       gate('#v15-routing', caps.routing)
       gate('#v15-dns', caps.customDns)
-      if (!caps.zeroTrust || !caps.routing || !caps.customDns) {
+      // v11: قابلیت‌های هستهٔ 1.7.0 جداگانه گیت می‌شوند.
+      gate('#v17-upstream', caps.upstream)
+      gate('#v17-sniff', caps.routeSniff)
+      gate('#v17-identity', caps.routeSniff)
+      const missing15 = !caps.zeroTrust || !caps.routing || !caps.customDns
+      const missing17 = !caps.upstream || !caps.routeSniff
+      if (missing15 || missing17) {
         const note = root.querySelector('#caps-note')
         const text = root.querySelector('#caps-note-text')
         if (note && text) {
-          text.textContent = t('These features need engine core 1.5.0 or newer. The bundled core is older, so they are disabled.')
+          text.textContent = missing15
+            ? t('These features need engine core 1.5.0 or newer. The bundled core is older, so they are disabled.')
+            : t('The upstream proxy, host-name routing and identity replacement need engine core 1.7.0 or newer. The bundled core is older, so they are disabled.')
           note.hidden = false
         }
       }

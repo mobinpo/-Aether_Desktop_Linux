@@ -26,6 +26,9 @@ const ORIGINAL_FEATURES = [
   'Zero Trust enrolment — connect as a managed device of a Cloudflare organization (core 1.5.0)',
   'Routing rules — block or send destinations direct instead of through the tunnel (core 1.5.0)',
   'Selectable in-tunnel DNS resolvers (core 1.5.0)',
+  'Routing rules matched from the real host name, so they keep working behind a tun front end (core 1.7.0)',
+  'Upstream proxy support — dial out through another VPN or proxy already running on the machine (core 1.7.0)',
+  'A device identity Cloudflare no longer accepts is detected and replaced instead of silently carrying no traffic (core 1.7.0)',
 ]
 
 // آنچه این نسخهٔ دسکتاپ روی پروژهٔ اصلی اضافه می‌کند (معادل PORT_IMPROVEMENTS،
@@ -41,9 +44,11 @@ const PORT_IMPROVEMENTS = [
   'Share the tunnel over LAN — built-in HTTP + SOCKS5 proxy for laptops & other phones',
   'Professional bilingual installer (x64/x86) + portable ZIP, published automatically from GitHub Actions',
   'Full UI for the core 1.5.0 features: Zero Trust sign-in, routing rules and in-tunnel DNS',
-  'Bundled Aether Core 1.6.0 with data-plane validation, automatic tunnel recovery and last-good-gateway reuse',
+  'Bundled Aether Core 1.7.0 with data-plane validation, automatic tunnel recovery and last-good-gateway reuse',
+  'Full UI for the core 1.7.0 features: upstream proxy chaining, host-name routing and identity replacement',
+  'An HTTP upstream proxy switches MASQUE to HTTP/2 automatically, because HTTP CONNECT cannot carry UDP',
   'Zero Trust secrets kept in memory only — never written to disk, masked in logs',
-  'Core version gate — 1.5.0 flags are only sent to an engine that understands them',
+  'Core version gate — 1.5.0 and 1.7.0 flags are only sent to an engine that understands them',
   'WebRTC leak guard (1.2.0) — browsers can no longer expose your real IP over direct UDP',
   'Built-in WebRTC leak test (1.2.0) — a real STUN probe proves the tunnel is airtight',
 ]
@@ -61,6 +66,9 @@ const ORIGINAL_FEATURES_FA = [
   'ورود <bdi>Zero Trust</bdi> — اتصال به‌عنوان دستگاه مدیریت‌شدهٔ یک سازمان (هستهٔ <bdi>1.5.0</bdi>)',
   'قوانین مسیریابی — مسدودکردن یا فرستادن مقصد از مسیر مستقیم به‌جای تونل (هستهٔ <bdi>1.5.0</bdi>)',
   'انتخاب سرورهای <bdi>DNS</bdi> داخل تونل (هستهٔ <bdi>1.5.0</bdi>)',
+  'تطبیق قواعد مسیریابی با نام واقعی میزبان، حتی وقتی ترافیک از یک درایور <bdi>tun</bdi> می‌آید (هستهٔ <bdi>1.7.0</bdi>)',
+  'پروکسی بالادست — عبور همهٔ اتصال‌ها از یک <bdi>VPN</bdi> یا پروکسیِ در حال اجرا روی همان دستگاه (هستهٔ <bdi>1.7.0</bdi>)',
+  'هویتی که <bdi>Cloudflare</bdi> دیگر قبولش ندارد تشخیص داده و جایگزین می‌شود، نه اینکه تونل بی‌صدا بی‌ترافیک بماند (هستهٔ <bdi>1.7.0</bdi>)',
 ]
 
 const PORT_IMPROVEMENTS_FA = [
@@ -74,9 +82,11 @@ const PORT_IMPROVEMENTS_FA = [
   'اشتراک تونل در شبکهٔ محلی — پروکسی داخلی <bdi>HTTP</bdi> و <bdi>SOCKS5</bdi> برای لپ‌تاپ و گوشی‌های دیگر',
   'نصب‌کنندهٔ حرفه‌ای دوزبانه (<bdi>x64/x86</bdi>) + نسخهٔ پرتابل <bdi>ZIP</bdi>، با انتشار خودکار از <bdi>GitHub Actions</bdi>',
   'رابط کاربری کامل برای قابلیت‌های هستهٔ <bdi>1.5.0</bdi>: ورود <bdi>Zero Trust</bdi>، قوانین مسیریابی و <bdi>DNS</bdi> داخل تونل',
-  'هستهٔ همراه <bdi>Aether Core 1.6.0</bdi> با بررسی واقعی مسیر داده، بازیابی خودکار تونل و استفادهٔ دوباره از آخرین <bdi>gateway</bdi> سالم',
+  'هستهٔ همراه <bdi>Aether Core 1.7.0</bdi> با بررسی واقعی مسیر داده، بازیابی خودکار تونل و استفادهٔ دوباره از آخرین <bdi>gateway</bdi> سالم',
+  'رابط کامل برای قابلیت‌های هستهٔ <bdi>1.7.0</bdi>: پروکسی بالادست، مسیریابی براساس نام میزبان و جایگزینی هویت',
+  'با پروکسی بالادستِ <bdi>HTTP</bdi>، خودکار <bdi>MASQUE</bdi> روی <bdi>HTTP/2</bdi> می‌رود چون <bdi>HTTP CONNECT</bdi> توان حمل <bdi>UDP</bdi> ندارد',
   'اسرار <bdi>Zero Trust</bdi> فقط در حافظه می‌مانند — هرگز روی دیسک نوشته نمی‌شوند و در لاگ ماسک می‌شوند',
-  'گارد نسخهٔ هسته — فلگ‌های <bdi>1.5.0</bdi> فقط به هسته‌ای فرستاده می‌شوند که آن‌ها را می‌فهمد',
+  'گارد نسخهٔ هسته — فلگ‌های <bdi>1.5.0</bdi> و <bdi>1.7.0</bdi> فقط به هسته‌ای فرستاده می‌شوند که آن‌ها را می‌فهمد',
   'گارد نشتی <bdi>WebRTC</bdi> (نسخهٔ <bdi>1.2.0</bdi>) — مرورگرها دیگر نمی‌توانند آی‌پی واقعی شما را با <bdi>UDP</bdi> مستقیم لو بدهند',
   'آزمایش داخلی نشتی <bdi>WebRTC</bdi> (نسخهٔ <bdi>1.2.0</bdi>) — یک درخواست واقعی <bdi>STUN</bdi> که بی‌نشتی‌بودن تونل را اثبات می‌کند',
 ]

@@ -12,7 +12,48 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 
 ---
 
-## What's new in 1.2.1
+## What's new in 1.2.2
+
+**Upgrade notice:** Upgrade to 1.2.2 for the bundled Aether Core 1.7.0. Domain routing rules now match the real host name behind the Wintun driver, Aether can dial out through another proxy or VPN on the same PC, and a device identity Cloudflare has stopped accepting is replaced instead of leaving you with a tunnel that handshakes but carries nothing. Every 1.2.0 and 1.2.1 protection stays enabled.
+
+### Short comparison with 1.2.1
+
+**Added:** the complete Aether Core 1.7.0 source and build baseline; an **Upstream proxy** control (`--upstream`) for chaining Aether behind another VPN or proxy already running on the machine; host-name matching for domain routing rules, read from the TLS server name or HTTP `Host` header; automatic replacement of a refused WARP identity; and a 1.7.0 capability gate covering the new flag and the new environment variables.
+
+**Changed:** the desktop release is now 1.2.2; the root `CORE_VERSION`, the vendored `native/aether/CORE_VERSION` and the sync baseline are 1.7.0; an HTTP upstream proxy switches MASQUE to HTTP/2 automatically because HTTP CONNECT cannot carry UDP; the `--upstream` value is masked in the persistent log alongside the Zero Trust secrets; and WARP×2 (`gool`) now builds its two hops on two different Cloudflare edges.
+
+**Preserved:** mandatory WebRTC and IPv6 fail-closed protection, the browser/network kill-switch, the three-target watchdog, exact proxy/PAC restoration, bounded shutdown, in-memory-only Zero Trust secrets, and the rule that a flag or variable is never sent to an engine that does not understand it.
+
+### Detailed changes
+
+**Core 1.7.0 integration:** `native/aether` contains the supplied 1.7.0 engine and its Quiche dependency. The desktop build, portable payload, About panel, rollback path, and CI core artifact all resolve the same `CORE_VERSION`, and the sync baseline for the patched probers was reseeded from 1.7.0.
+
+**Upstream proxy (new):** Advanced → *Upstream proxy* accepts `socks5://host:port`, `socks5://user:pass@host:port`, `http://host:port` or a bare `host:port` (read as SOCKS5). The engine then dials every outbound connection — the endpoint scan, registration calls and the ECH lookup included — through that proxy. The address is validated in the UI and again in Rust, so an unusable value is never handed to the engine: the engine would only log one line and silently continue without a proxy, which is exactly the failure a user cannot see. A SOCKS5 proxy with UDP associate carries MASQUE, WireGuard and WARP×2; an HTTP proxy is TCP-only, so MASQUE is moved to HTTP/2 for you and the panel says so.
+
+**Domain routing rules now work behind Wintun:** on Windows the data plane is always the TUN driver, so the local proxy used to receive a bare IP address and every domain rule quietly missed. Core 1.7.0 reads the name from the first bytes of the connection (TLS SNI or HTTP `Host`) and decides on that, while still connecting to the address the client asked for. The new *Match domain rules by real host name* switch is on by default and only turns the behaviour off.
+
+**A refused identity is replaced, not tolerated:** Cloudflare can stop accepting a saved device. The handshake keeps succeeding in that state and no traffic passes. The engine now detects the refusal and registers a fresh device; the new *Replace a refused identity* switch is on by default and lets you opt out and be told instead.
+
+**WARP×2 uses two distinct edges:** nested WARP now picks two different Cloudflare endpoints for the outer and inner hop and rescans instead of tunnelling an edge through itself. Expect an occasional extra scan round on very restrictive networks, especially with a narrow manual address range.
+
+**Version gate extended:** `CoreCaps` gained 1.7.0 capabilities. On an older pinned core the new flag and variables are never sent and the matching UI sections are disabled with an explanation, exactly like the 1.5.0 features.
+
+**Logging:** `--upstream` joins `--access-secret`, `--access-token` and `--access-email` in the redaction list, so proxy credentials never reach the rotating log file.
+
+### Security audit summary
+
+| Area | Result |
+|---|---|
+| Secrets and keys | No hardcoded credentials; sensitive access values and upstream proxy credentials are not persisted |
+| TLS and certificates | Platform validation plus SPKI pin verification |
+| DNS, IPv6 and WebRTC | Protected path verified; direct UDP and unsafe IPv6 fallback blocked |
+| Local storage and logs | IPs masked; secrets excluded; identity-file protection remains a hardening item |
+| Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
+
+Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+<details>
+<summary>Version 1.2.1 — bundled Aether Core 1.6.0</summary>
 
 **Upgrade notice:** Upgrade to 1.2.1 for the bundled Aether Core 1.6.0, stronger tunnel validation, and automatic engine-level recovery. All 1.2.0 leak protections remain enabled.
 
@@ -51,6 +92,8 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 | Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
 
 Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+</details>
 
 <details>
 <summary>Version 1.1.0 — parity with engine core 1.5.0</summary>
@@ -185,10 +228,10 @@ All files are produced automatically by GitHub Actions and published to
 
 | File | Description |
 |---|---|
-| `Aether-Setup-1.2.1-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
-| `Aether-Setup-1.2.1-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
-| `Aether-Portable-1.2.1-x64.zip` | Portable, no installation, 64-bit |
-| `Aether-Portable-1.2.1-x86.zip` | Portable, no installation, 32-bit |
+| `Aether-Setup-1.2.2-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
+| `Aether-Setup-1.2.2-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
+| `Aether-Portable-1.2.2-x64.zip` | Portable, no installation, 64-bit |
+| `Aether-Portable-1.2.2-x86.zip` | Portable, no installation, 32-bit |
 | `SHA256SUMS.txt` | Checksums for verifying file integrity |
 
 **Requirements:** Windows 10 build 1809 (October 2018 Update) or newer.
@@ -252,7 +295,7 @@ Bundles the Wintun driver under its own licence.
 
 ### Elevation requirement
 
-Aether Desktop 1.2.1 embeds a Windows `requireAdministrator` manifest. Windows therefore
+Aether Desktop 1.2.2 embeds a Windows `requireAdministrator` manifest. Windows therefore
 shows the UAC prompt every time the app starts, before any engine, proxy, browser policy or
 firewall rule is touched. This is intentional: starting unelevated would make the WebRTC
 kill-switch incomplete. The installer is already administrator-only; this requirement now
