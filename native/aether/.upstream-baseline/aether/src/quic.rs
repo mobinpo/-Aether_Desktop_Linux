@@ -16,39 +16,8 @@ use crate::{consts, error::AetherError, error::Result};
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
-/// Depth of the two packet handoff queues between the netstack and the MASQUE
-/// carrier, in packets.
-///
-/// 1.2.3-p2 BUFFERBLOAT FIX. p1 capped the equivalent WireGuard queues in
-/// `lib.rs::packet_queue_capacity()` for exactly this reason and then missed
-/// these two, which are the ones the MASQUE carrier - the desktop's actual
-/// default data plane - uses.
-///
-/// `channel_capacity()` is an *application* queue depth and is 1024 on a normal
-/// PC. 1024 packets at a 1280-byte tunnel MTU is ~1.3 MB of standing queue in
-/// EACH direction, on top of the netstack's own retained burst. On a download
-/// that queue sits in front of every ACK, and per-flow throughput is
-/// window / RTT, so a megabyte of local queue lowers the ceiling just as
-/// effectively as a small window does. In chained mode the entire machine rides
-/// one Psiphon connection, so every flow pays the same queue at once - which is
-/// what the log's "waiting behind data already queued in the tunnel's send
-/// buffer" latency spikes were measuring.
-///
-/// This is a device transmit/receive ring, not a congestion window: throughput
-/// is governed by the smoltcp socket buffers and by HTTP/2 flow control, so a
-/// short ring costs no bandwidth and buys back the whole queueing delay.
-///
-/// 1.2.3-p3: trimmed again, from 256 to 128. 256 packets at a 1280-byte MTU is
-/// ~330 KB per direction, and at the packet rate a saturated download actually
-/// runs at (~640 in / ~480 out per second in the field log) that is about half a
-/// second of queue in each direction on top of every other buffer in the path.
-/// 128 is still eight times the largest burst the carrier can hand over in one
-/// DATA frame, so it cannot cost a single byte of bandwidth.
 fn net_queue() -> usize {
-    const NET_QUEUE_MAX: usize = 128;
     crate::sysprofile::channel_capacity()
-        .min(NET_QUEUE_MAX)
-        .max(64)
 }
 
 async fn bind_udp_fast(bind_addr: SocketAddr) -> Result<UdpSocket> {
@@ -57,11 +26,9 @@ async fn bind_udp_fast(bind_addr: SocketAddr) -> Result<UdpSocket> {
     let sock = Socket::new(domain, Type::DGRAM, None).map_err(AetherError::Io)?;
     sock.set_nonblocking(true).map_err(AetherError::Io)?;
     
-    // 1.2.3-p1: rcv and snd are separate budgets. See
-    // upstream::tune_udp_buffers for why one figure for both is wrong in both
-    // directions at once.
-    let _ = sock.set_recv_buffer_size(crate::sysprofile::udp_socket_rcv_buf_bytes());
-    let _ = sock.set_send_buffer_size(crate::sysprofile::udp_socket_snd_buf_bytes());
+    let buf_size = crate::sysprofile::udp_socket_buf_bytes();
+    let _ = sock.set_recv_buffer_size(buf_size);
+    let _ = sock.set_send_buffer_size(buf_size);
     
     sock.bind(&bind_addr.into()).map_err(AetherError::Io)?;
     UdpSocket::from_std(sock.into()).map_err(AetherError::Io)

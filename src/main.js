@@ -39,13 +39,20 @@ export const app = {
   listeners: new Set(),
 }
 
-export function onChange(fn) {
-  app.listeners.add(fn)
-  return () => app.listeners.delete(fn)
+// A repaint listener is owned by the DOM node it paints. Detached owners are
+// skipped instead of being torn down, which is what lets a view be cached and
+// re-attached rather than rebuilt from scratch on every tab switch.
+export function onChange(fn, owner = null) {
+  const entry = { fn, owner }
+  app.listeners.add(entry)
+  return () => app.listeners.delete(entry)
 }
 
 function emit() {
-  for (const fn of app.listeners) fn(app)
+  for (const l of app.listeners) {
+    if (l.owner && !l.owner.isConnected) continue
+    l.fn(app)
+  }
 }
 
 export async function saveProfile(patch) {
@@ -172,16 +179,45 @@ const VIEWS = {
   about: renderAbout,
 }
 
+// Built views, kept by tab.
+//
+// Root cause of the slow menu: every tab click threw the old view's DOM away and
+// rebuilt the next one from strings — and "Advanced" means 56 country rows, each
+// with an inline SVG flag, plus a fresh `core_caps` IPC round trip, every single
+// time. Views are built once and re-attached after that, so switching a tab is a
+// single `appendChild`. `emit()` already skips detached owners, so a cached view
+// costs nothing while it is off screen.
+const BUILT = new Map()
+let mounted = null
+
+// A view may expose lifecycle hooks on its root node; only the diagnostics panel
+// needs them (it polls the log while visible and must stop when it is not).
 function renderTab() {
   const host = document.getElementById('view')
-  // رفع ریشه‌ای یکی از علل گیرکردن انیمیشن: لیسنرهای paint ویوهای قبلی
-  // پاک می‌شوند؛ وگرنه با هر تعویض تب، paint روی DOM جداشده هر ۲۰۰ms اجرا می‌ماند.
-  app.listeners.clear()
-  host.innerHTML = ''
-  host.appendChild(VIEWS[app.tab](app))
+  if (mounted && mounted.parentElement === host) {
+    mounted.__onHide?.()
+    host.removeChild(mounted)
+  }
+  let node = BUILT.get(app.tab)
+  if (!node) {
+    node = VIEWS[app.tab](app)
+    BUILT.set(app.tab, node)
+  }
+  host.replaceChildren(node)
+  mounted = node
+  node.__onShow?.()
   for (const b of document.querySelectorAll('.rail__item')) {
     b.classList.toggle('is-active', b.dataset.tab === app.tab)
   }
+}
+
+// Drops a cached view so the next visit rebuilds it. Used by panels whose markup
+// depends on the profile (revealing a section, switching endpoint mode).
+export function refreshTab(tab = app.tab) {
+  const node = BUILT.get(tab)
+  if (node === mounted) mounted = null
+  BUILT.delete(tab)
+  if (tab === app.tab) renderTab()
 }
 
 function wireRail() {
@@ -214,6 +250,11 @@ function translateChrome() {
 // v8: re-render chrome + current tab after a language change.
 export function rerender() {
   translateChrome()
+  // A language change invalidates every built view, not just the visible one.
+  for (const [tab, node] of BUILT) {
+    if (node === mounted) mounted = null
+    BUILT.delete(tab)
+  }
   renderTab()
 }
 

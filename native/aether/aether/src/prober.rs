@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::stream::StreamExt;
-use rand::Rng;
+use rand::RngExt;
 
 use crate::error::{AetherError, Result};
 use crate::noize::NoizeConfig;
@@ -215,6 +215,78 @@ impl ScanMode {
     }
 }
 
+/// The scan budget the launcher hands down in `AETHER_SCAN_BUDGET_MS`.
+///
+/// ## 1.2.3-p3: the scan and the stopwatch used to be strangers
+///
+/// The app waits a fixed window for SOCKS5 to open (35 s for the first rung of
+/// the ladder, 60 s afterwards) and kills the engine when it expires. The turbo
+/// strategy below gives itself a 45 s scan budget - and only starts counting
+/// after the identity is loaded, an ECH lookup may have run and the cached
+/// gateway has been verified. The two numbers were never reconciled, so on any
+/// network that needed a real scan the first rung could not finish one:
+///
+/// ```text
+///   14:20:04  Waiting for SOCKS5 ... (timeout=35s)
+///   14:20:09  scanning fresh, budget=45s
+///   14:20:39  Engine still scanning - tearing down this attempt
+/// ```
+///
+/// Thirty seconds of probing, thrown away three quarters of the way through,
+/// twice in a row, on a plan that then spent another minute repeating it.
+///
+/// With the budget passed down, a scan is sized to the window it is actually
+/// being held to: it either finishes, or it reports `no clean endpoint` in time
+/// for the ladder to advance on its own terms rather than on a stopwatch.
+pub fn scan_budget_override() -> Option<Duration> {
+    std::env::var("AETHER_SCAN_BUDGET_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .map(Duration::from_millis)
+}
+
+/// Caps a strategy deadline with the launcher's budget. Never lengthens it: a
+/// generous window is not permission to scan for longer than the mode allows.
+pub fn apply_scan_budget(default_deadline: Duration, what: &str) -> Duration {
+    match scan_budget_override() {
+        Some(budget) if budget < default_deadline => {
+            log::info!(
+                "[*] {what} scan budget trimmed to {:?} to fit the launcher's attempt window (mode default {:?})",
+                budget,
+                default_deadline
+            );
+            budget
+        }
+        _ => default_deadline,
+    }
+}
+
+/// Consecutive probe failures, with nothing whatsoever having answered, after
+/// which the carrier itself is treated as blocked rather than the endpoints.
+///
+/// ## Why give up early at all
+///
+/// When QUIC is filtered, every candidate fails identically - by timing out. At
+/// 20 in flight and a 6 s per-probe timeout that is about three verdicts a
+/// second, so the full budget buys ~150 hopeless attempts and learns nothing
+/// from any of them. The documented gateway seeds are probed FIRST and answer in
+/// well under a second on a network where the carrier works, so dozens of
+/// consecutive failures is not evidence about individual endpoints, it is
+/// evidence about the transport. Reporting that immediately is what lets the
+/// ladder move to a carrier that can work while the user is still watching.
+const CARRIER_DEAD_FAILURES: usize = 64;
+
+/// ...and never before this much time has passed, so a merely slow or lossy
+/// network can never be mistaken for a filtered one.
+const CARRIER_DEAD_MIN_ELAPSED: Duration = Duration::from_secs(12);
+
+/// Escape hatch: `AETHER_SCAN_NO_EARLY_ABORT=1` restores the previous behaviour
+/// of always spending the entire budget.
+fn early_abort_enabled() -> bool {
+    std::env::var("AETHER_SCAN_NO_EARLY_ABORT").is_err()
+}
+
 const IRONCLAD_TCPING_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Strategy {
@@ -252,6 +324,7 @@ pub async fn host_has_ipv6() -> bool {
 pub async fn hunt_best_gateway(probe: &MasqueProbe, mode: ScanMode) -> Result<ProbeResult> {
     let mut st = mode.strategy();
     st.concurrency = crate::sysprofile::cap_concurrency(st.concurrency);
+    st.overall_deadline = apply_scan_budget(st.overall_deadline, "MASQUE");
     let timeout = st.per_probe_timeout;
     let mut effective_ip = probe.ip;
     if probe.ip.want_v6() && !host_has_ipv6().await {
@@ -286,9 +359,11 @@ pub async fn hunt_best_gateway(probe: &MasqueProbe, mode: ScanMode) -> Result<Pr
     .buffer_unordered(st.concurrency);
     tokio::pin!(stream);
 
-    let deadline = Instant::now() + st.overall_deadline;
+    let scan_started = Instant::now();
+    let deadline = scan_started + st.overall_deadline;
     let mut best: Option<ProbeResult> = None;
     let mut found = 0usize;
+    let mut failures = 0usize;
     let mut quiet_until: Option<Instant> = None;
 
     loop {
@@ -314,7 +389,26 @@ pub async fn hunt_best_gateway(probe: &MasqueProbe, mode: ScanMode) -> Result<Pr
             item = stream.next() => {
                 match item {
                     None => break,
-                    Some(None) => continue,
+                    Some(None) => {
+                        // Nothing has answered yet and dozens of candidates in a
+                        // row have failed: this is the transport being blocked,
+                        // not a run of unlucky endpoints. See
+                        // [`CARRIER_DEAD_FAILURES`].
+                        failures += 1;
+                        if best.is_none()
+                            && early_abort_enabled()
+                            && failures >= CARRIER_DEAD_FAILURES
+                            && scan_started.elapsed() >= CARRIER_DEAD_MIN_ELAPSED
+                        {
+                            log::warn!(
+                                "[-] {failures} candidates failed and none answered in {:?}: this carrier looks blocked on this network - abandoning the scan instead of spending the rest of the {:?} budget on it",
+                                scan_started.elapsed(),
+                                st.overall_deadline
+                            );
+                            break;
+                        }
+                        continue;
+                    }
                     Some(Some(pr)) => {
                         log::info!("[+] candidate ok {}:{} rtt={:?}", pr.ip, pr.port, pr.rtt);
                         if st.early_exit_first {
@@ -554,12 +648,12 @@ fn sample_cidr_v4(cidr: &str, n: usize) -> Vec<Ipv4Addr> {
 
     let usable = size - 2;
     let want = (n as u32).min(usable);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut chosen: HashSet<u32> = HashSet::with_capacity(want as usize);
     let mut out = Vec::with_capacity(want as usize);
 
     while (out.len() as u32) < want {
-        let off = 1 + rng.gen_range(0..usable);
+        let off = 1 + rng.random_range(0..usable);
         if chosen.insert(off) {
             out.push(Ipv4Addr::from(base + off));
         }
@@ -583,18 +677,18 @@ fn sample_cidr_v6(cidr: &str, n: usize, v4_cidrs: &[&str]) -> Vec<Ipv6Addr> {
     }
 
     let v4: Vec<(u32, u8)> = v4_cidrs.iter().filter_map(|c| parse_cidr_v4(c)).collect();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let embedded = if v4.is_empty() {
-            rng.gen::<u32>() as u128
+            rng.random::<u32>() as u128
         } else {
-            let (b, p) = v4[rng.gen_range(0..v4.len())];
+            let (b, p) = v4[rng.random_range(0..v4.len())];
             let host_bits = 32u32.saturating_sub(p as u32);
             let host = if host_bits == 0 {
                 0
             } else {
-                rng.gen::<u32>() & ((1u32 << host_bits) - 1)
+                rng.random::<u32>() & ((1u32 << host_bits) - 1)
             };
             (b | host) as u128
         };
@@ -678,7 +772,7 @@ mod tests {
         config.set_initial_max_streams_bidi(4);
 
         let mut scid = [0u8; 16];
-        rand::thread_rng().fill(&mut scid[..]);
+        rand::rng().fill(&mut scid[..]);
         let scid = quiche::ConnectionId::from_ref(&scid);
 
         let sni = crate::consts::CONNECT_SNI;

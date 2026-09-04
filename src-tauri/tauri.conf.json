@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Aether",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "identifier": "studio.cluvex.aether.desktop",
   "build": {
     "beforeBuildCommand": "npm run web:build",
@@ -45,6 +45,8 @@
     "resources": {
       "../dist-engine/aether.exe": "engine/aether.exe",
       "../dist-engine/wintun.dll": "engine/wintun.dll",
+      "../dist-engine/psiphon-tunnel-core.exe": "engine/psiphon-tunnel-core.exe",
+      "../dist-engine/server_entries.txt": "engine/server_entries.txt",
       "../CORE_VERSION": "engine/CORE_VERSION"
     },
     "windows": {
@@ -55,9 +57,9 @@
       "allowDowngrades": false
     },
     "publisher": "Cluvex Studio",
-    "copyright": "Copyright © Cluvex Studio",
+    "copyright": "Copyright \u00a9 Cluvex Studio",
     "category": "Utility",
     "shortDescription": "Freedom, in one tap",
-    "longDescription": "Aether Desktop — the Windows edition of the Aether tunnelling client."
+    "longDescription": "Aether Desktop \u2014 the Windows edition of the Aether tunnelling client."
   }
 }

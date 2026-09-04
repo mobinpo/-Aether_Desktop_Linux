@@ -32,10 +32,55 @@ pub const C_LEAK: &str = "webrtc_udp_leak";
 /// تلاش مجدد هر ۷۵۰ms — همان مقدار اندروید.
 const RETRY_DELAY_MS: u64 = 750;
 
+/// پنجرهٔ گریس خودآزما برای نشست زنجیره‌ای `Aether → Psiphon`.
+///
+/// عمداً بلندتر از ۹۰ ثانیهٔ نشست عادی. دست‌دادن و انتخاب سرورِ خود Psiphon
+/// چند ثانیه می‌برد و RTT اش چند برابر یک لبهٔ اِتِر است، و یک نشست زنجیره‌ای
+/// گرم‌شدنِ **هر دو** هاپ را می‌پردازد. پنجرهٔ ۹۰ ثانیه نشست‌هایی را رد می‌کرد
+/// که فقط کُند بودند — بدترین نتیجهٔ ممکن: همه‌چیز کار می‌کند و برنامه دورش
+/// می‌ریزد. همان `Diagnostics.EXTERNAL_GRACE_MS` اندروید.
+pub const EXTERNAL_GRACE_MS: u64 = 150_000;
+
+/// دروازهٔ استیج ۱ — معادل `Diagnostics.runProxyStage` اندروید.
+///
+/// پیش از اجرای Psiphon باید ثابت شود که موتور روی [port] یک پروکسی SOCKS5
+/// **کارکنده** است: پورت باز، دست‌دادن درست، و یک TCP واقعی به بیرون.
+///
+/// عمداً خودآزمای کامل نیست: خروجی، DNS و نشانِ پرچم همه به استیج ۲ تعلق دارند،
+/// و اجرای یک geo lookup اینجا هم هر اتصال را کُند می‌کرد و هم کشور **هاپ اول**
+/// را روی نشان می‌کشید — یعنی همان چیزی که کاربر زنجیره را برای عوض‌کردنش
+/// انتخاب کرده.
+pub fn run_proxy_stage(port: u16) -> bool {
+    DiagnosticsLog::i(
+        TAG,
+        &format!("Stage 1 check: is 127.0.0.1:{port} a working SOCKS5 proxy?"),
+    );
+    if !probe::socks_ready(port) {
+        DiagnosticsLog::e(TAG, &format!("stage 1: nothing listening on 127.0.0.1:{port}"));
+        return false;
+    }
+    if !probe::socks_handshake_ok_on(port) {
+        DiagnosticsLog::e(
+            TAG,
+            &format!("stage 1: 127.0.0.1:{port} is open but does not speak SOCKS5"),
+        );
+        return false;
+    }
+    if !probe::tcp_via_proxy_on(port, "1.1.1.1", 80) {
+        DiagnosticsLog::e(
+            TAG,
+            &format!("stage 1: 127.0.0.1:{port} speaks SOCKS5 but cannot reach the internet"),
+        );
+        return false;
+    }
+    DiagnosticsLog::i(TAG, "Stage 1 is a working SOCKS5 proxy — starting stage 2.");
+    true
+}
+
 /// معادل `Diagnostics.resetChecks()`.
 pub fn reset_checks() {
     DiagnosticsLog::set_checks(vec![
-        (C_PORT, format!("SOCKS5 port 127.0.0.1:{}", engine::LOCAL_SOCKS_PORT)),
+        (C_PORT, format!("SOCKS5 port 127.0.0.1:{}", engine::exit_socks_port())),
         (C_HANDSHAKE, "SOCKS5 handshake".to_string()),
         (C_TCP, "TCP via proxy (1.1.1.1:80)".to_string()),
         (C_DNS, "DNS + HTTP via tunnel".to_string()),
@@ -117,7 +162,7 @@ pub fn self_test(grace_ms: u64) -> SelfTestOutcome {
 
     // ۱) پورت SOCKS5
     DiagnosticsLog::update_check(C_PORT, "RUNNING", None);
-    let port_open = probe::socks_ready(engine::LOCAL_SOCKS_PORT);
+    let port_open = probe::socks_ready(engine::exit_socks_port());
     if port_open {
         DiagnosticsLog::update_check(C_PORT, "PASS", Some("listening"));
         DiagnosticsLog::i(TAG, "SOCKS5 port check: open");
@@ -299,8 +344,8 @@ pub fn run(profile: &ConnectionProfile) -> Report {
     });
 
     // ۴) پورت SOCKS5 محلی
-    checks.push(if probe::socks_ready(engine::LOCAL_SOCKS_PORT) {
-        check("Local SOCKS5", Verdict::Pass, format!("127.0.0.1:{}", engine::LOCAL_SOCKS_PORT))
+    checks.push(if probe::socks_ready(engine::exit_socks_port()) {
+        check("Local SOCKS5", Verdict::Pass, format!("127.0.0.1:{}", engine::exit_socks_port()))
     } else {
         check("Local SOCKS5", Verdict::Warn, "Not listening (expected while disconnected)")
     });

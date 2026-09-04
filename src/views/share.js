@@ -58,6 +58,6 @@ export function renderShare() {
   }
 
   paint(app)
-  onChange(paint)
+  onChange(paint, root)
   return root
 }

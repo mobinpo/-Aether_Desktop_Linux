@@ -22,7 +22,7 @@
 //! که جلوی نشت WebRTC را می‌گیرد — بر عهدهٔ `leakguard.rs` است.
 
 use crate::log::DiagnosticsLog;
-use crate::profile::{ConnectionProfile, IpVersion, SplitMode};
+use crate::profile::{ConnectionProfile, SplitMode};
 use anyhow::{Context, Result};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Command;

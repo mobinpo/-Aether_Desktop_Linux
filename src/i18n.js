@@ -17,6 +17,17 @@ export const LANGS = [
 ]
 
 const FA = {
+  // --- v12 (۱.۲.۳): بک‌اند ترابرد زنجیره‌ای ---
+  'Transport': 'ترابرد',
+  'Backend': 'بک‌اند',
+  'Exit country': 'کشور خروج',
+  'Automatic': 'خودکار',
+  'Aether alone exits through a Cloudflare WARP edge. Chaining Psiphon keeps Aether as the first hop and swaps the exit for an ordinary hosting IP, which is what opens sites that reject WARP ranges.':
+    'اِتِر تنها از یک لبهٔ <bdi>Cloudflare WARP</bdi> بیرون می‌رود. زنجیره‌کردن <bdi>Psiphon</bdi> هاپ اول را همان اِتِر نگه می‌دارد و خروجی را با یک آی‌پی هاستینگ عادی عوض می‌کند؛ همین است که سایت‌هایی را باز می‌کند که رنج‌های <bdi>WARP</bdi> را رد می‌کنند.',
+  'Only applies to the chained backend. If no server is reachable in that country, Aether falls back to an automatic exit instead of hanging.':
+    'فقط برای بک‌اند زنجیره‌ای است. اگر در آن کشور هیچ سروری در دسترس نباشد، اِتِر به‌جای معلق‌ماندن به خروجی خودکار برمی‌گردد.',
+  'Starting the Psiphon stage…': 'در حال راه‌اندازی مرحلهٔ <bdi>Psiphon</bdi>…',
+  'Rebuilding the chain…': 'بازسازی زنجیره…',
   // --- پوسته (منو + نوار عنوان) ---
   'Home': 'خانه',
   'Advanced': 'پیشرفته',

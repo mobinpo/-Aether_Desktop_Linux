@@ -4,13 +4,43 @@
 //   * پروتکل «Auto» به «Smart» تغییر نام داد — دقیقاً هم‌نام نسخهٔ موبایل.
 //   * انتخاب زبان برنامه (English/فارسی) + دکمهٔ «بازنشانی به تنظیمات پیش‌فرض».
 import { invoke } from '@tauri-apps/api/core'
-import { app, saveProfile, rerender } from '../main.js'
+import { app, saveProfile, rerender, refreshTab } from '../main.js'
 import { t, getLang, setLang, LANGS } from '../i18n.js'
+import { flagHtml } from '../flags.js'
 
 // v11 (هستهٔ 1.7.0):
 //   * پروکسی بالادست (--upstream) — زنجیره‌کردن اِتِر پشت یک VPN/پروکسی دیگر.
 //   * تطبیق قواعد دامنه‌ای از روی نام واقعی میزبان (SNI/Host) پشت Wintun.
 //   * ثبت دوبارهٔ خودکار هویتی که Cloudflare دیگر قبولش ندارد.
+// v12 (۱.۲.۳) — بک‌اند ترابرد، پورت مستقیم از model/TransportBackend.kt.
+// «Aether → Psiphon» خروجی را با یک IP هاستینگ عادی عوض می‌کند و هاپ اول را
+// روی ترابرد مبهم‌سازی‌شدهٔ اِتِر نگه می‌دارد. حالت تک‌هاپیِ Psiphon عمداً وجود
+// ندارد: نمی‌توانست هاپ اول خودش را رد کند.
+const BACKENDS = [
+  ['AETHER', 'Aether'],
+  ['AETHER_PSIPHON', 'Aether \u2192 Psiphon'],
+]
+
+// همان کدهای transport/ExitRegions.kt و src-tauri/src/exit_regions.rs.
+// ⚠ Psiphon این را فیلتر سخت می‌داند؛ اگر کشور سرور نداشته باشد سمت Rust
+// خودکار به خروجی automatic برمی‌گردد.
+const EXIT_REGIONS = [
+  ['', 'Automatic'], ['AE', 'United Arab Emirates'], ['AR', 'Argentina'], ['AT', 'Austria'],
+  ['AU', 'Australia'], ['BE', 'Belgium'], ['BG', 'Bulgaria'], ['BR', 'Brazil'],
+  ['CA', 'Canada'], ['CH', 'Switzerland'], ['CL', 'Chile'], ['CO', 'Colombia'],
+  ['CY', 'Cyprus'], ['CZ', 'Czechia'], ['DE', 'Germany'], ['DK', 'Denmark'],
+  ['EE', 'Estonia'], ['ES', 'Spain'], ['FI', 'Finland'], ['FR', 'France'],
+  ['GB', 'United Kingdom'], ['GR', 'Greece'], ['HK', 'Hong Kong'], ['HR', 'Croatia'],
+  ['HU', 'Hungary'], ['IE', 'Ireland'], ['IL', 'Israel'], ['IN', 'India'],
+  ['IS', 'Iceland'], ['IT', 'Italy'], ['JP', 'Japan'], ['KR', 'South Korea'],
+  ['LT', 'Lithuania'], ['LU', 'Luxembourg'], ['LV', 'Latvia'], ['MD', 'Moldova'],
+  ['MX', 'Mexico'], ['MY', 'Malaysia'], ['NL', 'Netherlands'], ['NO', 'Norway'],
+  ['NZ', 'New Zealand'], ['PH', 'Philippines'], ['PL', 'Poland'], ['PT', 'Portugal'],
+  ['RO', 'Romania'], ['RS', 'Serbia'], ['SE', 'Sweden'], ['SG', 'Singapore'],
+  ['SK', 'Slovakia'], ['TH', 'Thailand'], ['TR', 'Turkey'], ['TW', 'Taiwan'],
+  ['UA', 'Ukraine'], ['US', 'United States'], ['VN', 'Vietnam'], ['ZA', 'South Africa'],
+]
+
 const PROTOCOLS = [
   ['SMART', 'Smart'],
   ['MASQUE', 'MASQUE'],
@@ -105,6 +135,148 @@ function dropdown(label, key, options, current) {
     </section>`
 }
 
+// v1.2.3 — انتخابگر کشور خروج با پرچم.
+//
+// ریشهٔ مشکل: این فیلد یک `<select>` بومی بود و `<option>` بومی هیچ‌وقت
+// نمی‌تواند SVG (یا هر المان دیگری) داخلش داشته باشد، پس فهرست کشورها فقط
+// اسم بود — درست همان چیزی که کاربر دید — در حالی که نسخهٔ موبایل کنار هر
+// کشور پرچمش را دارد. اموجی پرچم هم راه‌حل نیست: ویندوز فونت
+// regional-indicator ندارد و «DE» را دو حرف خام رندر می‌کند (همان چیزی که
+// `flags.js` برای نشان IP حلش کرده بود).
+//
+// پس یک listbox واقعی جای `<select>` را می‌گیرد: هر ردیف = پرچم SVG درون‌خطی
+// + نام کشور، ردیف «Automatic» یک کرهٔ زمین می‌گیرد تا تنها ردیف بی‌نشان
+// نباشد (عیناً قاعدهٔ ExitRegions.kt). ناوبری کیبورد کامل است، وگرنه یک
+// select بومی را با یک div بی‌دسترسی عوض کرده بودیم.
+function flagRow(cc, label) {
+  return `<span class="fdrop__flag">${flagHtml(cc)}</span><span class="fdrop__name">${label}</span>`
+}
+
+const CARET =
+  '<svg class="fdrop__caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+
+function flagDropdown(label, key, options, current) {
+  const index = Math.max(0, options.findIndex(([v]) => v === current))
+  const [value] = options[index]
+  return `
+    <section class="field field--row">
+      <span class="field__label">${label}</span>
+      <div class="fdrop" data-key="${key}" data-value="${value}">
+        <button type="button" class="fdrop__btn" aria-haspopup="listbox" aria-expanded="false"
+                aria-label="${label}">
+          ${flagRow(value, t(options[index][1]))}${CARET}
+        </button>
+        <ul class="fdrop__menu" role="listbox" tabindex="-1" aria-label="${label}" hidden>
+          ${options.map(([v, tx]) => `
+            <li class="fdrop__item ${v === value ? 'is-selected' : ''}" role="option"
+                data-value="${v}" aria-selected="${v === value}">${flagRow(v, t(tx))}</li>`).join('')}
+        </ul>
+      </div>
+    </section>`
+}
+
+// سیم‌کشی انتخابگر: باز/بسته، کیبورد، تایپ‌اِهد، و کلیک بیرون.
+// شنوندهٔ سطح-سند فقط تا وقتی منو باز است زنده می‌ماند، پس بازرندرهای پیاپی
+// این نما هیچ شنوندهٔ سرگردانی جا نمی‌گذارند.
+function wireFlagDropdowns(root, onPick) {
+  root.querySelectorAll('.fdrop').forEach((drop) => {
+    const btn = drop.querySelector('.fdrop__btn')
+    const menu = drop.querySelector('.fdrop__menu')
+    const items = Array.from(menu.querySelectorAll('.fdrop__item'))
+    let typed = ''
+    let typedAt = 0
+
+    const activeIndex = () => {
+      const at = items.findIndex((i) => i.classList.contains('is-active'))
+      return at === -1 ? items.findIndex((i) => i.classList.contains('is-selected')) : at
+    }
+    const setActive = (at) => {
+      const next = Math.max(0, Math.min(items.length - 1, at))
+      items.forEach((i, n) => i.classList.toggle('is-active', n === next))
+      items[next].scrollIntoView({ block: 'nearest' })
+    }
+    const onOutside = (e) => {
+      if (!drop.contains(e.target)) close()
+    }
+    const open = () => {
+      if (!menu.hidden) return
+      menu.hidden = false
+      drop.classList.add('is-open')
+      btn.setAttribute('aria-expanded', 'true')
+      // اگر پایین جا نیست، منو بالای دکمه باز می‌شود: در انتهای صفحهٔ
+      // «پیشرفته» فهرست ۵۶ ردیفی وگرنه از پایینِ ناحیهٔ اسکرول می‌زد بیرون.
+      const box = drop.getBoundingClientRect()
+      const room = window.innerHeight - box.bottom
+      menu.classList.toggle('is-above', room < Math.min(264, menu.scrollHeight + 12) && box.top > room)
+      setActive(activeIndex() === -1 ? 0 : activeIndex())
+      menu.focus()
+      document.addEventListener('pointerdown', onOutside, true)
+    }
+    function close() {
+      if (menu.hidden) return
+      menu.hidden = true
+      drop.classList.remove('is-open')
+      btn.setAttribute('aria-expanded', 'false')
+      document.removeEventListener('pointerdown', onOutside, true)
+    }
+    const pick = async (item) => {
+      const value = item.dataset.value
+      items.forEach((i) => {
+        const on = i === item
+        i.classList.toggle('is-selected', on)
+        i.setAttribute('aria-selected', String(on))
+      })
+      drop.dataset.value = value
+      btn.innerHTML = `${flagRow(value, item.querySelector('.fdrop__name').textContent)}${CARET}`
+      close()
+      btn.focus()
+      await onPick(drop.dataset.key, value)
+    }
+
+    btn.addEventListener('click', () => (menu.hidden ? open() : close()))
+    btn.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        open()
+      }
+    })
+    items.forEach((item) => {
+      item.addEventListener('click', () => pick(item))
+      item.addEventListener('mousemove', () => setActive(items.indexOf(item)))
+    })
+    menu.addEventListener('keydown', (e) => {
+      switch (e.key) {
+        case 'ArrowDown': e.preventDefault(); setActive(activeIndex() + 1); break
+        case 'ArrowUp': e.preventDefault(); setActive(activeIndex() - 1); break
+        case 'Home': e.preventDefault(); setActive(0); break
+        case 'End': e.preventDefault(); setActive(items.length - 1); break
+        case 'PageDown': e.preventDefault(); setActive(activeIndex() + 8); break
+        case 'PageUp': e.preventDefault(); setActive(activeIndex() - 8); break
+        case 'Enter':
+        case ' ': {
+          e.preventDefault()
+          const at = activeIndex()
+          if (at >= 0) pick(items[at])
+          break
+        }
+        case 'Escape': e.preventDefault(); close(); btn.focus(); break
+        case 'Tab': close(); break
+        default:
+          // تایپ‌اِهد: با ۵۶ کشور، پیمایش با فلش تنها آزاردهنده است.
+          if (e.key.length === 1 && /\S/.test(e.key)) {
+            const now = Date.now()
+            typed = now - typedAt > 900 ? e.key : typed + e.key
+            typedAt = now
+            const needle = typed.toLowerCase()
+            const hit = items.findIndex((i) =>
+              i.querySelector('.fdrop__name').textContent.toLowerCase().startsWith(needle))
+            if (hit !== -1) setActive(hit)
+          }
+      }
+    })
+  })
+}
+
 function toggle(label, key, hint, on) {
   return `
     <section class="field field--row">
@@ -140,6 +312,9 @@ function listArea(label, key, values, placeholder, hint) {
     </section>`
 }
 
+// Cached promise for `core_caps` — see the call site at the bottom of this file.
+let CAPS_ONCE = null
+
 export function renderAdvanced() {
   const p = app.profile
   const root = document.createElement('div')
@@ -148,6 +323,16 @@ export function renderAdvanced() {
     <h2 class="view__title">${t('Advanced')}</h2>
 
     ${segmented(t('Language'), '__lang', LANGS, getLang())}
+
+    <h3 class="view__subtitle">${t('Transport')}</h3>
+    ${segmented(t('Backend'), 'backend', BACKENDS, p.backend || 'AETHER')}
+    <section class="field">
+      <span class="field__hint">${t('Aether alone exits through a Cloudflare WARP edge. Chaining Psiphon keeps Aether as the first hop and swaps the exit for an ordinary hosting IP, which is what opens sites that reject WARP ranges.')}</span>
+    </section>
+    ${flagDropdown(t('Exit country'), 'exitRegion', EXIT_REGIONS, p.exitRegion || '')}
+    <section class="field">
+      <span class="field__hint">${t('Only applies to the chained backend. If no server is reachable in that country, Aether falls back to an automatic exit instead of hanging.')}</span>
+    </section>
 
     ${segmented(t('Protocol'), 'protocol', PROTOCOLS, p.protocol)}
     ${segmented(t('Scan mode'), 'scanMode', SCAN_MODES, p.scanMode)}
@@ -254,9 +439,7 @@ export function renderAdvanced() {
       })
       // v10: تغییر روش ورود Zero Trust فیلدهای متفاوتی می‌خواهد — بازرندر.
       if (key === 'accessMode') {
-        const host = root.parentElement
-        host.innerHTML = ''
-        host.appendChild(renderAdvanced())
+        refreshTab('advanced')
       }
     })
   })
@@ -268,11 +451,13 @@ export function renderAdvanced() {
       const value = ['mtu', 'keepalive', 'reconnectAttempts'].includes(key) ? Number(raw) : raw
       await saveProfile({ [key]: value })
       if (key === 'endpointMode' || key === 'splitMode') {
-        const host = root.parentElement
-        host.innerHTML = ''
-        host.appendChild(renderAdvanced())
+        refreshTab('advanced')
       }
     })
+  })
+
+  wireFlagDropdowns(root, async (key, value) => {
+    await saveProfile({ [key]: value })
   })
 
   root.querySelectorAll('.switch').forEach((tg) => {
@@ -322,9 +507,7 @@ export function renderAdvanced() {
       await saveProfile({ [key]: value })
       // v10: پاک/پر شدن نام تیم، بخش Zero Trust را نشان/پنهان می‌کند.
       if (key === 'team') {
-        const host = root.parentElement
-        host.innerHTML = ''
-        host.appendChild(renderAdvanced())
+        refreshTab('advanced')
       }
       // سخت‌سازی امنیتی: مقدار محرمانه بعد از ذخیره از DOM پاک می‌شود تا
       // در اسکرین‌شات/بازرسی DOM نماند (ذخیره فقط در حافظهٔ بک‌اند است).
@@ -347,7 +530,11 @@ export function renderAdvanced() {
   // وقتی کاربر نسخهٔ هسته را در پایپ‌لاین پین کرده)، این بخش‌ها غیرفعال و
   // با توضیح نشان داده می‌شوند تا کاربر تنظیمی را پر نکند که بی‌اثر است.
   // خطای این فراخوانی هرگز صفحه را نمی‌شکند.
-  invoke('core_caps')
+  // The bundled core cannot change while the app is running, so this is asked
+  // for once per launch. It used to be an IPC round trip plus a disk read on
+  // every single render of this panel.
+  CAPS_ONCE ??= invoke('core_caps')
+  CAPS_ONCE
     .then((caps) => {
       const gate = (id, enabled) => {
         const el = root.querySelector(id)

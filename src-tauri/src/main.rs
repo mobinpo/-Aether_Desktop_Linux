@@ -14,11 +14,15 @@
 //!   DiagnosticsLog           -> log.rs
 
 mod diagnostics;
+mod exit_regions;
 mod engine;
 mod leakguard;
 mod log;
+mod ping;
 mod probe;
 mod profile;
+mod psiphon;
+mod psiphon_health;
 mod share;
 mod smart_auto;
 mod state;
@@ -28,19 +32,47 @@ mod tun;
 
 use profile::ConnectionProfile;
 use state::{AetherController, Snapshot};
-use std::sync::Mutex;
-use tauri::{Emitter, Manager, State};
+use std::sync::{Arc, Mutex, TryLockError};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// The in-app updater was removed in 1.2.2; only a read-only link remains.
 pub const RELEASES_URL: &str = "https://github.com/QW-AI-Code/Aether_Desktop/releases";
 
+/// How often the controller is stepped. Same ~5x/second cap as Android.
+const TICK: Duration = Duration::from_millis(200);
+
 pub struct AppState {
     controller: Mutex<AetherController>,
+    /// The most recent snapshot, readable WITHOUT the controller lock.
+    ///
+    /// # Why this cache exists
+    ///
+    /// Every UI read used to take the controller mutex, and the mutex is held by
+    /// whatever slow thing the controller is currently doing — a `netsh` rule, a
+    /// registry write, a process teardown. So the panel that was only asking
+    /// "what is the state?" queued behind work it had nothing to do with, and the
+    /// window stopped answering. Reads are served from here instead; only writes
+    /// touch the controller.
+    latest: parking_lot::Mutex<Arc<Snapshot>>,
+}
+
+/// Publishes a snapshot: refresh the lock-free cache, and push it to the UI only
+/// if it actually differs from the last thing the UI was told.
+fn publish(app: &AppHandle, state: &AppState, snapshot: Snapshot, last: &mut Option<Arc<Snapshot>>) {
+    let snapshot = Arc::new(snapshot);
+    *state.latest.lock() = snapshot.clone();
+    if last.as_deref() == Some(snapshot.as_ref()) {
+        return;
+    }
+    *last = Some(snapshot.clone());
+    let _ = app.emit("aether://state", snapshot.as_ref());
 }
 
 #[tauri::command]
 fn get_snapshot(app: State<'_, AppState>) -> Snapshot {
-    app.controller.lock().unwrap().snapshot()
+    // Lock-free by design — see [`AppState::latest`].
+    app.latest.lock().as_ref().clone()
 }
 
 #[tauri::command]
@@ -73,9 +105,24 @@ fn reset_profile(app: State<'_, AppState>) -> Result<ConnectionProfile, String> 
 }
 
 /// Equivalent of `onToggleConnection` in HomeScreen.kt.
+///
+/// Records the intent, repaints, returns. The connect/disconnect work itself
+/// happens on the controller's own thread — see `state::Intent` for the root
+/// cause. This command used to run the whole thing inline, which is why the
+/// button, the spinner and the whole window sat still for seconds after a tap.
 #[tauri::command]
-fn toggle_connection(app: State<'_, AppState>) -> Result<(), String> {
-    app.controller.lock().unwrap().toggle().map_err(|e| e.to_string())
+fn toggle_connection(handle: AppHandle, app: State<'_, AppState>) -> Result<(), String> {
+    let snapshot = {
+        let mut c = app.controller.lock().unwrap();
+        c.request_toggle();
+        c.snapshot()
+    };
+    // Push the new phase to the UI immediately: the tick thread is about to be
+    // busy tearing down or starting up, and the user must see that instantly.
+    let cached = Arc::new(snapshot);
+    *app.latest.lock() = cached.clone();
+    let _ = handle.emit("aether://state", cached.as_ref());
+    Ok(())
 }
 
 #[tauri::command]
@@ -192,20 +239,47 @@ fn main() {
             log::DiagnosticsLog::init(&data_dir);
 
             let controller = AetherController::new(&data_dir);
-            app.manage(AppState { controller: Mutex::new(controller) });
+            let first = controller.snapshot();
+            app.manage(AppState {
+                controller: Mutex::new(controller),
+                latest: parking_lot::Mutex::new(Arc::new(first)),
+            });
 
-            // Equivalent of collecting StateFlow in Compose: a snapshot goes to
-            // the UI every 200ms (the same ~5x/second cap as Android).
+            // Equivalent of collecting StateFlow in Compose, with two rules the
+            // old loop did not have:
+            //
+            //   * `try_lock`, so a beat is SKIPPED rather than queued when an IPC
+            //     command owns the controller. The old loop piled up behind a slow
+            //     teardown and then fired every backed-up tick at once.
+            //   * emit only on CHANGE. An idle app used to serialise a snapshot
+            //     and repaint the whole home screen five times a second, forever,
+            //     with nothing in it different. That is most of the background
+            //     cost the UI was competing with.
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                let snap = {
+            std::thread::spawn(move || {
+                let mut last: Option<Arc<Snapshot>> = None;
+                loop {
+                    let began = Instant::now();
                     let st: State<'_, AppState> = handle.state();
-                    let mut c = st.controller.lock().unwrap();
-                    c.tick();
-                    c.snapshot()
-                };
-                let _ = handle.emit("aether://state", snap);
+                    let snapshot = match st.controller.try_lock() {
+                        Ok(mut c) => {
+                            c.tick();
+                            Some(c.snapshot())
+                        }
+                        Err(TryLockError::WouldBlock) => None,
+                        Err(TryLockError::Poisoned(p)) => {
+                            let mut c = p.into_inner();
+                            c.tick();
+                            Some(c.snapshot())
+                        }
+                    };
+                    if let Some(snapshot) = snapshot {
+                        publish(&handle, &st, snapshot, &mut last);
+                    }
+                    // Sleep the REMAINDER of the beat. A tick that took 900ms must
+                    // not then wait another 200ms before the next one.
+                    std::thread::sleep(TICK.saturating_sub(began.elapsed()));
+                }
             });
 
             Ok(())

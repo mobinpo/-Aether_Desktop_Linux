@@ -70,7 +70,7 @@ export function renderHome() {
     <p class="uptime" id="uptime" hidden><span class="uptime__k">${t('Connected for')}</span> <span class="uptime__v ltr" dir="ltr" id="uptime-v">00:00</span></p>
 
     <div class="meta" id="meta">
-      <div class="meta__cell"><span class="meta__k">${t('Protocol')}</span><span class="meta__v" id="m-proto">—</span></div>
+      <div class="meta__cell"><span class="meta__k">${t('Protocol')}</span><span class="meta__v ltr" dir="ltr" id="m-proto">—</span></div>
       <div class="meta__cell"><span class="meta__k">${t('Endpoint')}</span><span class="meta__v ltr" dir="ltr" id="m-endpoint">—</span></div>
       <div class="meta__cell"><span class="meta__k">${t('Latency')}</span><span class="meta__v" id="m-latency">—</span></div>
     </div>
@@ -221,6 +221,6 @@ export function renderHome() {
   }
 
   paint(app)
-  onChange(paint)
+  onChange(paint, root)
   return root
 }

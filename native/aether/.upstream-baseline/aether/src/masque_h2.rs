@@ -21,103 +21,6 @@ use crate::tls;
 const H2_ALPN: &[u8] = b"\x02h2";
 const CHROME_GROUPS: &str = "P-256:X25519:P-384";
 
-// =============================================================================
-//  1.2.3-p2 - THE HTTP/2 CARRIER IS THE DOWNLOAD BOTTLENECK
-// =============================================================================
-//
-// Everything the 1.2.3-p1 throughput work touched - boringtun batching, per-flow
-// WireGuard queues, `SO_RCVBUF` on Windows, the CUBIC feature, the endpoint RTT
-// budget - lives on the WireGuard/QUIC data plane. This file is a *different*
-// carrier, and when the panel is on `MASQUE over HTTP/2` (or Smart Auto's
-// hardened pass turns it on) it is the only data plane that runs. That is why
-// the p1 build tested exactly as slow as the one before it, and why its
-// `[uplink]` telemetry line never appeared in the log.
-//
-// The whole tunnel is ONE HTTP/2 CONNECT-IP stream, so HTTP/2 flow control is
-// not a per-flow limit here, it is the ceiling for the entire machine. The `h2`
-// crate defaults both the stream and the connection receive window to 65535
-// bytes, and this file used to call `h2::client::handshake()`, which takes those
-// defaults verbatim. Throughput can never beat window / RTT:
-//
-//     65535 / 0.130 s ~= 492 KB/s   single hop, the log's 121-145 ms floor
-//     65535 / 0.500 s ~= 128 KB/s   chained, the log's 537-652 ms spikes
-//
-// Four things are fixed below, in the order they cost throughput:
-//
-//   1. FLOW CONTROL. Windows and frame size are built from the perf profile
-//      instead of the library defaults, and a telemetry line prints what was
-//      actually negotiated so this can never be guessed at again.
-//   2. BATCHING. Outbound packets are coalesced into one DATA frame. With
-//      `TCP_NODELAY` on, one packet per frame meant one TCP segment per
-//      tunnelled ACK; on a download most packets ARE ACKs.
-//   3. BACKPRESSURE, NOT LOSS. Inbound datagrams that found the netstack queue
-//      full were dropped with a `trace!`. Dropping a segment that already
-//      crossed the network is read by TCP as congestion, so the receive window
-//      collapsed while HTTP/2 flow control kept saying "send more". Waiting a
-//      few hundred microseconds for a slot costs nothing and keeps the window.
-//   4. CAPACITY ACCOUNTING. `release_capacity` was called before the payload
-//      was handed to the netstack, so the advertised window described how fast
-//      bytes were being *received*, never how fast they were being consumed.
-
-/// Longest the carrier will wait for a slot in the netstack queue before it
-/// gives up and drops a datagram. Long enough to absorb any scheduling hiccup,
-/// short enough that a genuinely wedged consumer cannot stall the tunnel.
-const INBOUND_STALL_BUDGET: Duration = Duration::from_millis(100);
-
-/// How often the `[h2]` throughput telemetry line is printed.
-const TELEMETRY_PERIOD: Duration = Duration::from_secs(15);
-
-/// Builds the HTTP/2 client with flow control sized to a desktop
-/// bandwidth-delay product instead of the crate defaults.
-fn h2_builder() -> h2::client::Builder {
-    let mut b = h2::client::Builder::new();
-    b.initial_window_size(crate::sysprofile::h2_stream_window())
-        .initial_connection_window_size(crate::sysprofile::h2_conn_window())
-        .max_frame_size(crate::sysprofile::h2_frame_size())
-        .max_send_buffer_size(crate::sysprofile::h2_send_buffer());
-    b
-}
-
-/// Per-session counters behind the `[h2]` telemetry line.
-#[derive(Default)]
-struct H2Stats {
-    rx_bytes: u64,
-    tx_bytes: u64,
-    tx_frames: u64,
-    tx_packets: u64,
-    inbound_waits: u64,
-    inbound_drops: u64,
-}
-
-impl H2Stats {
-    fn log(&self, peer: &SocketAddr, elapsed: Duration) {
-        let secs = elapsed.as_secs_f64().max(0.001);
-        let coalesce = if self.tx_frames == 0 {
-            0.0
-        } else {
-            self.tx_packets as f64 / self.tx_frames as f64
-        };
-        log::info!(
-            "[h2] {peer} down={:.2}MB ({:.2}Mbit/s avg) up={:.2}MB, {} packets in {} data frames ({coalesce:.1} per frame), netstack waits={} drops={}",
-            self.rx_bytes as f64 / 1_048_576.0,
-            (self.rx_bytes as f64 * 8.0) / secs / 1_000_000.0,
-            self.tx_bytes as f64 / 1_048_576.0,
-            self.tx_packets,
-            self.tx_frames,
-            self.inbound_waits,
-            self.inbound_drops,
-        );
-    }
-}
-
-/// What one `drain_capsules` pass did.
-#[derive(Default)]
-struct Drained {
-    delivered: bool,
-    waits: u64,
-    drops: u64,
-}
-
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -289,8 +192,7 @@ pub async fn verify_h2(cfg: &H2TunnelConfig, timeout: Duration) -> Result<Durati
         let tls = tokio_boring::connect(tls_config, &cfg.sni, fragment)
             .await
             .map_err(|e| AetherError::Tls(format!("h2 tls handshake: {e}")))?;
-        let (h2, connection) = h2_builder()
-            .handshake::<_, Bytes>(tls)
+        let (h2, connection) = h2::client::handshake(tls)
             .await
             .map_err(|e| AetherError::Masque(format!("h2 handshake: {e}")))?;
         let driver = tokio::spawn(async move {
@@ -415,24 +317,9 @@ pub async fn run(
         String::from_utf8_lossy(tls.ssl().selected_alpn_protocol().unwrap_or(b""))
     ));
 
-    let (h2, mut connection) = h2_builder()
-        .handshake::<_, Bytes>(tls)
+    let (h2, mut connection) = h2::client::handshake(tls)
         .await
         .map_err(|e| AetherError::Masque(format!("h2 handshake: {e}")))?;
-
-    // The number that used to be 65535. Printed unconditionally: if a future
-    // log shows a slow download and this line reads 64KB, the settings did not
-    // take and nothing further needs diagnosing.
-    let batch_packets = crate::sysprofile::h2_batch_packets();
-    let batch_bytes = crate::sysprofile::h2_frame_size() as usize;
-    log::info!(
-        "[h2] flow control: stream window={}KB connection window={}KB max frame={}KB, coalescing up to {} packets ({}KB) per data frame",
-        crate::sysprofile::h2_stream_window() / 1024,
-        crate::sysprofile::h2_conn_window() / 1024,
-        crate::sysprofile::h2_frame_size() / 1024,
-        batch_packets,
-        batch_bytes / 1024,
-    );
 
     let mut ping_pong = connection.ping_pong().ok_or_else(|| {
         AetherError::Masque("h2 connection does not support ping".into())
@@ -497,12 +384,6 @@ pub async fn run(
     let mut pong_deadline: Option<Instant> = None;
     let keepalive_timeout = h2_keepalive_timeout();
 
-    let mut stats = H2Stats::default();
-    let session_start = Instant::now();
-    let mut telemetry = tokio::time::interval(TELEMETRY_PERIOD);
-    telemetry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    telemetry.tick().await; // the first tick is immediate; skip it
-
     loop {
         if data_check && !ready_fired {
             if let Some(dl) = validate_deadline {
@@ -529,26 +410,8 @@ pub async fn run(
             }
         }
 
-        // 1.2.3-p3 HEAD-OF-LINE FIX: `biased` is gone on purpose.
-        //
-        // With it, the arms were polled in source order on every single pass, and
-        // the outbound arm sits above the inbound one. A saturated download
-        // produces a steady stream of ACKs, so the outbound arm was ready almost
-        // every pass and always won - and because `send_capsule` is awaited
-        // INSIDE that arm, the loop could not read a single inbound byte until
-        // the uplink write had finished, including any wait for HTTP/2 send
-        // credit. The download was therefore gated on the uplink: every hesitation
-        // in one direction stalled the other, which is exactly the shape of the
-        // multi-second spikes in the log.
-        //
-        // Unbiased `select!` polls every ready arm and picks fairly at random, so
-        // neither direction can systematically starve the other. Reversing the
-        // order instead would only have moved the starvation onto the ACKs, which
-        // is worse: a download whose ACKs stop does not slow down, it stops.
         tokio::select! {
-            _ = telemetry.tick(), if ready_fired => {
-                stats.log(&cfg.peer, session_start.elapsed());
-            }
+            biased;
 
             _ = keepalive_interval.tick(), if ready_fired && !awaiting_pong => {
                 match ping_pong.send_ping(h2::Ping::opaque()) {
@@ -587,7 +450,6 @@ pub async fn run(
                 match ctrl {
                     Some(Control::Close) | None => {
                         let _ = send_stream.send_data(Bytes::new(), true);
-                        stats.log(&cfg.peer, session_start.elapsed());
                         log_or_debug(quiet, "[h2] closing tunnel".to_string());
                         return Ok(());
                     }
@@ -598,30 +460,7 @@ pub async fn run(
             pkt = outbound_rx.recv() => {
                 match pkt {
                     Some(ip_packet) => {
-                        // 1.2.3-p2 BATCHING. One `send_data` per IP packet meant
-                        // one DATA frame, one TLS record and - `TCP_NODELAY` is
-                        // set above - one TCP segment per packet. A download is a
-                        // symmetric stream (every pair of segments is answered by
-                        // an ACK), so the uplink was paying a full syscall round
-                        // for every ~60-byte ACK and the packet rate, not the
-                        // line, decided the download speed. Whatever is already
-                        // queued goes out in the same frame.
-                        let mut framed = masque::encode_datagram_capsule(&ip_packet);
-                        let mut packets = 1usize;
-                        while packets < batch_packets && framed.len() < batch_bytes {
-                            match outbound_rx.try_recv() {
-                                Ok(next) => {
-                                    framed.extend_from_slice(
-                                        &masque::encode_datagram_capsule(&next),
-                                    );
-                                    packets += 1;
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                        stats.tx_bytes += framed.len() as u64;
-                        stats.tx_frames += 1;
-                        stats.tx_packets += packets as u64;
+                        let framed = masque::encode_datagram_capsule(&ip_packet);
                         if let Err(e) = send_capsule(&mut send_stream, Bytes::from(framed)).await {
                             log::debug!("[h2] send: {e}");
                             return Err(e);
@@ -637,22 +476,9 @@ pub async fn run(
             data = futures::future::poll_fn(|cx| recv_body.poll_data(cx)) => {
                 match data {
                     Some(Ok(chunk)) => {
-                        // 1.2.3-p2 CAPACITY ACCOUNTING. `release_capacity` used to
-                        // run here, BEFORE the payload reached the netstack, so the
-                        // window it re-advertised described how fast bytes were
-                        // arriving rather than how fast they were being consumed -
-                        // flow control with the feedback removed. It now runs after
-                        // the drain, which is what makes a slow consumer show up as
-                        // a smaller window instead of as dropped packets.
-                        let received = chunk.len();
-                        stats.rx_bytes += received as u64;
+                        let _ = recv_body.flow_control().release_capacity(chunk.len());
                         capsules.push(&chunk);
-                        let drained =
-                            drain_capsules(&mut capsules, &inbound_tx, &addr_tx).await;
-                        stats.inbound_waits += drained.waits;
-                        stats.inbound_drops += drained.drops;
-                        let _ = recv_body.flow_control().release_capacity(received);
-                        let got_data = drained.delivered;
+                        let got_data = drain_capsules(&mut capsules, &inbound_tx, &addr_tx);
                         if got_data && !ready_fired {
                             validate_successes += 1;
                             log::debug!(
@@ -681,7 +507,6 @@ pub async fn run(
                         return Err(AetherError::Masque(format!("h2 body: {e}")));
                     }
                     None => {
-                        stats.log(&cfg.peer, session_start.elapsed());
                         log_or_debug(quiet, "[h2] server closed stream".to_string());
                         return Ok(());
                     }
@@ -691,52 +516,32 @@ pub async fn run(
     }
 }
 
-/// Writes a capsule batch to the carrier stream, using whatever send credit the
-/// edge has granted rather than waiting for the whole batch to fit at once.
-///
-/// The old version reserved the full length and then spun until
-/// `capacity() >= len`. With one small capsule per call that was harmless; with
-/// batches it would hold a full frame hostage behind a credit grant the edge had
-/// no reason to hurry, and it stalled the whole `select!` loop - including
-/// inbound delivery - while it waited. DATA frame boundaries carry no meaning to
-/// the capsule protocol, which is a byte stream, so a batch may be split freely.
 async fn send_capsule(send: &mut h2::SendStream<Bytes>, data: Bytes) -> Result<()> {
-    let mut data = data;
-    if data.is_empty() {
+    let len = data.len();
+    if len == 0 {
         return Ok(());
     }
 
-    while !data.is_empty() {
-        send.reserve_capacity(data.len());
-        let capacity = loop {
-            let available = send.capacity();
-            if available > 0 {
-                break available;
-            }
-            match futures::future::poll_fn(|cx| send.poll_capacity(cx)).await {
-                Some(Ok(_)) => continue,
-                Some(Err(e)) => {
-                    return Err(AetherError::Masque(format!("h2 capacity: {e}")))
-                }
-                None => return Err(AetherError::Masque("h2 stream closed".into())),
-            }
-        };
-
-        let take = capacity.min(data.len());
-        let chunk = data.split_to(take);
-        send.send_data(chunk, false)
-            .map_err(|e| AetherError::Masque(format!("h2 send_data: {e}")))?;
+    send.reserve_capacity(len);
+    while send.capacity() < len {
+        match futures::future::poll_fn(|cx| send.poll_capacity(cx)).await {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => return Err(AetherError::Masque(format!("h2 capacity: {e}"))),
+            None => return Err(AetherError::Masque("h2 stream closed".into())),
+        }
     }
 
+    send.send_data(data, false)
+        .map_err(|e| AetherError::Masque(format!("h2 send_data: {e}")))?;
     Ok(())
 }
 
-async fn drain_capsules(
+fn drain_capsules(
     capsules: &mut CapsuleParser,
     inbound_tx: &mpsc::Sender<Vec<u8>>,
     addr_tx: &Option<mpsc::Sender<AssignedAddr>>,
-) -> Drained {
-    let mut out = Drained::default();
+) -> bool {
+    let mut delivered = false;
     loop {
         match capsules.next() {
             Ok(Some(Capsule::Datagram(payload))) => {
@@ -747,38 +552,13 @@ async fn drain_capsules(
                         continue;
                     }
                 };
-                out.delivered = true;
-                // 1.2.3-p2 BACKPRESSURE, NOT LOSS. This used to be a bare
-                // `try_send` whose `Full` arm threw the datagram away behind a
-                // `trace!`. That packet had already crossed the network and been
-                // paid for; discarding it is indistinguishable from congestion to
-                // the TCP flow it belongs to, so smoltcp halved its window on a
-                // local scheduling hiccup and then had to climb back through
-                // CUBIC - while HTTP/2 flow control, which had already released
-                // the capacity, kept inviting more data. That feedback loop is
-                // most of why the download settled at a fraction of the line.
+                delivered = true;
                 match inbound_tx.try_send(pkt) {
                     Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(pkt)) => {
-                        out.waits += 1;
-                        match tokio::time::timeout(
-                            INBOUND_STALL_BUDGET,
-                            inbound_tx.send(pkt),
-                        )
-                        .await
-                        {
-                            Ok(Ok(())) => {}
-                            Ok(Err(_)) => return out,
-                            Err(_) => {
-                                out.drops += 1;
-                                log::debug!(
-                                    "[h2] netstack did not take a datagram within {:?}; dropping",
-                                    INBOUND_STALL_BUDGET
-                                );
-                            }
-                        }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        log::trace!("[h2] inbound queue full, dropping datagram");
                     }
-                    Err(mpsc::error::TrySendError::Closed(_)) => return out,
+                    Err(mpsc::error::TrySendError::Closed(_)) => return delivered,
                 }
             }
             Ok(Some(Capsule::AddressAssign(addrs))) => {
@@ -805,7 +585,7 @@ async fn drain_capsules(
             }
         }
     }
-    out
+    delivered
 }
 
 fn bytes_to_ip(version: u8, bytes: &[u8]) -> Option<IpAddr> {

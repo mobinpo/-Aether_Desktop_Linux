@@ -12,7 +12,72 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 
 ---
 
-## What's new in 1.2.2
+## What's new in 1.2.3
+
+**Upgrade notice:** 1.2.3 adds the **Aether → Psiphon** chained transport backend — the capability of Aether Mobile 1.2.8, brought to Windows with the same method — bundles **Aether Core 1.8.0**, and gives the exit-country picker a flag on every row. Saved profiles load unchanged, and the desktop version stays `1.2.3` across `tauri.conf.json`, `package.json` and the installer script.
+
+### New in this release
+
+**Aether → Psiphon, a chained transport backend** (Advanced → *Backend*). A two-hop path that keeps Aether's obfuscated transport on the first hop and takes its exit from an ordinary hosting address.
+
+**An exit-country picker covering all 56 Psiphon egress regions**, with the country's flag on every row, fully keyboard-operable, and complete flag artwork across the whole region list.
+
+**A filtering-server watchdog with exit-region steering**, brought over from the mobile edition with the same thresholds, blacklist and rotation grace window.
+
+**The Psiphon stage shipped inside both installers** — `psiphon-tunnel-core`, built in CI from a pinned upstream tag, for x64 and x86.
+
+**Aether Core 1.8.0**, with its complete source and build baseline in the repository.
+
+**A throughput profile tuned for desktop links**: per-flow receive windows sized to a desktop bandwidth-delay product, CUBIC congestion control on every tunnelled flow, batched WireGuard encapsulation, data-plane socket buffers applied on Windows, an endpoint-quality budget for endpoint selection, and a new `[uplink]` telemetry line in the diagnostics log.
+
+### New capabilities in detail
+
+**Aether → Psiphon, the chained backend (brought over from Aether Mobile 1.2.8):**
+
+```text
+stage 1   Aether engine  → SOCKS5 127.0.0.1:1819     (no data path yet)
+stage 2   Psiphon        → SOCKS5 127.0.0.1:1825     dials out through 1819
+then      bridge + system proxy → 127.0.0.1:1825     exit = Psiphon
+```
+
+Aether's exits are Cloudflare WARP anycast addresses, and a large set of destinations serves a different view of the internet from them. The chain takes the **exit** from an ordinary hosting address while keeping Aether's obfuscated transport on the **first hop**, which is the hop that has to survive the local network. Single-hop Psiphon is deliberately absent: the chain exists precisely because the first hop is the one that needs Aether.
+
+What came across from the mobile edition: the Psiphon config keys, including `UpstreamProxyUrl`, so **every** connection Psiphon makes — server-list fetches included — leaves through stage 1 and the chain cannot dial out directly; two-pass establishment (your country first, then no region filter with a fresh datastore), because `EgressRegion` is a **hard** filter; following the port Psiphon **actually** bound (`ListeningSocksProxyPort`) rather than dictating it; a stage-1 gate that proves the engine is a working SOCKS5 proxy before stage 2 starts, so a failure is reported where it happened; a 150-second verification window for a chained session, sized for two hops warming up; and the filtering-server watchdog with the same thresholds, blacklist, region steering and rotation grace window, so a deliberate server change is never read as a session death.
+
+Android's third layer (`PsiphonSocksFront`, with udpgw, a dedicated DNS lane, QUIC carriage and AAAA suppression) is deliberately not part of the Windows design: it exists only because Android's tun2socks carries all UDP and DNS with SOCKS5 `UDP ASSOCIATE`, which Psiphon's local proxy does not speak. The Windows data path is the WinINET system proxy feeding the local bridge — TCP-only and IPv4-only by construction — and it asks stage 2 for nothing but `CONNECT`. One layer fewer is one failure point fewer.
+
+**The exit country carries flags.** The control is a real listbox: every row is an inline SVG flag plus the country name, *Automatic* gets a globe so it is never the odd row out, the menu flips above the button when there is no room below, and it is fully keyboard-operable (arrows, Home/End, PageUp/PageDown, type-ahead over 56 countries, Enter, Escape). Inline SVG rather than emoji, because Windows ships no regional-indicator font — the same approach the IP badge uses. All 56 egress regions have artwork, Moldova included, so flag coverage of the region list is complete.
+
+**A throughput profile tuned for desktop links.** The engine now sizes the data plane for a PC on a fat line rather than for a phone:
+
+* the per-flow smoltcp **receive window** is sized separately from the send buffer and set to a desktop bandwidth-delay product (1 MB on a high tier), because a flow can never download faster than window / RTT;
+* every tunnelled flow runs **CUBIC** congestion control, selected per socket and pinned by the `socket-tcp-cubic` feature so the choice cannot be dropped silently;
+* outbound packets are **encapsulated in bursts** under a single boringtun session acquisition, so the packet rate scales with bursts instead of with scheduler hand-offs;
+* `SO_RCVBUF` and `SO_SNDBUF` are **applied on Windows** to every data-plane datagram socket, sized as independent budgets — the receive side generous, the send side a latency bound;
+* the netstack's app→network backlog is ordered **per flow**, with its own per-pass budget for control messages, so one busy flow cannot hold up the others;
+* the device transmit ring holds a burst across a retry instead of shedding it, and the packet handoff queues are bounded in packets rather than inherited from the application queue depth;
+* endpoint selection carries an **RTT budget** (`AETHER_SCAN_GOOD_RTT_MS`, `AETHER_QUICK_RECONNECT_MAX_RTT_MS`, `AETHER_QUICK_RECONNECT_MAX_HANDSHAKE_MS`; set any to `0` to disable), plus a floor that guarantees a rescan can only ever return an endpoint at least as fast as the cached one it replaced;
+* the diagnostics log gains an `[uplink <peer>]` line every 15 seconds — packets, KB/s, the socket buffers the OS actually granted, and how often and how long the writer waited — and the performance-profile line now reports `udp socket rcv/snd=` and `netstack tcp tx/rx=` separately.
+
+**Core 1.7.0 → 1.8.0:** `native/aether` sits on the 1.8.0 tag. `cli.rs`, `config.rs` and `consts.rs` are byte-for-byte identical between the two versions, so no flag or environment variable changed and `CoreCaps::for_version` (which compares with `>=`) keeps every 1.7 capability enabled. The sync script's baseline moved to 1.8.0 with it, and the throughput work above is registered with that script so a later core upgrade rebases it instead of dropping it.
+
+**Upgrade note:** saved profiles load untouched. `backend` defaults to `AETHER` through `#[serde(default)]`, so the default behaviour is exactly 1.2.2's; the chained backend is a deliberate choice in Advanced → *Transport*. A saved exit country still resolves, because the region codes are identical to the mobile edition's.
+
+### Security audit summary
+
+| Area | Result |
+|---|---|
+| Secrets and keys | No hardcoded credentials; sensitive access values and upstream proxy credentials are not persisted |
+| TLS and certificates | Platform validation plus SPKI pin verification |
+| DNS, IPv6 and WebRTC | Protected path verified; direct UDP and unsafe IPv6 fallback blocked |
+| Chained backend | Stage 2 listens on loopback only; every Psiphon connection is forced through stage 1; the exit-country value is validated in Rust before it reaches the config |
+| Local storage and logs | IPs masked; secrets excluded; identity-file protection remains a hardening item |
+| Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
+
+Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+<details>
+<summary>Version 1.2.2 — bundled Aether Core 1.7.0</summary>
 
 **Upgrade notice:** Upgrade to 1.2.2 for the bundled Aether Core 1.7.0. Domain routing rules now match the real host name behind the Wintun driver, Aether can dial out through another proxy or VPN on the same PC, and a device identity Cloudflare has stopped accepting is replaced instead of leaving you with a tunnel that handshakes but carries nothing. Every 1.2.0 and 1.2.1 protection stays enabled.
 
@@ -51,6 +116,8 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 | Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
 
 Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+</details>
 
 <details>
 <summary>Version 1.2.1 — bundled Aether Core 1.6.0</summary>
@@ -97,7 +164,6 @@ Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
 
 <details>
 <summary>Version 1.1.0 — parity with engine core 1.5.0</summary>
-
 
 This release brings the bundled engine to **Aether Core 1.5.0** and adds a full UI for the
 three user-facing features that release introduced:
@@ -228,10 +294,10 @@ All files are produced automatically by GitHub Actions and published to
 
 | File | Description |
 |---|---|
-| `Aether-Setup-1.2.2-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
-| `Aether-Setup-1.2.2-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
-| `Aether-Portable-1.2.2-x64.zip` | Portable, no installation, 64-bit |
-| `Aether-Portable-1.2.2-x86.zip` | Portable, no installation, 32-bit |
+| `Aether-Setup-1.2.3-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
+| `Aether-Setup-1.2.3-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
+| `Aether-Portable-1.2.3-x64.zip` | Portable, no installation, 64-bit |
+| `Aether-Portable-1.2.3-x86.zip` | Portable, no installation, 32-bit |
 | `SHA256SUMS.txt` | Checksums for verifying file integrity |
 
 **Requirements:** Windows 10 build 1809 (October 2018 Update) or newer.
@@ -269,6 +335,9 @@ trace elsewhere on the machine.
 | `ShareBridge` | `share.rs` |
 | `Diagnostics` | `diagnostics.rs` |
 | `DiagnosticsLog` | `log.rs` |
+| `PsiphonTransport` | `psiphon.rs` |
+| `PsiphonHealth` | `psiphon_health.rs` |
+| `ExitRegions` | `exit_regions.rs` |
 
 ---
 
@@ -295,12 +364,11 @@ Bundles the Wintun driver under its own licence.
 
 ### Elevation requirement
 
-Aether Desktop 1.2.2 embeds a Windows `requireAdministrator` manifest. Windows therefore
+Aether Desktop 1.2.3 embeds a Windows `requireAdministrator` manifest. Windows therefore
 shows the UAC prompt every time the app starts, before any engine, proxy, browser policy or
 firewall rule is touched. This is intentional: starting unelevated would make the WebRTC
 kill-switch incomplete. The installer is already administrator-only; this requirement now
 also covers portable copies and direct launches.
-
 
 ## Important reminder
 

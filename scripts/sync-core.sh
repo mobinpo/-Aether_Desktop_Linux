@@ -11,12 +11,31 @@
 # =============================================================================
 set -euo pipefail
 
-BASELINE="1.7.0"
+BASELINE="1.8.0"
 CORE_DIR="native/aether"
 BASELINE_DIR="$CORE_DIR/.upstream-baseline"
 PREV_DIR="native/.core-prev"
 STATE_FILE="native/.core-sync-state"
-PATCHED_FILES=(aether/src/prober.rs aether/src/wg_prober.rs)
+# فایل‌هایی که پچ محلی داریم و باید در ارتقای هسته سه‌طرفه merge شوند.
+# ۱.۲.۳-p1: کارِ توان‌عبوری (سرعت دانلود) هفت فایل دیگر را هم لمس کرد. اگر
+# این‌ها اینجا نباشند، اولین sync موفقِ هسته آن‌ها را بی‌صدا پاک می‌کند و
+# دقیقاً همان بیلد کندِ قبلی برمی‌گردد — بدون هیچ خطایی در لاگ.
+# ۱.۲.۳-p3: پچ زمانِ کانکت (بودجهٔ اسکن، توقف زودهنگام روی کریرِ مسدود و
+# جست‌وجوی موازی/زمان‌بندی‌شدهٔ ECH) فایل dns.rs را هم لمس کرد؛ بدون این خط،
+# اولین sync موفق ۹ ثانیه تأخیر کانکت را بی‌صدا برمی‌گرداند.
+PATCHED_FILES=(
+  aether/src/prober.rs
+  aether/src/wg_prober.rs
+  aether/src/netstack.rs
+  aether/src/wireguard.rs
+  aether/src/lib.rs
+  aether/src/sysprofile.rs
+  aether/src/upstream.rs
+  aether/src/quic.rs
+  aether/src/masque_h2.rs
+  aether/src/dns.rs
+  aether/Cargo.toml
+)
 
 AETHER_REPO="${AETHER_REPO:-CluvexStudio/Aether}"
 CORE_API_BASE="${CORE_API_BASE:-https://api.github.com}"

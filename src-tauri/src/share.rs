@@ -2,7 +2,9 @@
 //!
 //! ریشهٔ باگ ترافیک: نسخهٔ قبلی این فایل فقط لاگ می‌نوشت و هیچ سوکتی باز
 //! نمی‌کرد. حالا دقیقاً مثل ShareBridge اندروید دو شنونده داریم:
-//!   * SOCKS5 (10810): پس‌دهی خام به SOCKS5 موتور روی 127.0.0.1:1819
+//!   * SOCKS5 (10810): پس‌دهی خام به SOCKS5 خروجیِ خط لوله — موتور روی
+//!     127.0.0.1:1819، یا در نشست زنجیره‌ای Psiphon روی 127.0.0.1:1825
+//!     (`engine::exit_socks_port`).
 //!   * HTTP  (10811): پروکسی HTTP کامل (CONNECT + absolute-form) که هر اتصال
 //!     را از داخل SOCKS5 موتور بیرون می‌برد — مسیر دادهٔ پروکسی سیستمی ویندوز.
 //!
@@ -275,7 +277,11 @@ fn handle_client(client: TcpStream, rx: Arc<AtomicU64>, tx: Arc<AtomicU64>) {
 
 /// پس‌دهی خام SOCKS5: بایت‌ها همان‌طور که هستند به موتور می‌روند و برمی‌گردند.
 fn handle_socks(client: TcpStream, rx: Arc<AtomicU64>, tx: Arc<AtomicU64>) {
-    let upstream_addr = SocketAddr::from(([127, 0, 0, 1], crate::engine::LOCAL_SOCKS_PORT));
+    // خروجیِ خط لولهٔ فعال، نه همیشه موتور: در نشست زنجیره‌ای این پورت Psiphon
+    // است (استیج ۲). این تنها جایی است که مسیر دادهٔ واقعی به تونل می‌چسبد، پس
+    // اگر اینجا استیج ۱ بماند، کاربر با خروجی اِتِر بیرون می‌رود و کل زنجیره
+    // بی‌اثر است.
+    let upstream_addr = SocketAddr::from(([127, 0, 0, 1], crate::engine::exit_socks_port()));
     match TcpStream::connect_timeout(&upstream_addr, UPSTREAM_TIMEOUT) {
         Ok(upstream) => {
             let _ = upstream.set_nodelay(true);
@@ -417,8 +423,18 @@ fn relay(client: TcpStream, upstream: TcpStream, rx: Arc<AtomicU64>, tx: Arc<Ato
     let _ = up.join();
 }
 
+/// Relay buffer for one direction of one connection.
+///
+/// 1.2.3-p3: raised from 16 KB. This is a blocking read/write pair on loopback,
+/// so the buffer size sets how many syscalls a download costs: at the rates the
+/// tunnel now reaches, 16 KB meant tens of thousands of round trips through the
+/// kernel per second on both threads of every connection. 64 KB is a quarter of
+/// the syscalls for four pages of stack, and it is heap-allocated once per
+/// direction rather than living on the thread stack.
+const RELAY_BUF_BYTES: usize = 64 * 1024;
+
 fn copy_counted(mut from: TcpStream, mut to: TcpStream, counter: Arc<AtomicU64>) {
-    let mut buf = [0u8; 16_384];
+    let mut buf = vec![0u8; RELAY_BUF_BYTES];
     loop {
         match from.read(&mut buf) {
             Ok(0) => break,

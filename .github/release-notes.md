@@ -1,85 +1,54 @@
-# Aether Desktop 1.2.2
+# Aether Desktop 1.2.3
 
 ## What's new
 
-**Upgrade notice:** Upgrade to 1.2.2 for the bundled Aether Core 1.7.0. Domain routing rules now match the real host name behind the Wintun driver, Aether can dial out through another proxy or VPN on the same PC, and a device identity Cloudflare has stopped accepting is replaced instead of leaving you with a tunnel that handshakes but carries nothing. Every 1.2.0 and 1.2.1 protection stays enabled.
+**Upgrade notice:** 1.2.3 adds the **Aether → Psiphon** chained transport backend — the capability of Aether Mobile 1.2.8, brought to Windows with the same method — bundles **Aether Core 1.8.0**, and gives the exit-country picker a flag on every row. Saved profiles load unchanged and the desktop version stays `1.2.3`.
 
-### Short comparison with 1.2.1
+### New in this release
 
-**Added:** the complete Aether Core 1.7.0 source and build baseline; an **Upstream proxy** control (`--upstream`) for chaining Aether behind another VPN or proxy already running on the machine; host-name matching for domain routing rules, read from the TLS server name or HTTP `Host` header; automatic replacement of a refused WARP identity; and a 1.7.0 capability gate covering the new flag and the new environment variables.
+**Added:** the **Aether → Psiphon** transport backend (Advanced → *Backend*), which keeps Aether's obfuscated transport as the first hop and takes its exit from an ordinary hosting IP; an **Exit country** picker covering all 56 Psiphon egress regions, each row carrying its country flag, with complete flag artwork across the region list; the filtering-server watchdog and exit-region steering from the mobile edition; the Psiphon stage (`psiphon-tunnel-core`) built from a pinned upstream tag in CI and shipped inside both installers; the complete Aether Core 1.8.0 source and build baseline; and a **desktop throughput profile** — per-flow receive windows sized to a desktop bandwidth-delay product, CUBIC congestion control on every tunnelled flow, batched WireGuard encapsulation, data-plane socket buffers applied on Windows, an RTT budget for endpoint selection, and a new `[uplink]` telemetry line.
 
-**Changed:** the desktop release is now 1.2.2; the root `CORE_VERSION`, the vendored `native/aether/CORE_VERSION` and the sync baseline are 1.7.0; an HTTP upstream proxy switches MASQUE to HTTP/2 automatically because HTTP CONNECT cannot carry UDP; the `--upstream` value is masked in the persistent log alongside the Zero Trust secrets; and WARP×2 (`gool`) now builds its two hops on two different Cloudflare edges.
+### The chained backend
 
-**Preserved:** mandatory WebRTC and IPv6 fail-closed protection, the browser/network kill-switch, the three-target watchdog, exact proxy/PAC restoration, bounded shutdown, in-memory-only Zero Trust secrets, and the rule that a flag or variable is never sent to an engine that does not understand it.
+```text
+stage 1   Aether engine  → SOCKS5 127.0.0.1:1819     (no data path yet)
+stage 2   Psiphon        → SOCKS5 127.0.0.1:1825     dials out through 1819
+then      bridge + system proxy → 127.0.0.1:1825     exit = Psiphon
+```
 
-### Detailed changes
+Aether's exits are Cloudflare WARP anycast addresses, and a large set of destinations serves a different view of the internet from them. The chain takes the **exit** from an ordinary hosting address while keeping Aether's obfuscated transport on the **first hop**, which is the hop that has to survive the local network. Single-hop Psiphon is deliberately absent: the chain exists precisely because the first hop is the one that needs Aether.
 
-**Core 1.7.0 integration:** `native/aether` contains the supplied 1.7.0 engine and its Quiche dependency. The desktop build, portable payload, About panel, rollback path, and CI core artifact all resolve the same `CORE_VERSION`, and the sync baseline for the patched probers was reseeded from 1.7.0.
+Brought over from mobile: the Psiphon config keys including `UpstreamProxyUrl`, so every connection Psiphon makes leaves through stage 1; two-pass establishment (your country first, then no region filter with a fresh datastore), because `EgressRegion` is a hard filter; following the port Psiphon actually bound (`ListeningSocksProxyPort`); the stage-1 gate that proves the engine is a working SOCKS5 proxy before stage 2 starts; a 150-second verification window sized for two hops warming up; and the filtering-server watchdog with the same thresholds, blacklist, region steering and rotation grace window.
 
-**Upstream proxy (new):** Advanced → *Upstream proxy* accepts `socks5://host:port`, `socks5://user:pass@host:port`, `http://host:port` or a bare `host:port` (read as SOCKS5). The engine then dials every outbound connection — the endpoint scan, registration calls and the ECH lookup included — through that proxy. The address is validated in the UI and again in Rust, so an unusable value is never handed to the engine: the engine would only log one line and silently continue without a proxy, which is exactly the failure a user cannot see. A SOCKS5 proxy with UDP associate carries MASQUE, WireGuard and WARP×2; an HTTP proxy is TCP-only, so MASQUE is moved to HTTP/2 for you and the panel says so.
+### The desktop throughput profile
 
-**Domain routing rules now work behind Wintun:** on Windows the data plane is always the TUN driver, so the local proxy used to receive a bare IP address and every domain rule quietly missed. Core 1.7.0 reads the name from the first bytes of the connection (TLS SNI or HTTP `Host`) and decides on that, while still connecting to the address the client asked for. The new *Match domain rules by real host name* switch is on by default and only turns the behaviour off.
+The engine sizes the data plane for a PC on a fat line: the per-flow smoltcp **receive window** is sized separately from the send buffer and set to a desktop bandwidth-delay product, because a flow can never download faster than window / RTT; every tunnelled flow runs **CUBIC**, pinned by the `socket-tcp-cubic` feature; outbound packets are **encapsulated in bursts** under a single boringtun session acquisition; `SO_RCVBUF` and `SO_SNDBUF` are **applied on Windows** to every data-plane datagram socket as independent budgets; the netstack backlog is ordered **per flow** with its own per-pass budget for control messages; the device transmit ring holds a burst across a retry; endpoint selection carries an **RTT budget** with a floor, so a rescan can only ever return an endpoint at least as fast as the cached one it replaced; and the diagnostics log gains an `[uplink <peer>]` line every 15 seconds.
 
-**A refused identity is replaced, not tolerated:** Cloudflare can stop accepting a saved device. The handshake keeps succeeding in that state and no traffic passes. The engine now detects the refusal and registers a fresh device; the new *Replace a refused identity* switch is on by default and lets you opt out and be told instead.
+<div dir="rtl" align="right" markdown="1">
 
-**WARP×2 uses two distinct edges:** nested WARP now picks two different Cloudflare endpoints for the outer and inner hop and rescans instead of tunnelling an edge through itself. Expect an occasional extra scan round on very restrictive networks, especially with a narrow manual address range.
+## تازه‌های نسخهٔ ۱.۲.۳
 
-**Version gate extended:** `CoreCaps` gained 1.7.0 capabilities. On an older pinned core the new flag and variables are never sent and the matching UI sections are disabled with an explanation, exactly like the 1.5.0 features.
+### امکانات جدید
 
-**Logging:** `--upstream` joins `--access-secret`, `--access-token` and `--access-email` in the redaction list, so proxy credentials never reach the rotating log file.
+- **بک‌اند ترابرد «اِتِر → سایفون»** در «پیشرفته ← بک‌اند»: هاپ اول روی ترابرد مبهم‌سازی‌شدهٔ اِتِر می‌ماند و خروجی یک IP هاستینگ عادی می‌شود، برای سایت‌هایی که رنج‌های WARP را نمی‌پذیرند.
+- **انتخابگر کشور خروج** با پوشش هر ۵۶ منطقهٔ خروج سایفون و پرچم کنار هر ردیف.
+- **هستهٔ Aether Core 1.8.0** با سورس کامل و بیلدِ قابل بازتولید داخل هر دو نصاب.
+- **حامل HTTP/3 (QUIC) به‌عنوان مسیر پیش‌فرض MASQUE**، همراه با حاملِ HTTP/2 (TCP) برای شبکه‌هایی که UDP را می‌بندند.
+- **اثرانگشت شبکه با آزمون واقعی UDP** پیش از اتصال: نردبان Smart Auto حامل مناسب را بر اساس نتیجهٔ همین آزمون انتخاب می‌کند.
+- **پروفایل توان‌عبوری دسکتاپ**: پنجره‌های جریان به اندازهٔ حاصل‌ضرب پهنای‌باند در تأخیر دسکتاپ، کنترل ازدحام CUBIC روی هر جریان تونل‌شده، بسته‌بندی دسته‌ای بسته‌ها روی هر دو حامل، و بافرهای سوکت مسیر داده روی ویندوز.
+- **سطر تلمتری `[h2]`** در تشخیص‌ها: پنجره‌ها، نرخ دانلود، و تعداد بستهٔ درون هر فریم، هر ۱۵ ثانیه.
+- **بودجهٔ RTT با کف تضمینی برای انتخاب اندپوینت**، تا اسکن مجدد فقط اندپوینتی را برگرداند که دست‌کم به‌اندازهٔ اندپوینت فعلی سریع است.
+- **واچ‌داگ سرور فیلترشده، هدایت منطقهٔ خروج و چرخش سرور** برای استیج سایفون.
+- **پیش‌فرض‌های تازهٔ پنل پیشرفته**: زبان English، بک‌اند Aether، کشور خروج Automatic، پروتکل Smart، حالت اسکن Turbo، نسخهٔ IP یعنی IPv4، نویز Off و اندپوینت Automatic.
+- **اشتراک تونل روی شبکهٔ محلی**، گارد نشتی WebRTC/UDP، کلید قطع و حفاظت نشتی IPv6.
 
-### Security audit summary
+### خط لولهٔ حالت ترکیبی
 
-| Area | Result |
-|---|---|
-| Secrets and keys | No hardcoded credentials; sensitive access values and upstream proxy credentials are not persisted |
-| TLS and certificates | Platform validation plus SPKI pin verification |
-| DNS, IPv6 and WebRTC | Protected path verified; direct UDP and unsafe IPv6 fallback blocked |
-| Local storage and logs | IPs masked; secrets excluded; identity-file protection remains a hardening item |
-| Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
-
-Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
-
-<div dir="rtl">
-
-## تازه‌های نسخهٔ ۱.۲.۲
-
-**یادآوری ارتقا:** نسخهٔ ۱.۲.۲ با هستهٔ Aether Core 1.7.0 می‌آید: قواعد مسیریابی دامنه‌ای دیگر پشت درایور Wintun هم کار می‌کنند، اِتِر می‌تواند پشت یک VPN یا پروکسیِ دیگر روی همین ویندوز زنجیره شود، و هویتی که Cloudflare دیگر قبولش ندارد جایگزین می‌شود تا دیگر گرفتار تونلی نشوید که دست می‌دهد ولی ترافیک رد نمی‌کند. تمام محافظت‌های ۱.۲.۰ و ۱.۲.۱ سر جایش است.
-
-### مقایسهٔ خلاصه با نسخهٔ ۱.۲.۱
-
-**افزوده شد:** سورس کامل هستهٔ Aether Core 1.7.0 و baseline بیلد آن؛ کنترل **پروکسی بالادست** (`--upstream`) برای زنجیره‌کردن اِتِر پشت یک VPN یا پروکسیِ در حال اجرا؛ تطبیق قواعد دامنه با نام واقعی میزبان (TLS SNI یا هدر `Host`)؛ ثبت خودکار هویت تازه وقتی هویت قدیمی رد می‌شود؛ و گیت قابلیت 1.7.0 برای فلگ و متغیرهای جدید.
-
-**تغییر کرد:** نسخهٔ دسکتاپ به ۱.۲.۲؛ `CORE_VERSION` ریشه و `native/aether/CORE_VERSION` و baseline همگام‌سازی به 1.7.0؛ با پروکسی بالادستِ HTTP خودکار MASQUE روی HTTP/2 می‌رود (چون HTTP CONNECT توان حمل UDP ندارد)؛ مقدار `--upstream` در لاگ ماندگار ماسک می‌شود؛ و WARP×2 (`gool`) دو هاپ خود را روی دو لبهٔ متفاوت Cloudflare می‌سازد.
-
-**حفظ شد:** محافظت اجباری WebRTC و IPv6 (fail-closed)، کیل‌سوییچ، واچداگ سه‌هدفه، بازگردانی دقیق proxy/PAC، خروج محدود به زمان، نگه‌داری اسرار Zero Trust فقط در حافظه، و قاعدهٔ «هیچ فلگ یا متغیری به هسته‌ای که نمی‌فهمد فرستاده نمی‌شود».
-
-### جزئیات تغییرها
-
-**یکپارچه‌سازی هستهٔ ۱.۷.۰:** پوشهٔ `native/aether` اکنون سورس ۱.۷.۰ و وابستگی Quiche را دارد. بیلد دسکتاپ، payload پرتابل، پنل درباره، مسیر rollback و artifact هسته در CI همگی یک `CORE_VERSION` واحد می‌خوانند و baseline پروبرهای پچ‌شده از خود ۱.۷.۰ دوباره کاشته شده است.
-
-**پروکسی بالادست (تازه):** پیشرفته ← *پروکسی بالادست* قالب‌های `socks5://host:port`، `socks5://user:pass@host:port`، `http://host:port` و یا فقط `host:port` (معنای SOCKS5) را می‌پذیرد. هسته همهٔ اتصال‌های خروجی‌اش — از جمله اسکن نقطهٔ اتصال، ثبت‌نام و جستجوی ECH — را از همان پروکسی می‌گیرد. مقدار ورودی هم در رابط کاربری و هم در Rust اعتبارسنجی می‌شود؛ مقدار نامعتبر هرگز به موتور نمی‌رسد، چون خود موتور فقط یک خط خطا می‌نویسد و بی‌صدا بدون پروکسی ادامه می‌دهد. پروکسی SOCKS5 با UDP associate هر سه پروتکل را حمل می‌کند؛ پروکسی HTTP فقط TCP است، پس MASQUE خودکار روی HTTP/2 می‌رود و پنل هم همین را می‌گوید.
-
-**قواعد دامنه‌ای دیگر پشت Wintun کار می‌کنند:** در ویندوز مسیر داده همیشه درایور TUN است؛ پس پروکسی محلی فقط یک آی‌پی می‌دید و قواعد دامنه بی‌صدا بی‌اثر می‌شدند. هستهٔ 1.7.0 نام میزبان را از بایت‌های اول اتصال می‌خواند و تصمیم را بر همان می‌گیرد، در عین حال اتصال همان نشانی‌ درخواستی مشتری را دنبال می‌کند. کلید *تطبیق قواعد دامنه با نام واقعی میزبان* پیش‌فرض روشن است.
-
-**هویتِ ردشده جایگزین می‌شود:** Cloudflare می‌تواند دستگاه ذخیره‌شده را دیگر نپذیرد؛ در این حالت دست‌دادن موفق است ولی هیچ ترافیکی عبور نمی‌کند. موتور این رد را تشخیص می‌دهد و دستگاه تازه ثبت می‌کند؛ کلید *جایگزینی هویتِ ردشده* پیش‌فرض روشن است و می‌توانید خاموشش کنید تا فقط خبرتان کند.
-
-**WARP×2 روی دو لبهٔ متفاوت:** وارپ تودرتو دیگر یک لبه را درون خودش تونل نمی‌کند و برای هاپ بیرونی و درونی دو نقطهٔ جدا انتخاب می‌کند. روی شبکه‌های سخت‌گیر — مخصوصاً با رنج دستی باریک — ممکن است یک دور اسکن اضافه لازم شود.
-
-**گسترش گیت نسخه:** به `CoreCaps` قابلیت‌های 1.7.0 اضافه شد. روی هستهٔ پین‌شدهٔ قدیمی‌تر، فلگ و متغیرهای جدید فرستاده نمی‌شوند و بخش‌های مربوطه در رابط کاربری با توضیح غیرفعال می‌شوند — دقیقاً مثل قابلیت‌های 1.5.0.
-
-**لاگ:** `--upstream` کنار `--access-secret`، `--access-token` و `--access-email` در فهرست ماسک قرار گرفته؛ اعتبارنامهٔ پروکسی هرگز در فایل لاگ نمی‌نشیند.
-
-### خلاصهٔ ممیزی امنیتی
-
-| بخش | نتیجه |
-|---|---|
-| کلیدها و اسرار | اعتبارنامهٔ هاردکدشده وجود ندارد؛ مقادیر حساس و اعتبارنامهٔ پروکسی ذخیره نمی‌شوند |
-| TLS و گواهی‌ها | اعتبارسنجی سیستم‌عامل به‌همراه پین SPKI |
-| DNS، IPv6 و WebRTC | مسیر حفاظت‌شده بررسی می‌شود؛ UDP مستقیم و مسیر ناامن IPv6 مسدود است |
-| ذخیره‌سازی و لاگ | آی‌پی‌ها ماسک و اسرار حذف می‌شوند؛ حفاطت فایل هویتی هنوز نیازمند سخت‌سازی است |
-| مجوزها و بیلد | UAC اجباری است؛ CI سورس، تست، مانیفست، نصاب و پاک‌سازی را بررسی می‌کند |
-
-گزارش کامل: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+```text
+stage 1    موتور اِتِر      → SOCKS5 127.0.0.1:1819
+stage 2    سایفون          → SOCKS5 127.0.0.1:1825
+سپس        پل + پروکسی سیستمی → 127.0.0.1:1825      خروجی = سایفون
+```
 
 </div>
+

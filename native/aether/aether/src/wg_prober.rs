@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::stream::StreamExt;
-use rand::Rng;
+use rand::RngExt;
 
 use crate::aethernoize::AetherNoizeConfig;
 use crate::error::{AetherError, Result};
@@ -135,6 +135,136 @@ pub struct WgProbe {
     pub excluded: HashSet<SocketAddr>,
 }
 
+/// RTT a cached or scanned endpoint has to beat before a session commits to it.
+///
+/// ## 1.2.3-p1: nothing in this build ever judged an endpoint on its speed
+///
+/// `WgScanMode::Turbo` sets `early_exit_first`, and the loop below took that
+/// literally: **the first candidate that answered was returned, whatever its
+/// RTT**, often a fraction of a second into a 30 s budget with almost every
+/// candidate still unprobed. Quick reconnect was worse - it reused any cached
+/// endpoint that still answered, however slow it had become.
+///
+/// TCP throughput is inversely proportional to RTT, so an endpoint three times
+/// slower than the best available one is a download roughly three times slower,
+/// for the whole life of the session. In chained `Aether -> Psiphon` mode that
+/// penalty is paid on both hops. It is also completely silent: the tunnel is up,
+/// nothing errors, and the only symptom is "the download speed is very low".
+///
+/// Read from `AETHER_SCAN_GOOD_RTT_MS`, else `AETHER_QUICK_RECONNECT_MAX_RTT_MS`,
+/// else [`DEFAULT_GOOD_RTT_MS`]. Set either to `0` to disable the gate entirely
+/// and restore the previous behaviour exactly.
+pub const DEFAULT_GOOD_RTT_MS: u64 = 300;
+
+pub fn good_rtt_budget() -> Option<Duration> {
+    for name in ["AETHER_SCAN_GOOD_RTT_MS", "AETHER_QUICK_RECONNECT_MAX_RTT_MS"] {
+        if let Ok(raw) = std::env::var(name) {
+            return raw
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|ms| *ms > 0)
+                .map(Duration::from_millis);
+        }
+    }
+    Some(Duration::from_millis(DEFAULT_GOOD_RTT_MS))
+}
+
+/// How long the turbo scan keeps looking after an over-budget first answer.
+///
+/// Deliberately short - the point of turbo is that connecting is fast: a second
+/// of extra scanning, once, against a session that would otherwise run for an
+/// hour on a needlessly slow endpoint. The first answer is KEPT as the fallback
+/// throughout, so this can never turn a working connect into a failure; worst
+/// case it costs this much time and picks the same endpoint anyway.
+fn slow_first_grace() -> Duration {
+    let ms = std::env::var("AETHER_SCAN_SLOW_FIRST_GRACE_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(1_200);
+    Duration::from_millis(ms)
+}
+
+/// The RTT a scan is not allowed to come back WORSE than, plus the endpoint that
+/// set it.
+///
+/// A budget is an aspiration; this is a FLOOR. The moment quick reconnect
+/// discards a cached endpoint for being slow it registers that endpoint here, so
+/// if the scan then fails to beat it, [`apply_rtt_floor`] hands the cached one
+/// back instead of committing the session to something worse. That endpoint was
+/// verified alive milliseconds earlier by the very probe that measured it, so
+/// reusing it is safe by construction.
+///
+/// Net effect: rejecting a cached endpoint for being slow can only ever IMPROVE
+/// the endpoint, never degrade it. Without this, a build that rejects a 397 ms
+/// cache and then commits to a 475 ms scan result is not just possible, it is
+/// likely - the scan sorts by RTT among what it happened to probe, not against
+/// what it threw away.
+static RTT_FLOOR_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RTT_FLOOR_PEER: std::sync::Mutex<Option<SocketAddr>> = std::sync::Mutex::new(None);
+
+/// Registers the endpoint a scan has to beat. Called by quick reconnect when it
+/// throws a cached endpoint away for being slow.
+pub fn set_rtt_floor(peer: SocketAddr, rtt: Duration) {
+    RTT_FLOOR_MS.store(rtt.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut guard) = RTT_FLOOR_PEER.lock() {
+        *guard = Some(peer);
+    }
+}
+
+/// Forgets the floor. Called once a session is actually up, so a later reconnect
+/// is never judged against a stale measurement.
+pub fn clear_rtt_floor() {
+    RTT_FLOOR_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut guard) = RTT_FLOOR_PEER.lock() {
+        *guard = None;
+    }
+}
+
+fn rtt_floor() -> Option<(SocketAddr, Duration)> {
+    let ms = RTT_FLOOR_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if ms == 0 {
+        return None;
+    }
+    let peer = (*RTT_FLOOR_PEER.lock().ok()?)?;
+    Some((peer, Duration::from_millis(ms)))
+}
+
+/// Substitutes the discarded endpoint back in when the scan failed to beat it.
+///
+/// Applied to the FIRST (fastest) element only: the result list is already sorted
+/// by RTT, so if the head does not clear the floor, nothing does.
+fn apply_rtt_floor(mut picked: Vec<WgProbeResult>) -> Vec<WgProbeResult> {
+    let Some((peer, floor)) = rtt_floor() else {
+        return picked;
+    };
+    let (best_ip, best_port, best_rtt) = match picked.first() {
+        Some(b) => (b.ip, b.port, b.rtt),
+        None => return picked,
+    };
+    if best_rtt <= floor {
+        return picked;
+    }
+    log::warn!(
+        "[-] the scan's best edge {}:{} (rtt {:?}) is SLOWER than the cached endpoint \
+         {peer} (rtt {:?}) that was discarded for being slow; keeping the cache, because \
+         replacing an endpoint with a worse one is not an upgrade",
+        best_ip,
+        best_port,
+        best_rtt,
+        floor,
+    );
+    let restored = WgProbeResult {
+        ip: peer.ip(),
+        port: peer.port(),
+        rtt: floor,
+    };
+    // Keep the scanned results behind it as alternates for the retry ladder.
+    picked.insert(0, restored);
+    picked
+}
+
 pub async fn hunt_best_wg_endpoint(probe: &WgProbe, mode: WgScanMode) -> Result<WgProbeResult> {
     hunt_wg_endpoints(probe, mode, 1)
         .await?
@@ -151,6 +281,10 @@ pub async fn hunt_wg_endpoints(
     let want = want.max(1);
     let mut st = mode.strategy();
     st.concurrency = crate::sysprofile::cap_concurrency(st.concurrency);
+    // Same reconciliation as the MASQUE prober: the launcher's attempt window is
+    // the real deadline, so never plan a scan that cannot finish inside it.
+    st.overall_deadline =
+        crate::prober::apply_scan_budget(st.overall_deadline, "WireGuard");
     let timeout = st.per_probe_timeout;
     let mut effective_ip = probe.ip;
     if probe.ip.want_v6() && !crate::prober::host_has_ipv6().await {
@@ -194,6 +328,12 @@ pub async fn hunt_wg_endpoints(
     let mut verified: Vec<WgProbeResult> = Vec::new();
     let mut found = 0usize;
     let mut quiet_until: Option<Instant> = None;
+    // 1.2.3-p1: set when turbo's first answer came back over budget, so the scan
+    // keeps looking for a fast one instead of committing to a slow one. Only
+    // reachable from the `early_exit_first` path, so multi-endpoint hunts
+    // (`want > 1`, which clears that flag above) behave exactly as before.
+    let rtt_budget = good_rtt_budget();
+    let mut hunting_for_fast = false;
 
     loop {
         let effective = match quiet_until {
@@ -221,8 +361,32 @@ pub async fn hunt_wg_endpoints(
                     Some(None) => continue,
                     Some(Some(pr)) => {
                         log::info!("[+] wg candidate ok {}:{} rtt={:?}", pr.ip, pr.port, pr.rtt);
-                        if st.early_exit_first {
+
+                        // See [good_rtt_budget]. "First to answer" is not the same
+                        // thing as "good", and turbo used to treat it as if it
+                        // were. Committing early is also only allowed if this
+                        // answer genuinely beats whatever cache was discarded to
+                        // get here, or the fast path would still exit on an
+                        // endpoint the floor rejects two lines later.
+                        let fast_enough = rtt_budget.map_or(true, |limit| pr.rtt <= limit)
+                            && rtt_floor().map_or(true, |(_, floor)| pr.rtt <= floor);
+
+                        if (st.early_exit_first || hunting_for_fast) && fast_enough {
                             return Ok(vec![pr]);
+                        }
+                        if st.early_exit_first && !fast_enough {
+                            // Keep looking, but only for a moment, and keep this
+                            // answer as the fallback the whole time.
+                            log::info!(
+                                "[i] {}:{} answered first but at {:?}; looking for a faster edge for up to {:?} (this one stays the fallback)",
+                                pr.ip,
+                                pr.port,
+                                pr.rtt,
+                                slow_first_grace(),
+                            );
+                            st.early_exit_first = false;
+                            hunting_for_fast = true;
+                            quiet_until = Some(Instant::now() + slow_first_grace());
                         }
                         verified.push(pr);
                         found += 1;
@@ -259,7 +423,9 @@ pub async fn hunt_wg_endpoints(
         }
     }
 
-    let picked = distinct_by_ip(&verified);
+    // The floor is applied AFTER sorting, so it only ever replaces a head the
+    // scan failed to beat. See [apply_rtt_floor].
+    let picked = apply_rtt_floor(distinct_by_ip(&verified));
     if picked.is_empty() {
         return Err(AetherError::NoCleanEndpoint);
     }
@@ -459,12 +625,12 @@ fn sample_cidr_v4(cidr: &str, n: usize) -> Vec<Ipv4Addr> {
 
     let usable = size - 2;
     let want = (n as u32).min(usable);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut chosen: HashSet<u32> = HashSet::with_capacity(want as usize);
     let mut out = Vec::with_capacity(want as usize);
 
     while (out.len() as u32) < want {
-        let off = 1 + rng.gen_range(0..usable);
+        let off = 1 + rng.random_range(0..usable);
         if chosen.insert(off) {
             out.push(Ipv4Addr::from(base + off));
         }
@@ -488,18 +654,18 @@ fn sample_cidr_v6(cidr: &str, n: usize, v4_cidrs: &[&str]) -> Vec<Ipv6Addr> {
     }
 
     let v4: Vec<(u32, u8)> = v4_cidrs.iter().filter_map(|c| parse_cidr_v4(c)).collect();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         let embedded = if v4.is_empty() {
-            rng.gen::<u32>() as u128
+            rng.random::<u32>() as u128
         } else {
-            let (b, p) = v4[rng.gen_range(0..v4.len())];
+            let (b, p) = v4[rng.random_range(0..v4.len())];
             let host_bits = 32u32.saturating_sub(p as u32);
             let host = if host_bits == 0 {
                 0
             } else {
-                rng.gen::<u32>() & ((1u32 << host_bits) - 1)
+                rng.random::<u32>() & ((1u32 << host_bits) - 1)
             };
             (b | host) as u128
         };

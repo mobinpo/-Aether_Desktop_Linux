@@ -56,7 +56,7 @@ if ($code -ne 0) {
   throw "Installer exited with $code"
 }
 
-foreach ($f in @('Aether.exe','engine\aether.exe','engine\wintun.dll','unins000.exe')) {
+foreach ($f in @('Aether.exe','engine\aether.exe','engine\wintun.dll','engine\psiphon-tunnel-core.exe','engine\server_entries.txt','unins000.exe')) {
   if (-not (Test-Path (Join-Path $target $f))) { throw "Installed tree is missing: $f" }
 }
 Write-Host '==> Installed tree OK (Uninstaller present)'

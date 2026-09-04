@@ -113,6 +113,10 @@ const FLAGS = {
   LU: hBands('#EF3340', '#fff', '#00A3E0'),
   LV: bg('#9E3039') + '<rect y="16" width="60" height="8" fill="#fff"/>',
   MA: bg('#C1272D') + star(30, 20, 7, '#006233'),
+  // MD was the one egress region in exit_regions.rs / ExitRegions.kt without a
+  // flag here, so its row fell back to the globe while every neighbour had a
+  // flag. Coverage of the region list is now complete.
+  MD: vBands('#0046AE', '#FFD200', '#CC092F') + disc('#C8912A', 4),
   MT: vBands('#fff', '#CF142B'),
   MX: vBands('#006847', '#fff', '#CE1126') + disc('#8C6239', 4),
   MY: myFlag(),

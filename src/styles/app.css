@@ -292,6 +292,62 @@ bdi { direction: ltr; unicode-bidi: isolate; }
 .input--area { min-height: 92px; resize: vertical; font-family: 'Cascadia Mono', Consolas, monospace; }
 .select:focus, .input:focus { outline: 2px solid var(--aether-blue); outline-offset: 1px; }
 
+/* v1.2.3 — انتخابگر کشور خروج (پرچم + نام). ظاهرش عیناً `.select` است تا در
+   میان بقیهٔ فیلدها بیگانه نباشد، ولی محتوای هر ردیف دلخواه است — چیزی که
+   `<option>` بومی هرگز نمی‌تواند. */
+.fdrop { position: relative; min-width: 220px; }
+.fdrop__btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: var(--navy-800);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: var(--on-dark);
+  padding: 9px 12px;
+  font: inherit;
+  cursor: pointer;
+  text-align: start;
+}
+.fdrop__btn:hover { border-color: rgba(255, 255, 255, 0.18); }
+.fdrop__btn:focus-visible, .fdrop__menu:focus-visible { outline: 2px solid var(--aether-blue); outline-offset: 1px; }
+.fdrop__flag { display: inline-flex; width: 22px; height: 15px; flex: none; line-height: 0; justify-content: center; }
+.fdrop__flag .flag { width: 22px; height: 15px; border-radius: 2px; display: block; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12); }
+.fdrop__flag .flag--globe { width: 16px; height: 16px; box-shadow: none; color: var(--on-dark-muted); }
+.fdrop__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fdrop__caret { width: 16px; height: 16px; flex: none; opacity: 0.65; transition: transform 140ms ease; }
+.fdrop.is-open .fdrop__caret { transform: rotate(180deg); }
+.fdrop__menu {
+  position: absolute;
+  z-index: 40;
+  inset-inline-start: 0;
+  top: calc(100% + 6px);
+  width: 100%;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--navy-800);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+.fdrop__menu.is-above { top: auto; bottom: calc(100% + 6px); }
+.fdrop__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fdrop__item.is-active { background: rgba(255, 255, 255, 0.08); }
+.fdrop__item.is-selected { background: rgba(76, 141, 255, 0.18); }
+.fdrop__item.is-selected .fdrop__name { font-weight: 600; }
+
 .switch {
   width: 46px;
   height: 26px;
@@ -500,7 +556,19 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
    ===================================================================== */
 
 /* متا حالا ۳ سلول دارد (پروتکل/اندپوینت/تأخیر) — زمان اتصال جدا شد. */
-.view--home .meta { grid-template-columns: repeat(3, 1fr); }
+/* v1.2.3 — the PROTOCOL tile has to fit its own text.
+   In the chained backend it reads `Aether \2192 Psiphon`, which is roughly three
+   times as wide as `MASQUE`, and a fixed 1fr third of the row clipped it. Each
+   tile now sizes to its contents (`max-content`) and the row centres itself, so
+   the whole label is always visible; the floor keeps the three tiles from
+   collapsing into each other on a narrow window, and the value never wraps. */
+.view--home .meta {
+  width: auto;
+  max-width: 100%;
+  grid-template-columns: repeat(3, minmax(88px, max-content));
+  justify-content: center;
+}
+.view--home .meta__v { white-space: nowrap; }
 
 /* ---- دکمهٔ بزرگ اتصال — چهار مود مثل موبایل ------------------- */
 .connect-wrap { position: relative; display: grid; place-items: center; margin: 6px 0 2px; }

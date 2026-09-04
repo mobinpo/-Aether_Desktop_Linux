@@ -10,7 +10,7 @@
 use crate::log::DiagnosticsLog;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 /// مقاصد راستی‌آزمایی — همان لیست NetProbe.kt.
@@ -18,6 +18,9 @@ const PROBE_HOSTS: [(&str, u16); 3] =
     [("cloudflare.com", 80), ("www.gstatic.com", 80), ("1.1.1.1", 80)];
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(4_000);
+/// `connection not allowed by ruleset` (RFC 1928 §6) — تنها کد پاسخی که
+/// به‌عنوان شاهدِ فیلترینگ به واچ‌داگ Psiphon گزارش می‌شود.
+const SOCKS5_REP_NOT_ALLOWED: u8 = 0x02;
 const IO_TIMEOUT: Duration = Duration::from_millis(4_000);
 
 pub struct EgressResult {
@@ -67,14 +70,28 @@ pub fn socks_ready(port: u16) -> bool {
     }
 }
 
-/// معادل `NetProbe.checkSocksHandshake` — موتور واقعاً SOCKS5 حرف می‌زند؟
+/// معادل `NetProbe.checkSocksHandshake` — خروجیِ خط لوله واقعاً SOCKS5 حرف می‌زند؟
 pub fn socks_handshake_ok() -> bool {
-    socks5_greeting(CONNECT_TIMEOUT).is_some()
+    socks_handshake_ok_on(crate::engine::exit_socks_port())
 }
 
-/// دست‌دادن اولیهٔ SOCKS5 (بدون احراز هویت) با موتور.
+/// همان بررسی، روی یک پورت مشخص.
+///
+/// معادل `Diagnostics.runProxyStage` اندروید: در نشست زنجیره‌ای باید **استیج ۱**
+/// را جدا از خروجی نهایی سنجید، وگرنه Psiphon روی پروکسی‌ای بالا می‌آید که
+/// نمی‌تواند dial کند و شکست، ده‌ها ثانیه بعد و در جای اشتباه ظاهر می‌شود.
+pub fn socks_handshake_ok_on(port: u16) -> bool {
+    socks5_greeting_on(port, CONNECT_TIMEOUT).is_some()
+}
+
+/// دست‌دادن اولیهٔ SOCKS5 (بدون احراز هویت) با خروجیِ خط لولهٔ فعال.
 fn socks5_greeting(timeout: Duration) -> Option<TcpStream> {
-    let proxy = SocketAddr::from(([127, 0, 0, 1], crate::engine::LOCAL_SOCKS_PORT));
+    socks5_greeting_on(crate::engine::exit_socks_port(), timeout)
+}
+
+/// دست‌دادن SOCKS5 روی یک پورت لوپ‌بکِ مشخص.
+fn socks5_greeting_on(port: u16, timeout: Duration) -> Option<TcpStream> {
+    let proxy = SocketAddr::from(([127, 0, 0, 1], port));
     let mut s = TcpStream::connect_timeout(&proxy, timeout).ok()?;
     s.set_read_timeout(Some(timeout)).ok()?;
     s.set_write_timeout(Some(timeout)).ok()?;
@@ -92,7 +109,34 @@ fn socks5_greeting(timeout: Duration) -> Option<TcpStream> {
 /// اگر مقصد دامنه باشد ATYP=DOMAIN فرستاده می‌شود تا DNS از راه دور و داخل
 /// تونل حل شود — دقیقاً همان کاری که NetProbe.socks5Connect در اندروید می‌کند.
 pub fn socks5_stream(dest_host: &str, dest_port: u16, timeout: Duration) -> Option<TcpStream> {
-    let mut s = socks5_greeting(timeout)?;
+    socks5_stream_on(
+        crate::engine::exit_socks_port(),
+        dest_host,
+        dest_port,
+        timeout,
+    )
+}
+
+/// همان CONNECT، روی یک پورت SOCKS5 مشخص.
+///
+/// # چرا کد پاسخ اینجا اهمیت دارد
+///
+/// `REP = 0x02` (`connection not allowed by ruleset`) ترجمهٔ SOCKS5 همان
+/// `ssh: rejected: administratively prohibited` است: سرور Psiphon زنده است،
+/// تونل سالم است، و **همین سرور** باز کردن این مقصد را رد می‌کند. این تنها
+/// شاهدی است که [crate::psiphon_health] به‌عنوان «فیلترینگ» می‌پذیرد.
+///
+/// هر شکست دیگری — مقصدی که خودش خوابیده (`0x04`/`0x05`)، تایم‌اوت، شبکهٔ
+/// نامرغوب — عمداً گزارش **نمی‌شود**. در اندروید یک‌بار همین تفکیک نبود و
+/// واچ‌داگ روی **بار** شلیک کرد: باز کردن یک ویدیو ۲۶ رد‌شدن در ۴٫۲ ثانیه ساخت،
+/// چرخش وسط پخش اتفاق افتاد و کاربر شش ثانیه قطعی دید.
+pub fn socks5_stream_on(
+    proxy_port: u16,
+    dest_host: &str,
+    dest_port: u16,
+    timeout: Duration,
+) -> Option<TcpStream> {
+    let mut s = socks5_greeting_on(proxy_port, timeout)?;
 
     let mut req: Vec<u8> = vec![0x05, 0x01, 0x00];
     if let Ok(v4) = dest_host.parse::<std::net::Ipv4Addr>() {
@@ -113,6 +157,11 @@ pub fn socks5_stream(dest_host: &str, dest_port: u16, timeout: Duration) -> Opti
     let mut head = [0u8; 4];
     s.read_exact(&mut head).ok()?;
     if head[0] != 0x05 || head[1] != 0x00 {
+        // شاهدِ فیلترینگ فقط از خروجیِ خط لوله معنی دارد: یک رد‌شدن روی استیج ۱
+        // دربارهٔ سرور Psiphon هیچ نمی‌گوید.
+        if head[1] == SOCKS5_REP_NOT_ALLOWED && proxy_port == crate::engine::exit_socks_port() {
+            crate::psiphon_health::on_destination_refused(dest_host, dest_port);
+        }
         return None;
     }
     match head[3] {
@@ -135,17 +184,26 @@ pub fn socks5_stream(dest_host: &str, dest_port: u16, timeout: Duration) -> Opti
     Some(s)
 }
 
+/// Destinations the connected-state watchdog dials through the pipeline.
+///
+/// Exposed so `state.rs` can register them with [`crate::psiphon_health`] as
+/// self-probes: a refusal of one of the app's own probes is not evidence that the
+/// exit filters, and counting it used to convict healthy servers and trigger a
+/// rotation that killed every live flow.
+pub const WATCHDOG_TARGETS: [(&str, u16); 3] =
+    [("cloudflare.com", 80), ("www.gstatic.com", 80), ("1.1.1.1", 80)];
+
+/// The watchdog destinations, for whoever needs to exempt them from scoring.
+pub fn watchdog_targets() -> impl Iterator<Item = (&'static str, u16)> {
+    WATCHDOG_TARGETS.iter().copied()
+}
+
 /// معادل `NetProbe.checkTcpViaProxy` — CONNECT به IP خام، بدون DNS.
 /// v1.2.0 watchdog: three independent end-to-end targets. A check passes
 /// when at least two targets complete through the engine SOCKS5 path, which
 /// avoids restarting a healthy tunnel because one CDN edge briefly hiccupped.
 pub fn watchdog_probe() -> bool {
-    const TARGETS: [(&str, u16); 3] = [
-        ("cloudflare.com", 80),
-        ("www.gstatic.com", 80),
-        ("1.1.1.1", 80),
-    ];
-    let passed = TARGETS
+    let passed = WATCHDOG_TARGETS
         .iter()
         .filter(|(host, port)| {
             socks5_stream(*host, *port, Duration::from_secs(5)).is_some()
@@ -156,6 +214,11 @@ pub fn watchdog_probe() -> bool {
 
 pub fn tcp_via_proxy(dest_ip: &str, dest_port: u16) -> bool {
     socks5_stream(dest_ip, dest_port, CONNECT_TIMEOUT).is_some()
+}
+
+/// همان بررسی، روی یک پورت SOCKS5 مشخص (دروازهٔ استیج ۱).
+pub fn tcp_via_proxy_on(proxy_port: u16, dest_ip: &str, dest_port: u16) -> bool {
+    socks5_stream_on(proxy_port, dest_ip, dest_port, CONNECT_TIMEOUT).is_some()
 }
 
 /// معادل `NetProbe.verify()` — یک HEAD واقعی از دل تونل.
@@ -305,6 +368,242 @@ pub fn network_looks_filtered() -> bool {
     !reachable
 }
 
+/// Does UDP survive on this network?
+///
+/// # Why the desktop needed this
+///
+/// `network_looks_filtered` only ever dialled TCP:80, so the desktop had no idea
+/// whether UDP worked - and the MASQUE carrier choice is *exactly* a question
+/// about UDP. HTTP/3 rides QUIC over UDP; HTTP/2 rides TCP. Because the desktop
+/// could not tell, the anti-DPI pass demoted every MASQUE attempt to HTTP/2
+/// unconditionally, and HTTP/2 is the carrier with the small flow-control
+/// window. The mobile build has run this probe since 1.2.8 (`SmartAuto.kt`
+/// `udpDnsProbe`), which is the real reason its downloads are fast: it only
+/// picks the TCP carrier on networks that actually need it.
+///
+/// A real DNS query for `example.com` to two public resolvers. An answer proves
+/// UDP round-trips survive; silence from both means UDP is dropped or throttled.
+pub fn udp_egress_ok() -> bool {
+    const RESOLVERS: [&str; 2] = ["1.1.1.1:53", "8.8.8.8:53"];
+    RESOLVERS
+        .iter()
+        .any(|server| udp_dns_probe(server, Duration::from_millis(1_200)))
+}
+
+/// Cloudflare edges the MASQUE prober itself tries first, plus one public
+/// HTTP/3 endpoint as a control. IP literals only - a poisoned resolver must not
+/// be able to change the verdict.
+const QUIC_PROBE_EDGES: [&str; 4] =
+    ["162.159.198.1:443", "162.159.197.1:443", "162.159.196.1:443", "1.1.1.1:443"];
+
+/// Whole-probe budget for the QUIC leg. Every edge is dialled at once, so this
+/// is the total cost added to a connect, not the cost per edge.
+const QUIC_PROBE_BUDGET: Duration = Duration::from_millis(1_600);
+
+/// Is the HTTP/3 (QUIC) MASQUE carrier actually usable on this network?
+///
+/// # Why [`udp_egress_ok`] alone was not enough
+///
+/// It answers a DNS query over UDP:53 and concludes from that single round trip
+/// that "UDP works", which the planner then reads as "HTTP/3 works". Those are
+/// not the same question, and on carrier networks they routinely have different
+/// answers: UDP:53 to a resolver is allowed (nothing browses without it) while
+/// QUIC on UDP:443 is dropped outright. The field log is unambiguous:
+///
+/// ```text
+///   udp=ok -> MASQUE carrier prefers HTTP/3 (QUIC)
+///   Attempt 1/5 -> MASQUE h3   ... SOCKS5 port never opened   (35s burnt)
+///   Attempt 2/5 -> MASQUE h3   ... scan deadline, no gateway  (60s burnt)
+///   Attempt 3/5 -> MASQUE h2   ... cached gateway still works (10s, connected)
+/// ```
+///
+/// The same cached gateway that "no longer works" twice over HTTP/3 answers
+/// immediately over HTTP/2. Nothing was wrong with the gateway, the network or
+/// the ladder: the fingerprint lied about the carrier, so the first two rungs
+/// were doomed before they were spawned. That is where the ~100 seconds the user
+/// waits on the Connect button actually goes.
+///
+/// # How this probes the real thing
+///
+/// A QUIC long-header packet carrying a deliberately unsupported version. Any
+/// QUIC server MUST answer that with a Version Negotiation packet (RFC 9000
+/// section 6.1), and producing one needs no keys, no certificate and no
+/// handshake - so this costs one datagram each way and still proves the exact
+/// thing the carrier choice depends on: does a QUIC packet to UDP:443 reach a
+/// Cloudflare edge, and does its answer come back.
+///
+/// All edges are probed concurrently and any answer is enough, so a healthy
+/// network pays about one round trip and a blocked one pays the budget once.
+pub fn quic_carrier_ok() -> bool {
+    // Cheap pre-gate: if UDP cannot even carry DNS, QUIC certainly does not work
+    // and there is no reason to pay the second probe.
+    if !udp_egress_ok() {
+        DiagnosticsLog::w(
+            "netprobe",
+            "fingerprint: UDP is blocked or throttled here - the HTTP/3 carrier cannot work on this network.",
+        );
+        return false;
+    }
+
+    let started = Instant::now();
+    let handles: Vec<_> = QUIC_PROBE_EDGES
+        .iter()
+        .map(|edge| {
+            let edge: &'static str = *edge;
+            std::thread::Builder::new()
+                .name("aether-quicprobe".into())
+                .spawn(move || quic_version_negotiation_probe(edge, QUIC_PROBE_BUDGET))
+        })
+        .collect();
+
+    let mut answered = false;
+    for handle in handles {
+        if let Ok(handle) = handle {
+            if handle.join().unwrap_or(false) {
+                answered = true;
+            }
+        }
+    }
+
+    if answered {
+        DiagnosticsLog::i(
+            "netprobe",
+            &format!(
+                "fingerprint: a Cloudflare edge answered QUIC on UDP:443 in {} ms - the HTTP/3 carrier is viable.",
+                started.elapsed().as_millis()
+            ),
+        );
+    } else {
+        DiagnosticsLog::w(
+            "netprobe",
+            "fingerprint: UDP works but no Cloudflare edge answered QUIC on UDP:443 - QUIC is filtered here, so HTTP/2 is the only carrier that can connect.",
+        );
+    }
+    answered
+}
+
+/// One QUIC Version Negotiation round trip. `true` means a QUIC server on the
+/// far side answered, i.e. the datagram left this machine and came back.
+fn quic_version_negotiation_probe(peer: &str, timeout: Duration) -> bool {
+    let addr: SocketAddr = match peer.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let sock = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if sock.set_read_timeout(Some(timeout)).is_err() {
+        return false;
+    }
+    if sock.set_write_timeout(Some(timeout)).is_err() {
+        return false;
+    }
+
+    let (packet, scid) = build_quic_version_probe();
+    if sock.send_to(&packet, addr).is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 1500];
+    match sock.recv_from(&mut buf) {
+        Ok((n, from)) if from.ip() == addr.ip() => is_version_negotiation(&buf[..n], &scid),
+        _ => false,
+    }
+}
+
+/// A long-header QUIC packet with a reserved version, padded to the 1200-byte
+/// minimum an Initial has to reach so that no edge discards it as too small.
+fn build_quic_version_probe() -> (Vec<u8>, [u8; 8]) {
+    let dcid = probe_cid(0xD0);
+    let scid = probe_cid(0x5C);
+
+    let mut pkt: Vec<u8> = Vec::with_capacity(1200);
+    // Header form + fixed bit set: this is a long header.
+    pkt.push(0xC0);
+    // A version from the reserved "force version negotiation" pattern (RFC 9000
+    // section 15: 0x?a?a?a?a is permanently reserved and never supported).
+    pkt.extend_from_slice(&[0x0a, 0x0a, 0x0a, 0x0a]);
+    pkt.push(dcid.len() as u8);
+    pkt.extend_from_slice(&dcid);
+    pkt.push(scid.len() as u8);
+    pkt.extend_from_slice(&scid);
+    pkt.resize(1200, 0);
+    (pkt, scid)
+}
+
+/// Did the far side send back a Version Negotiation packet for OUR probe?
+///
+/// A VN packet is a long header whose version field is zero and which echoes our
+/// source connection id back as its destination connection id. The echo check is
+/// what stops a stray datagram or an injected reply from being read as success.
+fn is_version_negotiation(msg: &[u8], scid: &[u8; 8]) -> bool {
+    if msg.len() < 7 {
+        return false;
+    }
+    if msg[0] & 0x80 == 0 {
+        return false; // short header: cannot be a VN packet
+    }
+    if u32::from_be_bytes([msg[1], msg[2], msg[3], msg[4]]) != 0 {
+        return false; // VN is the only long-header packet with version 0
+    }
+    let dcid_len = msg[5] as usize;
+    let dcid_end = 6 + dcid_len;
+    if dcid_end > msg.len() {
+        return false;
+    }
+    &msg[6..dcid_end] == scid.as_slice()
+}
+
+/// Connection id for the probe. Uniqueness is all that matters (it only has to
+/// come back unchanged), so the clock plus a counter is plenty - and it keeps
+/// this file free of a crypto-random dependency, exactly like
+/// [`transaction_id`] below.
+fn probe_cid(tag: u8) -> [u8; 8] {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed) as u64;
+    let mixed = nanos ^ (seq << 40) ^ ((tag as u64) << 56);
+    mixed.to_be_bytes()
+}
+
+fn udp_dns_probe(server: &str, timeout: Duration) -> bool {
+    // A minimal DNS query: id, standard query + recursion desired, 1 question,
+    // QNAME example.com, QTYPE A, QCLASS IN.
+    const QUERY: [u8; 29] = [
+        0xAE, 0x71, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x',
+        b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+    ];
+
+    let bound = match UdpSocket::bind("0.0.0.0:0") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if bound.set_read_timeout(Some(timeout)).is_err() {
+        return false;
+    }
+    let peer: SocketAddr = match server.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    if bound.send_to(&QUERY, peer).is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 512];
+    match bound.recv_from(&mut buf) {
+        // A well-formed reply: our transaction id back, and the QR bit set.
+        Ok((n, _)) if n >= 12 => {
+            buf[0] == QUERY[0] && buf[1] == QUERY[1] && (buf[2] & 0x80) != 0
+        }
+        _ => false,
+    }
+}
+
 /// HTTP/1.1 GET مینیمال — همان `httpGet` اندروید.
 fn http_get(stream: &mut TcpStream, host: &str, path: &str) -> Option<String> {
     let request = format!(
@@ -405,7 +704,7 @@ fn json_str(body: &str, key: &str) -> Option<String> {
 //  یک دیتاگرام UDP خام به سرور STUN. اگر پاسخ برگردد یعنی مسیر UDP مستقیم
 //  باز است و آی‌پی داخل پاسخ همان چیزی است که هر سایتی می‌تواند ببیند.
 
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::Ipv4Addr;
 
 /// سرورهای STUN — همان‌هایی که ابزارهای عمومی «WebRTC Leak Test» می‌زنند.
 pub const STUN_SERVERS: [&str; 4] = [
@@ -622,6 +921,60 @@ mod tests {
     #[test]
     fn transaction_ids_never_repeat() {
         assert_ne!(transaction_id(), transaction_id());
+    }
+
+    // --- 1.2.3-p3: the QUIC carrier probe that decides h3 vs h2 ---
+
+    #[test]
+    fn quic_probe_is_a_padded_long_header_with_a_reserved_version() {
+        let (pkt, scid) = build_quic_version_probe();
+        assert_eq!(pkt.len(), 1200, "an Initial-sized datagram is never dropped as too small");
+        assert_eq!(pkt[0] & 0x80, 0x80, "long header");
+        assert_eq!(pkt[0] & 0x40, 0x40, "fixed bit");
+        assert_eq!(&pkt[1..5], &[0x0a, 0x0a, 0x0a, 0x0a], "reserved: forces version negotiation");
+        assert_eq!(pkt[5], 8, "destination connection id length");
+        assert_eq!(pkt[14], 8, "source connection id length");
+        assert_eq!(&pkt[15..23], &scid, "the id we expect echoed back");
+    }
+
+    #[test]
+    fn accepts_a_version_negotiation_that_echoes_our_id() {
+        let (_, scid) = build_quic_version_probe();
+        let mut vn: Vec<u8> = vec![0xC0, 0x00, 0x00, 0x00, 0x00, 8];
+        vn.extend_from_slice(&scid);
+        vn.push(0); // empty source connection id
+        vn.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // one supported version
+        assert!(is_version_negotiation(&vn, &scid));
+    }
+
+    /// Anti-spoofing: a reply that does not carry our connection id back is not
+    /// evidence that OUR packet made the round trip.
+    #[test]
+    fn rejects_a_version_negotiation_for_a_foreign_id() {
+        let (_, scid) = build_quic_version_probe();
+        let mut vn: Vec<u8> = vec![0xC0, 0x00, 0x00, 0x00, 0x00, 8];
+        vn.extend_from_slice(&[9u8; 8]);
+        vn.push(0);
+        assert!(!is_version_negotiation(&vn, &scid));
+    }
+
+    #[test]
+    fn rejects_replies_that_are_not_version_negotiation() {
+        let (_, scid) = build_quic_version_probe();
+        // Short header.
+        assert!(!is_version_negotiation(&[0x40, 1, 2, 3, 4, 5, 6, 7], &scid));
+        // Long header, but a real version: that is a handshake packet, not VN.
+        let mut initial: Vec<u8> = vec![0xC0, 0x00, 0x00, 0x00, 0x01, 8];
+        initial.extend_from_slice(&scid);
+        assert!(!is_version_negotiation(&initial, &scid));
+        // Truncated.
+        assert!(!is_version_negotiation(&[0xC0, 0, 0], &scid));
+    }
+
+    #[test]
+    fn probe_connection_ids_never_repeat() {
+        assert_ne!(probe_cid(0xD0), probe_cid(0xD0));
+        assert_ne!(probe_cid(0xD0), probe_cid(0x5C));
     }
 
 }

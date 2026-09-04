@@ -16,6 +16,10 @@
 //!   * پروکسی بالادست            (--upstream / AETHER_UPSTREAM)
 //!   * تشخیص نام از بایت‌های اول  (AETHER_ROUTE_SNIFF, AETHER_ROUTE_SNIFF_MS)
 //!   * جایگزینی هویتِ ردشده       (AETHER_REPROVISION)
+//!
+//! v12 (۱.۲.۳): بک‌اند ترابرد ([TransportBackend]) اضافه شد — انتخاب بین موتور
+//! تنها و زنجیرهٔ `Aether → Psiphon`. آرگومان‌ها و متغیرهای موتور دست‌نخورده
+//! می‌مانند: زنجیره یک لایهٔ سمتِ ویندوز است، نه یک فلگ هسته.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -51,6 +55,64 @@ pub enum EndpointMode { Auto, ManualPeer, ManualRange }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SplitMode { Off, Include, Exclude }
+
+/// v12 (۱.۲.۳) — پورت ۱:۱ از `model/TransportBackend.kt`.
+///
+/// پشتهٔ شبکه‌ای که یک نشست روی آن ساخته می‌شود:
+///
+/// * [TransportBackend::Aether] — تنها موتور اِتِر. خروجی یک لبهٔ anycast
+///   کلادفلر (WARP) است؛ رفتار پیش‌فرض و عیناً همان ۱.۲.۲.
+/// * [TransportBackend::AetherPsiphon] — زنجیرهٔ دو استیجی. استیج ۱ موتور اِتِر
+///   روی [crate::engine::LOCAL_SOCKS_PORT] (عمداً بدون مسیر داده و بدون پل)، و
+///   استیج ۲ Psiphon روی [crate::engine::CHAIN_SOCKS_PORT] که از راه استیج ۱
+///   dial می‌کند و خروجیِ نهاییِ خط لوله است.
+///
+/// نام‌های serde همان کدهایی‌اند که رابط کاربری می‌فرستد و در `profile.json`
+/// ذخیره می‌شوند (`AETHER` / `AETHER_PSIPHON` — دقیقاً فهرست `BACKENDS` در
+/// `src/views/advanced.js`). پروفایل‌های پیش از ۱.۲.۳ این فیلد را ندارند و
+/// [default_backend] آن‌ها را بی‌صدا روی `AETHER` می‌گذارد.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TransportBackend {
+    #[default]
+    Aether,
+    AetherPsiphon,
+}
+
+impl TransportBackend {
+    /// آیا این بک‌اند استیج ۲ (Psiphon) را لازم دارد؟
+    ///
+    /// تنها دروازهٔ تصمیم در `state.rs`: اگر true باشد، نشست پیش از هر چیز
+    /// وجود استیج ۲ را بررسی می‌کند و استیج ۱ بدون مسیر داده بالا می‌آید.
+    pub fn is_chained(self) -> bool {
+        matches!(self, TransportBackend::AetherPsiphon)
+    }
+
+    /// برچسب خط لوله برای لاگ تشخیصی — عمداً می‌گوید خروجی **کدام** هاپ است.
+    pub fn pipeline_label(self) -> &'static str {
+        match self {
+            TransportBackend::Aether => "Aether only (exit = Cloudflare WARP edge)",
+            TransportBackend::AetherPsiphon => "Aether → Psiphon (chained; exit = Psiphon server)",
+        }
+    }
+
+    /// The label the home screen's PROTOCOL tile shows, identical to the mobile
+    /// edition's `TransportBackend.pipelineLabel`.
+    ///
+    /// # Why the chained mode needs its own label
+    ///
+    /// The tile used to render `effective_protocol` alone, so a chained session
+    /// said `MASQUE` — the protocol of the FIRST hop — and a user connected
+    /// through `Aether → Psiphon` had no way to tell that from a plain Aether
+    /// session. Two very different exits, one word. `None` for the plain backend
+    /// means "keep showing the concrete protocol, exactly as before".
+    pub fn protocol_label(self) -> Option<&'static str> {
+        match self {
+            TransportBackend::Aether => None,
+            TransportBackend::AetherPsiphon => Some("Aether \u{2192} Psiphon"),
+        }
+    }
+}
 
 /// v10 (هسته‌ی 1.5.0): روش ورود به سازمان Cloudflare Zero Trust.
 ///   Off          → ثبت‌نام معمولی (کاربر ناشناس WARP) — رفتار قبلی، پیش‌فرض.
@@ -184,6 +246,15 @@ pub const KEEPALIVE_PRESETS: [u32; 4] = [0, 10, 25, 45];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ConnectionProfile {
+    /// پشتهٔ شبکه: موتور تنها، یا زنجیرهٔ `Aether → Psiphon`.
+    #[serde(default = "default_backend")]
+    pub backend: TransportBackend,
+    /// کد ISO کشور خروج برای استیج ۲. `""` = خودکار.
+    ///
+    /// فیلتر **سخت** Psiphon است؛ `psiphon.rs` اگر در آن کشور سروری نبود به
+    /// خروجی خودکار برمی‌گردد، نه اینکه معلق بماند.
+    #[serde(default)]
+    pub exit_region: String,
     pub protocol: Protocol,
     pub scan_mode: ScanMode,
     pub ip_version: IpVersion,
@@ -260,6 +331,14 @@ pub struct ConnectionProfile {
     /// هسته‌ی 1.7.0 نام را از SNI یا هدر Host می‌خواند. پیش‌فرض **روشن** —
     /// دقیقاً مثل خود هسته.
     pub route_sniff: bool,
+    /// Revision of the settings *defaults* this profile was written against.
+    ///
+    /// Not a user setting and not shown anywhere. It exists so a default that
+    /// turns out to be wrong can be corrected on profiles that are already on
+    /// disk. Old files have no such key, so they deserialise as `0` (see
+    /// [`settings_rev_legacy`]) and get migrated once by `ProfileStore::load`.
+    #[serde(default = "settings_rev_legacy")]
+    pub settings_rev: u32,
     /// جایگزینی خودکار هویتی که Cloudflare دیگر نمی‌پذیرد
     /// (`AETHER_REPROVISION`). پیش‌فرض روشن: وگرنه تونل دست می‌دهد ولی
     /// هیچ ترافیکی عبور نمی‌کند.
@@ -279,11 +358,30 @@ pub struct ConnectionProfile {
     pub access_token: String,
 }
 
+/// پیش‌فرضِ `serde` برای پروفایل‌هایی که پیش از ۱.۲.۳ ذخیره شده‌اند.
+fn default_backend() -> TransportBackend {
+    TransportBackend::Aether
+}
+
+/// Current settings-defaults revision. Bump this whenever a default changes in
+/// a way that must also reach profiles already saved on disk.
+pub const SETTINGS_REV: u32 = 2;
+
+/// A profile file with no `settingsRev` key predates the mechanism.
+fn settings_rev_legacy() -> u32 {
+    0
+}
+
 impl Default for ConnectionProfile {
     fn default() -> Self {
         Self {
+            backend: TransportBackend::Aether,
+            exit_region: String::new(),
             protocol: Protocol::Smart,
-            scan_mode: ScanMode::Balanced,
+            // 1.2.3: Turbo, matching the mobile ladder, where every rung scans
+            // in Turbo because the ladder's speed comes from trying the NEXT
+            // strategy quickly rather than from one long exhaustive scan.
+            scan_mode: ScanMode::Turbo,
             ip_version: IpVersion::V4,
             quick_reconnect: true,
             masque_http2: false,
@@ -313,6 +411,7 @@ impl Default for ConnectionProfile {
             upstream: String::new(),
             route_sniff: true,
             reprovision: true,
+            settings_rev: SETTINGS_REV,
             access_secret: String::new(),
             access_token: String::new(),
         }
@@ -325,6 +424,34 @@ impl ConnectionProfile {
         self.reconnect_attempts = self.reconnect_attempts.clamp(3, 20);
         // Leak protection is mandatory and intentionally not user-editable.
         self.leak_guard = true;
+        // تنها دروازهٔ اعتبارسنجی کشور خروج. مقدار مستقیم داخل JSON کانفیگ
+        // Psiphon می‌نشیند، پس هر کد ناشناخته‌ای به «خودکار» تبدیل می‌شود.
+        self.exit_region = crate::exit_regions::normalize(&self.exit_region);
+    }
+
+    /// آیا این نشست استیج ۲ را لازم دارد؟
+    pub fn is_chained(&self) -> bool {
+        self.backend.is_chained()
+    }
+
+    /// پروفایلِ **استیج ۱** یک نشست زنجیره‌ای.
+    ///
+    /// معادل `connectAetherStage` اندروید. استیج ۱ نه مسیر داده دارد و نه پل:
+    /// آن‌ها مال زنجیرهٔ تمام‌شده‌اند، و اگر استیج ۱ بسازدشان ترافیک خود موتور
+    /// را می‌گیرند و تونل داخل خودش قفل می‌شود.
+    ///
+    /// `upstream` هم پاک می‌شود: پروکسی بالادستِ کاربر مال موتور است و باید
+    /// همان‌جا بماند، ولی `lan_share` نباید روی استیج ۱ چیزی باز کند.
+    pub fn chained_stage(&self) -> Self {
+        let mut stage = self.clone();
+        stage.backend = TransportBackend::Aether;
+        stage.lan_share = false;
+        stage
+    }
+
+    /// آدرسی که Psiphon به‌عنوان `UpstreamProxyUrl` می‌گیرد — یعنی استیج ۱.
+    pub fn chain_upstream_url() -> String {
+        format!("socks5://127.0.0.1:{}", crate::engine::LOCAL_SOCKS_PORT)
     }
 
     pub fn has_manual_peer(&self) -> bool {
@@ -386,10 +513,17 @@ impl ConnectionProfile {
 
         args.push(if self.quick_reconnect { "--quick-reconnect" } else { "--no-quick-reconnect" }.into());
 
-        if self.noize != Noize::Off {
-            args.push("--noize".into());
-            args.push(format!("{:?}", self.noize).to_lowercase());
-        }
+        // 1.2.3: `Off` has to be SENT, not omitted.
+        //
+        // The engine's own fallback when `AETHER_NOIZE` is absent is `firewall`
+        // (`lib.rs::noize_config`), so leaving the flag out never turned
+        // obfuscation off - it silently selected a heavier profile than the panel
+        // was displaying. The logs show it plainly: the panel said Noize = Off
+        // and the engine answered `[+] obfuscation profile: firewall`. Every
+        // junk packet and every padded handshake that profile adds was being
+        // paid on a connection the user believed was clean.
+        args.push("--noize".into());
+        args.push(format!("{:?}", self.noize).to_lowercase());
 
         if self.has_manual_peer() {
             args.push("--peer".into());
@@ -536,12 +670,33 @@ mod tests {
     #[test]
     fn default_profile_matches_android_argv() {
         let p = ConnectionProfile::default();
-        assert_eq!(p.to_args(), vec!["--balanced", "-4", "--quick-reconnect"]);
+        assert_eq!(
+            p.to_args(),
+            vec!["--turbo", "-4", "--quick-reconnect", "--noize", "off"]
+        );
         // v11: پروفایل پیش‌فرض هیچ متغیر جدیدی هم اضافه نمی‌کند.
         assert_eq!(
             p.to_env().keys().cloned().collect::<Vec<String>>(),
             vec!["AETHER_MASQUE_HTTP2".to_string()]
         );
+    }
+
+    /// 1.2.3: the shipped Advanced-panel defaults. Pinned as a test because
+    /// these are the values the panel shows on a fresh install and a silent
+    /// drift here is invisible until someone reads a log.
+    #[test]
+    fn shipped_defaults_match_the_advanced_panel() {
+        let p = ConnectionProfile::default();
+        assert_eq!(p.backend, TransportBackend::Aether);
+        assert_eq!(p.exit_region, "");
+        assert_eq!(p.protocol, Protocol::Smart);
+        assert_eq!(p.scan_mode, ScanMode::Turbo);
+        assert_eq!(p.ip_version, IpVersion::V4);
+        assert_eq!(p.noize, Noize::Off);
+        assert_eq!(p.endpoint_mode, EndpointMode::Auto);
+        // The carrier toggle stays off: HTTP/3 is the fast MASQUE data plane.
+        assert!(!p.masque_http2);
+        assert_eq!(p.settings_rev, SETTINGS_REV);
     }
 
     /// v1.2.0: گارد نشتی باید پیش‌فرض روشن باشد و روی آرگومان‌های موتور
@@ -572,7 +727,21 @@ mod tests {
             protocol: Protocol::Masque,
             ..Default::default()
         };
-        assert_eq!(p.to_args(), vec!["--masque", "-4", "--quick-reconnect", "--peer", "188.114.96.1:2408"]);
+        // 1.2.3: `--noize` is ALWAYS sent, `off` included (see `to_args_with_caps`).
+        // Leaving it out made the engine fall back to `firewall`, so it is pinned
+        // here as well: a manual peer only skips the SCAN-mode flag, nothing else.
+        assert_eq!(
+            p.to_args(),
+            vec![
+                "--masque",
+                "-4",
+                "--quick-reconnect",
+                "--noize",
+                "off",
+                "--peer",
+                "188.114.96.1:2408"
+            ]
+        );
         assert_eq!(p.connect_timeout_ms(), 45_000);
     }
 
@@ -588,7 +757,7 @@ mod tests {
         };
         assert_eq!(
             p.to_args(),
-            vec!["--wg", "--balanced", "-4", "--quick-reconnect", "--noize", "gfw",
+            vec!["--wg", "--turbo", "-4", "--quick-reconnect", "--noize", "gfw",
                  "--fragment", "--ech", "auto", "--keepalive", "25"]
         );
     }
@@ -656,7 +825,7 @@ mod tests {
         assert!(!args.iter().any(|a| a.starts_with("--route")));
         assert!(!args.iter().any(|a| a == "--dns"));
         // ولی فلگ‌های پایه باید باشند.
-        assert!(args.contains(&"--balanced".to_string()));
+        assert!(args.contains(&"--turbo".to_string()));
     }
 
     #[test]
@@ -762,6 +931,98 @@ mod tests {
         let old = off.to_env_with_caps(CoreCaps::for_version(1, 6));
         assert!(!old.contains_key("AETHER_ROUTE_SNIFF"));
         assert!(!old.contains_key("AETHER_REPROVISION"));
+    }
+
+    // --- v12: بک‌اند ترابرد (۱.۲.۳) ----------------------------------
+
+    /// پیش‌فرض باید موتور تنها بماند، وگرنه یک ارتقا رفتار کاربر را عوض می‌کند.
+    #[test]
+    fn backend_defaults_to_aether_and_is_not_chained() {
+        let p = ConnectionProfile::default();
+        assert_eq!(p.backend, TransportBackend::Aether);
+        assert!(!p.is_chained());
+        assert!(TransportBackend::AetherPsiphon.is_chained());
+    }
+
+    /// کدهای serde همان چیزی‌اند که `src/views/advanced.js` می‌فرستد.
+    #[test]
+    fn backend_wire_codes_match_the_ui() {
+        assert_eq!(
+            serde_json::to_string(&TransportBackend::Aether).unwrap(),
+            "\"AETHER\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransportBackend::AetherPsiphon).unwrap(),
+            "\"AETHER_PSIPHON\""
+        );
+        let p: ConnectionProfile =
+            serde_json::from_str(r#"{"backend":"AETHER_PSIPHON"}"#).unwrap();
+        assert!(p.is_chained());
+    }
+
+    /// پروفایل ذخیره‌شدهٔ ۱.۲.۲ (بدون کلید `backend`) باید دست‌نخورده بار شود.
+    #[test]
+    fn a_pre_123_profile_loads_as_aether() {
+        let p: ConnectionProfile =
+            serde_json::from_str(r#"{"protocol":"MASQUE","scanMode":"TURBO"}"#).unwrap();
+        assert_eq!(p.backend, TransportBackend::Aether);
+        assert!(!p.is_chained());
+    }
+
+    /// استیج ۱ یک نشست زنجیره‌ای هرگز نباید خودش زنجیره‌ای باشد (وگرنه
+    /// بازگشت بی‌پایان) و نباید روی شبکهٔ محلی چیزی باز کند.
+    #[test]
+    fn chained_stage_falls_back_to_the_engine_alone() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::AetherPsiphon,
+            lan_share: true,
+            exit_region: "DE".into(),
+            ..Default::default()
+        };
+        let stage = p.chained_stage();
+        assert_eq!(stage.backend, TransportBackend::Aether);
+        assert!(!stage.is_chained());
+        assert!(!stage.lan_share);
+    }
+
+    /// زنجیره یک لایهٔ سمتِ ویندوز است: هیچ فلگ یا متغیر تازه‌ای به موتور
+    /// نمی‌رود، پس قرارداد اندروید بایت‌به‌بایت همان می‌ماند.
+    #[test]
+    fn the_chained_backend_never_changes_the_engine_contract() {
+        let plain = ConnectionProfile::default();
+        let chained = ConnectionProfile {
+            backend: TransportBackend::AetherPsiphon,
+            exit_region: "NL".into(),
+            ..Default::default()
+        };
+        assert_eq!(plain.to_args(), chained.to_args());
+        assert_eq!(plain.to_env(), chained.to_env());
+        assert!(!chained.to_args().iter().any(|a| a.contains("psiphon")));
+    }
+
+    /// The chained tile has to read exactly like the mobile edition's, arrow and
+    /// all, and the plain backend must keep deferring to the concrete protocol.
+    #[test]
+    fn the_chained_backend_labels_the_whole_pipeline() {
+        assert_eq!(TransportBackend::Aether.protocol_label(), None);
+        assert_eq!(
+            TransportBackend::AetherPsiphon.protocol_label(),
+            Some("Aether \u{2192} Psiphon")
+        );
+        // Same glyph the mobile edition uses (U+2192), never "->" and never "+".
+        assert!(TransportBackend::AetherPsiphon
+            .protocol_label()
+            .unwrap()
+            .contains('\u{2192}'));
+    }
+
+    /// برچسب خط لوله برای لاگ باید دو حالت را از هم جدا کند.
+    #[test]
+    fn pipeline_labels_are_distinct() {
+        assert_ne!(
+            TransportBackend::Aether.pipeline_label(),
+            TransportBackend::AetherPsiphon.pipeline_label()
+        );
     }
 
     #[test]

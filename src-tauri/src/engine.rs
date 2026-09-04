@@ -12,6 +12,7 @@ use anyhow::{anyhow, Result};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -19,13 +20,65 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// همان پورتی که موتور در اندروید باز می‌کند.
+/// همان پورتی که موتور در اندروید باز می‌کند. استیج ۱ همیشه همین است.
 pub const LOCAL_SOCKS_PORT: u16 = 1819;
+
+/// پورتی که کل خط لولهٔ زنجیره‌ای `Aether → Psiphon` بیرون می‌دهد.
+///
+/// همان عددِ `TunnelConfig.CHAIN_SOCKS_PORT` اندروید است تا لاگ و مستندات دو
+/// سکو یکی بمانند — ولی **معنایش کمی متفاوت است، و این عمدی است**: در اندروید
+/// این پورت را `PsiphonSocksFront` می‌گیرد (لایه‌ای که UDP/udpgw/DNS را حمل
+/// می‌کند و Psiphon خودش روی ۱۸۲۷ می‌نشیند)، چون tun2socks آن‌جا
+/// `UDP ASSOCIATE` می‌خواهد. مسیر دادهٔ ویندوز پروکسی سیستمی WinINET است، یعنی
+/// از بنیاد TCP-only، و فقط `CONNECT` لازم دارد؛ پس Psiphon مستقیم همین پورت را
+/// می‌گیرد و آن لایهٔ میانی وجود ندارد. مفصل در `psiphon.rs`.
+pub const CHAIN_SOCKS_PORT: u16 = 1825;
 /// ۱.۲.۲: 10808/10809 با v2rayNG تداخل داشت، پس به 10810/10811 منتقل شد.
 pub const SHARE_SOCKS_PORT: u16 = 10810;
 pub const SHARE_HTTP_PORT: u16 = 10811;
 
 const GRACEFUL_EXIT_MS: u64 = 250;
+
+/// پورتی که **خروجی** خط لولهٔ فعال است: هرچه مسیر داده و خودآزما باید به آن
+/// وصل شوند.
+///
+/// در نشست عادی همان [LOCAL_SOCKS_PORT] است. در نشست زنجیره‌ای، پس از بالا
+/// آمدن استیج ۲، روی [CHAIN_SOCKS_PORT] تنظیم می‌شود.
+///
+/// ریشه‌ای که این متغیر برایش وجود دارد: پیش از این، `share.rs`، `probe.rs` و
+/// `diagnostics.rs` هر سه مستقیم به `LOCAL_SOCKS_PORT` سیم‌کشی شده بودند. در یک
+/// نشست زنجیره‌ای این یعنی پل و خودآزما به **استیج ۱** وصل می‌شدند — یعنی تونل
+/// بالا می‌آمد، نشانِ IP کشور هاپ اول را نشان می‌داد و کاربر از خروجی اِتِر
+/// بیرون می‌رفت، درست همان چیزی که زنجیره برای عوض‌کردنش هست. یک منبع حقیقت،
+/// یک بار تنظیم، بدون تغییر امضای هیچ تابعی.
+static EXIT_SOCKS_PORT: AtomicU16 = AtomicU16::new(LOCAL_SOCKS_PORT);
+
+/// پورت خروجیِ خط لولهٔ فعال.
+pub fn exit_socks_port() -> u16 {
+    EXIT_SOCKS_PORT.load(Ordering::Relaxed)
+}
+
+/// پورت خروجی را تنظیم می‌کند (استیج ۲ بالا آمد).
+pub fn set_exit_socks_port(port: u16) {
+    let previous = EXIT_SOCKS_PORT.swap(port, Ordering::Relaxed);
+    if previous != port {
+        // The latency probe's warm connection belongs to the OLD pipeline. Keeping
+        // it would time a dead path and publish its timeout as the user's ping.
+        crate::ping::reset();
+        DiagnosticsLog::i(
+            "engine",
+            &format!("Pipeline exit SOCKS5 port: {previous} -> {port}"),
+        );
+    }
+}
+
+/// بازگشت به موتور تنها — در هر قطع اتصال، شکست و چرخش نردبان صدا زده می‌شود.
+///
+/// اگر جا بیفتد، یک نشست عادیِ بعدی به پورت استیج ۲ که دیگر وجود ندارد وصل
+/// می‌ماند و «متصل ولی هیچ سایتی باز نمی‌شود» برمی‌گردد.
+pub fn reset_exit_socks_port() {
+    set_exit_socks_port(LOCAL_SOCKS_PORT);
+}
 
 /// نسخهٔ هستهٔ همراه برنامه — از فایل CORE_VERSION کنار aether.exe خوانده
 /// می‌شود (همان فایلی که پنل About نشان می‌دهد). در صورت هر ابهامی (0،0)
@@ -81,7 +134,32 @@ impl AetherProcess {
         }
     }
 
-    pub fn start(&mut self, profile: &ConnectionProfile) -> Result<()> {
+    /// Launches the engine for one rung of the ladder.
+    ///
+    /// `rung_budget_ms` is how long the caller ([`crate::state`]) will wait for
+    /// the SOCKS5 port before it tears this attempt down.
+    ///
+    /// ## 1.2.3-p3: the budget has to be told to the engine, not kept secret
+    ///
+    /// It was not passed before, and the two sides disagreed badly. The app gave
+    /// the first rung 35 s (`FIRST_PASS_MAX_MS`); the engine's own turbo scan
+    /// budget is 45 s and it only STARTS after loading the identity, an optional
+    /// ECH lookup and a cached-gateway verification. So on any network that
+    /// needed a real scan, the first rung was mathematically guaranteed to be
+    /// killed - with the scan roughly three quarters finished and its results
+    /// thrown away - and the second rung started the same doomed scan from
+    /// scratch. The field log shows precisely that: two attempts, 97 seconds,
+    /// `scan deadline reached with no gateway`, nothing learned.
+    ///
+    /// Now the engine gets the deadline it is actually being held to and shortens
+    /// its scan to fit, so a rung either finishes its scan or reports honestly
+    /// that it could not - and the ladder advances immediately instead of after
+    /// a stopwatch runs out.
+    pub fn start(
+        &mut self,
+        profile: &ConnectionProfile,
+        rung_budget_ms: Option<u64>,
+    ) -> Result<()> {
         if !self.exe.exists() {
             return Err(anyhow!("Engine binary missing: {}", self.exe.display()));
         }
@@ -122,6 +200,7 @@ impl AetherProcess {
             .current_dir(&run_dir)
             // v11: متغیرهای هستهٔ 1.7.0 هم مثل فلگ‌ها گِیت شده‌اند.
             .envs(profile.to_env_with_caps(caps))
+            .envs(scan_budget_env(rung_budget_ms))
             .env("HOME", &run_dir)
             .env("TMPDIR", &run_dir)
             // هستهٔ 1.4.0 بلافاصله بعد از مرحلهٔ جدید sysprofile با
@@ -304,6 +383,36 @@ fn spawn_drain<R: std::io::Read + Send + 'static>(reader: R) {
             DiagnosticsLog::w("engine", "Engine output stream closed.");
         })
         .ok();
+}
+
+/// Everything the engine has to do before its endpoint scan can even begin:
+/// load or provision the identity, optionally look up an ECHConfigList, verify
+/// the cached gateway, and afterwards build the tunnel, validate the data plane
+/// and open SOCKS5. Measured off the field log, generously rounded up.
+const ENGINE_SETUP_RESERVE_MS: u64 = 14_000;
+
+/// Never hand the engine a scan window so short that it cannot even try the
+/// documented gateway seeds.
+const MIN_SCAN_BUDGET_MS: u64 = 8_000;
+
+/// Translates this rung's wall-clock budget into the scan budget the engine
+/// understands. See [`AetherProcess::start`] for why this exists.
+fn scan_budget_env(rung_budget_ms: Option<u64>) -> Vec<(String, String)> {
+    let Some(total) = rung_budget_ms else {
+        return Vec::new();
+    };
+    let budget = total
+        .saturating_sub(ENGINE_SETUP_RESERVE_MS)
+        .max(MIN_SCAN_BUDGET_MS);
+    DiagnosticsLog::i(
+        "engine",
+        &format!(
+            "Rung budget {}s → engine endpoint-scan budget {}s (the rest is identity, gateway check and tunnel setup).",
+            total / 1000,
+            budget / 1000
+        ),
+    );
+    vec![("AETHER_SCAN_BUDGET_MS".to_string(), budget.to_string())]
 }
 
 /// معادل `PortProbe.kt`: پیش از اجرای موتور جدید، منتظر آزادشدن پورت می‌مانیم.

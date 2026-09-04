@@ -43,6 +43,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $out 'engine') | Out-Null
 Copy-Item $bin (Join-Path $out 'Aether.exe') -Force
 Copy-Item (Join-Path $root 'dist-engine/aether.exe')  (Join-Path $out 'engine') -Force
 Copy-Item (Join-Path $root 'dist-engine/wintun.dll')  (Join-Path $out 'engine') -Force
+# استیج ۲ زنجیره + فهرست سرور تعبیه‌شده. کنار aether.exe می‌نشینند تا
+# `prepare_runtime_engine` هر دو را با بقیهٔ موتور به پوشهٔ دادهٔ قابل‌نوشتن
+# کاربر منتقل کند (همان رفع ریشه‌ای خطای Access is denied).
+Copy-Item (Join-Path $root 'dist-engine/psiphon-tunnel-core.exe') (Join-Path $out 'engine') -Force
+Copy-Item (Join-Path $root 'dist-engine/server_entries.txt')      (Join-Path $out 'engine') -Force
+$psiVer = Join-Path $root 'dist-engine/PSIPHON_VERSION'
+if (Test-Path $psiVer) { Copy-Item $psiVer (Join-Path $out 'engine') -Force }
 # نسخهٔ واقعی هستهٔ سینک‌شده را در payload بگذار (نه برچسب ثابت ریشهٔ مخزن).
 $realVer = Join-Path $root 'native/aether/CORE_VERSION'
 if (Test-Path $realVer) { Copy-Item $realVer (Join-Path $out 'engine') -Force }
@@ -50,7 +57,7 @@ else { Copy-Item (Join-Path $root 'CORE_VERSION') (Join-Path $out 'engine') -For
 Copy-Item (Join-Path $root 'LICENSE')                 $out -Force -ErrorAction SilentlyContinue
 
 # دروازهٔ سلامت: هیچ پیلودی بدون موتور و درایور نباید منتشر شود.
-foreach ($f in @('Aether.exe','engine/aether.exe','engine/wintun.dll')) {
+foreach ($f in @('Aether.exe','engine/aether.exe','engine/wintun.dll','engine/psiphon-tunnel-core.exe','engine/server_entries.txt')) {
   if (-not (Test-Path (Join-Path $out $f))) { throw "Payload incomplete: $f is missing" }
 }
 Get-ChildItem $out -Recurse | Select-Object FullName, Length | Format-Table -AutoSize

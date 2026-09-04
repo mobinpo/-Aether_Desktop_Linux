@@ -77,6 +77,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   AETHER_REPO: CluvexStudio/Aether
+  # همان نسخه‌ای که مخزن اندروید به‌شکل psiphontunnel-2.0.39.aar حمل می‌کند.
+  PSIPHON_VERSION: 2.0.39
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ jobs:
             "src/styles/tokens.css"
             "src/styles/app.css"
             "src/styles/desktop.css"
+            "src/flags.js"
             "src/views/home.js"
             "src/views/advanced.js"
             "src/views/diagnostics.js"
@@ -131,6 +134,11 @@ jobs:
             "installer/aether.iss"
             "scripts/sync-core.sh"
             "scripts/build-engine.ps1"
+            "scripts/build-psiphon.ps1"
+            "assets/psiphon/server_entries.txt"
+            "src-tauri/src/psiphon.rs"
+            "src-tauri/src/psiphon_health.rs"
+            "src-tauri/src/exit_regions.rs"
             "scripts/core-rollback.ps1"
             "scripts/fetch-wintun.ps1"
             "scripts/stage-payload.ps1"
@@ -317,6 +325,20 @@ jobs:
       - name: Fetch Wintun driver
         shell: pwsh
         run: ./scripts/fetch-wintun.ps1 -ArchDir '${{ matrix.wintun_dir }}'
+
+      # ---- استیج ۲ زنجیره: psiphon-tunnel-core -------------------------
+      # نسخه به نسخهٔ AAR مخزن اندروید پین است، تا هر دو سکو یک کتابخانه را
+      # اجرا کنند. اگر این مرحله بشکند بیلد باید بشکند: یک نصبِ بدون استیج ۲،
+      # بک‌اند زنجیره‌ای را در زمان اجرا رد می‌کند و کاربر یک قابلیتِ نیمه
+      # می‌گیرد.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: Build Psiphon stage (psiphon-tunnel-core.exe)
+        shell: pwsh
+        run: ./scripts/build-psiphon.ps1 -Arch '${{ matrix.arch }}' -Version '${{ env.PSIPHON_VERSION }}'
 
       # تست‌ها عمداً بعد از ساخت موتور اجرا می‌شوند؛ چون tauri.conf.json
       # فایل‌های dist-engine را به‌عنوان resource لازم دارد.

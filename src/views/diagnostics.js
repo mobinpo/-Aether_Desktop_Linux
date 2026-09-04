@@ -171,16 +171,21 @@ export function renderDiagnostics() {
     await refresh()
   })
 
-  // تازه‌سازی زنده — هر ۱ ثانیه؛ پاک‌سازی در unmount.
-  refresh()
-  const timer = setInterval(refresh, 1000)
-  const obs = new MutationObserver(() => {
-    if (!document.body.contains(root)) {
-      clearInterval(timer)
-      obs.disconnect()
-    }
-  })
-  obs.observe(document.body, { childList: true, subtree: true })
+  // تازه‌سازی زنده — هر ۱ ثانیه، فقط وقتی این تب دیده می‌شود.
+  //
+  // This used to watch document.body with a subtree MutationObserver purely to
+  // notice its own unmount — a global observer firing on every DOM change the
+  // whole app made, plus a 1s log poll that kept running after the user had
+  // moved on. The panel now starts and stops with its own visibility.
+  let timer = null
+  root.__onShow = () => {
+    refresh()
+    timer ??= setInterval(refresh, 1000)
+  }
+  root.__onHide = () => {
+    clearInterval(timer)
+    timer = null
+  }
 
   return root
 }
