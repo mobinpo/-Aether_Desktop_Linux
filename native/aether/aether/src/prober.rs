@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures::stream::StreamExt;
@@ -79,11 +79,188 @@ pub fn prioritize(all: &[&'static str], first: &[&'static str]) -> Vec<&'static 
     out
 }
 
+// >>> AETHER-APP-PATCH scan-cidrs
+//
+// «بازهٔ آدرس» در تنظیمات برنامه (EndpointMode::ManualRange).
+//
+// برنامه سه متغیر AETHER_SCAN_CIDRS / AETHER_MASQUE_CIDRS / AETHER_WG_CIDRS را
+// به موتور می‌دهد، ولی آپ‌استریم هیچ‌کدام را نمی‌خواند: بدون این پچ کاربر بازه
+// می‌نویسد و اسکن، بی‌صدا، همان بازه‌های توکار خودش را جارو می‌کند — تنظیمی که
+// فقط ادای کار کردن درمی‌آورد.
+//
+// قاعده‌ها:
+//   * متغیر مخصوص پروتکل بر AETHER_SCAN_CIDRS مقدم است.
+//   * این ورودیِ کاربر است: هر تکه اعتبارسنجی می‌شود و تکهٔ نامعتبر دور
+//     انداخته می‌شود، نه اینکه اسکن را بترکاند.
+//   * اگر هیچ تکهٔ معتبری نماند، رفتار توکار برمی‌گردد. اسکنِ خالی یعنی «اصلاً
+//     وصل نشو»، و کاربری که بازه را غلط تایپ کرده انتظارِ آن را ندارد.
+//   * ترتیبِ نوشتهٔ کاربر حفظ می‌شود؛ prioritize (چیدنِ Zero Trust جلوتر) روی
+//     بازهٔ دستی اعمال نمی‌شود، چون خودِ کاربر گفته چه چیزی اول بیاید.
+
+/// یک تکهٔ ورودی → بازه‌ای که سازندهٔ کاندیدها می‌فهمد، یا None.
+///
+/// دقت در طولِ پیشوند لازم است: `parse_cidr_v4` هر عددی را که در u8 جا شود
+/// می‌پذیرد، پس «10.0.0.0/64» از آن رد می‌شود و بعد در `sample_cidr_v4` به یک
+/// آدرسِ تنها فرومی‌پاشد. یعنی بازهٔ غلط، بی هیچ پیامی، به یک آی‌پی تبدیل
+/// می‌شود. اینجا جلویش گرفته می‌شود.
+fn normalize_cidr(entry: &str) -> Option<String> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+
+    if let Some((ip, prefix)) = entry.split_once('/') {
+        let len: u8 = prefix.trim().parse().ok()?;
+        let ip = ip.trim();
+        if ip.parse::<Ipv4Addr>().is_ok() && len <= 32 {
+            return Some(format!("{ip}/{len}"));
+        }
+        if ip.parse::<Ipv6Addr>().is_ok() && len <= 128 {
+            return Some(format!("{ip}/{len}"));
+        }
+        return None;
+    }
+
+    // یک آدرس تنها هم بازهٔ یک‌میزبانه است. کاربری که «188.114.98.7» نوشته
+    // منظورش همان یک آدرس است، نه ورودیِ خراب.
+    if let Ok(a) = entry.parse::<Ipv4Addr>() {
+        return Some(format!("{a}/32"));
+    }
+    if let Ok(a) = entry.parse::<Ipv6Addr>() {
+        return Some(format!("{a}/128"));
+    }
+    None
+}
+
+/// متنِ خامِ متغیر → فهرست بازه‌های معتبر. جدا از خواندنِ محیط نگه داشته شده تا
+/// آزمون‌پذیر باشد بدون دست‌زدن به محیطِ فرایند.
+fn parse_pinned(raw: &str) -> Option<Vec<&'static str>> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for piece in raw.split([',', ';', ' ', '\t', '\n', '\r']) {
+        if let Some(norm) = normalize_cidr(piece) {
+            if out.iter().any(|existing| *existing == norm.as_str()) {
+                continue;
+            }
+            // یک‌بار در طول عمر فرایند و فقط برای چند بازه؛ سازندهٔ کاندیدها
+            // &'static می‌خواهد و همان چیزی است که بازه‌های توکار هستند.
+            out.push(Box::leak(norm.into_boxed_str()));
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn pinned_all(specific: &str) -> Option<&'static [&'static str]> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<&'static [&'static str]>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hit) = guard.get(specific) {
+        return *hit;
+    }
+
+    let raw = std::env::var(specific)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            std::env::var("AETHER_SCAN_CIDRS")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        });
+    let value = raw
+        .as_deref()
+        .and_then(parse_pinned)
+        .map(|list| &*Box::leak(list.into_boxed_slice()));
+    guard.insert(specific.to_string(), value);
+    value
+}
+
+/// بازه‌های IPv4 که کاربر پین کرده، اگر لااقل یکی معتبر باشد.
+pub fn pinned_cidrs_v4(specific: &str) -> Option<Vec<&'static str>> {
+    let picked: Vec<&'static str> = pinned_all(specific)?
+        .iter()
+        .copied()
+        .filter(|c| c.contains('.'))
+        .collect();
+    (!picked.is_empty()).then_some(picked)
+}
+
+/// همان برای IPv6.
+pub fn pinned_cidrs_v6(specific: &str) -> Option<Vec<&'static str>> {
+    let picked: Vec<&'static str> = pinned_all(specific)?
+        .iter()
+        .copied()
+        .filter(|c| c.contains(':'))
+        .collect();
+    (!picked.is_empty()).then_some(picked)
+}
+
+fn cidr_v4_contains(cidr: &str, addr: Ipv4Addr) -> bool {
+    match parse_cidr_v4(cidr) {
+        Some((base, len)) if len <= 32 => {
+            let mask = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+            (u32::from(addr) & mask) == (base & mask)
+        }
+        _ => false,
+    }
+}
+
+fn cidr_v6_contains(cidr: &str, addr: Ipv6Addr) -> bool {
+    match parse_cidr_v6(cidr) {
+        Some((base, len)) if len <= 128 => {
+            let mask = if len == 0 { 0 } else { u128::MAX << (128 - len) };
+            (u128::from(addr) & mask) == (base & mask)
+        }
+        _ => false,
+    }
+}
+
+/// دانه‌های توکار وقتی کاربر بازه پین کرده است.
+///
+/// دانه‌ها اول از همه پروب می‌شوند، پس اگر دست‌نخورده بمانند، پین‌شدنِ بازه
+/// بی‌معنی می‌شود: تونل با احتمال زیاد روی آدرسی بسته می‌شود که کاربر آن را
+/// نخواسته. آن‌هایی که *داخل* بازه هستند می‌مانند — سرعتِ راه‌اندازی را نگه
+/// می‌دارند بی آنکه از بازه بیرون بزنند.
+pub fn seeds_within(seeds: &[&'static str], specific: &str) -> Vec<&'static str> {
+    if pinned_all(specific).is_none() {
+        return seeds.to_vec();
+    }
+    let v4 = pinned_cidrs_v4(specific).unwrap_or_default();
+    let v6 = pinned_cidrs_v6(specific).unwrap_or_default();
+    seeds
+        .iter()
+        .copied()
+        .filter(|seed| {
+            if let Ok(a) = seed.parse::<Ipv4Addr>() {
+                return v4.iter().any(|c| cidr_v4_contains(c, a));
+            }
+            if let Ok(a) = seed.parse::<Ipv6Addr>() {
+                return v6.iter().any(|c| cidr_v6_contains(c, a));
+            }
+            false
+        })
+        .collect()
+}
+// <<< AETHER-APP-PATCH scan-cidrs
+
 pub fn masque_cidrs_v4() -> Vec<&'static str> {
+    // >>> AETHER-APP-PATCH scan-cidrs
+    if let Some(pinned) = pinned_cidrs_v4("AETHER_MASQUE_CIDRS") {
+        return pinned;
+    }
+    // <<< AETHER-APP-PATCH scan-cidrs
     prioritize(MASQUE_CIDRS_V4, MASQUE_ZT_CIDRS_V4)
 }
 
 pub fn masque_cidrs_v6() -> Vec<&'static str> {
+    // >>> AETHER-APP-PATCH scan-cidrs
+    if let Some(pinned) = pinned_cidrs_v6("AETHER_MASQUE_CIDRS") {
+        return pinned;
+    }
+    // <<< AETHER-APP-PATCH scan-cidrs
     prioritize(MASQUE_CIDRS_V6, MASQUE_ZT_CIDRS_V6)
 }
 
@@ -536,8 +713,16 @@ fn build_candidates(st: &Strategy, ports: &[u16], ip: IpScan) -> Vec<(IpAddr, u1
     let mut out: Vec<(IpAddr, u16)> = Vec::new();
     let mut seen: HashSet<(IpAddr, u16)> = HashSet::new();
 
-    let seeds: Vec<Ipv4Addr> = MASQUE_SEEDS.iter().filter_map(|s| s.parse().ok()).collect();
-    let seeds6: Vec<Ipv6Addr> = MASQUE_SEEDS_V6.iter().filter_map(|s| s.parse().ok()).collect();
+    // >>> AETHER-APP-PATCH scan-cidrs — دانه‌ها هم به بازهٔ پین‌شده محدود می‌شوند
+    let seeds: Vec<Ipv4Addr> = seeds_within(MASQUE_SEEDS, "AETHER_MASQUE_CIDRS")
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let seeds6: Vec<Ipv6Addr> = seeds_within(MASQUE_SEEDS_V6, "AETHER_MASQUE_CIDRS")
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    // <<< AETHER-APP-PATCH scan-cidrs
 
     if ip.want_v4() {
         for a in &seeds {
@@ -574,10 +759,16 @@ fn build_candidates(st: &Strategy, ports: &[u16], ip: IpScan) -> Vec<(IpAddr, u1
             }
         }
         let per = if st.sample_per_cidr == 0 { 96 } else { st.sample_per_cidr };
+        // >>> AETHER-APP-PATCH scan-cidrs
+        // آدرس v6 وارپ یک آدرس v4 را در خودش جا می‌دهد؛ اگر کاربر بازهٔ v4 پین
+        // کرده باشد، همان باید جاسازی شود، وگرنه v6 از بازه بیرون می‌زند.
+        let embed_v4: Vec<&'static str> = pinned_cidrs_v4("AETHER_MASQUE_CIDRS")
+            .unwrap_or_else(|| MASQUE_CIDRS_V4.to_vec());
         let cidr6: Vec<Vec<Ipv6Addr>> = masque_cidrs_v6()
             .iter()
-            .map(|c| sample_cidr_v6(c, per, MASQUE_CIDRS_V4))
+            .map(|c| sample_cidr_v6(c, per, &embed_v4))
             .collect();
+        // <<< AETHER-APP-PATCH scan-cidrs
         let max6 = cidr6.iter().map(|v| v.len()).max().unwrap_or(0);
         for i in 0..max6 {
             for hosts in &cidr6 {
@@ -700,6 +891,66 @@ fn sample_cidr_v6(cidr: &str, n: usize, v4_cidrs: &[&str]) -> Vec<Ipv6Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // >>> AETHER-APP-PATCH scan-cidrs — آزمون‌های «بازهٔ آدرس»
+    #[test]
+    fn a_pinned_range_list_keeps_what_is_valid_and_drops_what_is_not() {
+        let parsed = parse_pinned("162.159.192.0/24, 188.114.98.7 ;2606:4700:d0::/64").unwrap();
+        assert_eq!(
+            parsed,
+            vec!["162.159.192.0/24", "188.114.98.7/32", "2606:4700:d0::/64"],
+            "یک آدرس تنها باید بازهٔ یک‌میزبانه شود و ترتیب کاربر حفظ بماند"
+        );
+
+        // بازهٔ ناممکن روی v4: parse_cidr_v4 عدد را می‌پذیرد و بعد بی‌صدا به یک
+        // آدرس فرومی‌پاشد، پس اینجا باید رد شود.
+        assert!(parse_pinned("10.0.0.0/64").is_none());
+        assert!(parse_pinned("not-an-ip, ,, /24").is_none());
+        assert_eq!(
+            parse_pinned("1.1.1.0/24,1.1.1.0/24").unwrap(),
+            vec!["1.1.1.0/24"]
+        );
+    }
+
+    #[test]
+    fn a_pinned_range_replaces_the_built_in_ranges_and_trims_the_seeds() {
+        // متغیر مخصوصِ همین آزمون تا با آزمون‌های دیگر (و AETHER_SCAN_CIDRS) قاطی نشود.
+        std::env::set_var("AETHER_TEST_PIN_CIDRS", "188.114.98.0/24, 2606:4700:d0::/64");
+
+        let v4 = pinned_cidrs_v4("AETHER_TEST_PIN_CIDRS").unwrap();
+        assert_eq!(v4, vec!["188.114.98.0/24"]);
+        let v6 = pinned_cidrs_v6("AETHER_TEST_PIN_CIDRS").unwrap();
+        assert_eq!(v6, vec!["2606:4700:d0::/64"]);
+
+        // دانهٔ داخل بازه می‌ماند، دانهٔ بیرون می‌رود.
+        let kept = seeds_within(
+            &["188.114.98.1", "162.159.192.1", "2606:4700:d0::a29f:c602"],
+            "AETHER_TEST_PIN_CIDRS",
+        );
+        assert_eq!(kept, vec!["188.114.98.1", "2606:4700:d0::a29f:c602"]);
+
+        // بی هیچ پینی، دانه‌ها دست‌نخورده‌اند.
+        assert_eq!(
+            seeds_within(MASQUE_SEEDS, "AETHER_TEST_PIN_NOTHING_SET"),
+            MASQUE_SEEDS.to_vec()
+        );
+    }
+
+    #[test]
+    fn range_membership_is_computed_on_the_prefix_not_on_the_text() {
+        assert!(cidr_v4_contains("162.159.192.0/24", "162.159.192.77".parse().unwrap()));
+        assert!(!cidr_v4_contains("162.159.192.0/24", "162.159.193.1".parse().unwrap()));
+        assert!(cidr_v4_contains("0.0.0.0/0", "8.8.8.8".parse().unwrap()));
+        assert!(cidr_v6_contains(
+            "2606:4700:d0::/48",
+            "2606:4700:d0::a29f:c602".parse().unwrap()
+        ));
+        assert!(!cidr_v6_contains(
+            "2606:4700:d0::/48",
+            "2606:4700:100::1".parse().unwrap()
+        ));
+    }
+    // <<< AETHER-APP-PATCH scan-cidrs
 
     #[test]
     fn the_documented_zero_trust_masque_ingress_range_is_scanned() {

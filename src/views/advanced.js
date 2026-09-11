@@ -315,16 +315,19 @@ function listArea(label, key, values, placeholder, hint) {
 // Cached promise for `core_caps` — see the call site at the bottom of this file.
 let CAPS_ONCE = null
 
-export function renderAdvanced() {
-  const p = app.profile
-  const root = document.createElement('div')
-  root.className = 'view view--advanced'
-  root.innerHTML = `
-    <h2 class="view__title">${t('Advanced')}</h2>
+// =============================================================================
+//  بخش‌های تنظیمات
+// =============================================================================
+//
+//  چرا این پنل به قطعه‌های نام‌دار شکسته شد: منوی تنظیماتِ موبایل (a2) هر گروه
+//  را در صفحهٔ خودش نشان می‌دهد، و راه ساده‌اش این بود که آن صفحه‌ها کنترل‌های
+//  خودشان را از نو بسازند. آن راه یعنی دو نسخه از هر کنترل و دو سیم‌کشیِ ذخیره،
+//  و روزی که یکی از دو نسخه ثابت شود و دیگری نه. پس همان یک قالب و همان یک
+//  سیم‌کشی می‌ماند و `renderAdvanced` می‌تواند زیرمجموعه‌ای از آن را بدهد.
+const SECTIONS = {
+  language: (p) => segmented(t('Language'), '__lang', LANGS, getLang()),
 
-    ${segmented(t('Language'), '__lang', LANGS, getLang())}
-
-    <h3 class="view__subtitle">${t('Transport')}</h3>
+  connection: (p) => `
     ${segmented(t('Backend'), 'backend', BACKENDS, p.backend || 'AETHER')}
     <section class="field">
       <span class="field__hint">${t('Aether alone exits through a Cloudflare WARP edge. Chaining Psiphon keeps Aether as the first hop and swaps the exit for an ordinary hosting IP, which is what opens sites that reject WARP ranges.')}</span>
@@ -333,42 +336,40 @@ export function renderAdvanced() {
     <section class="field">
       <span class="field__hint">${t('Only applies to the chained backend. If no server is reachable in that country, Aether falls back to an automatic exit instead of hanging.')}</span>
     </section>
-
     ${segmented(t('Protocol'), 'protocol', PROTOCOLS, p.protocol)}
     ${segmented(t('Scan mode'), 'scanMode', SCAN_MODES, p.scanMode)}
-    ${segmented(t('IP version'), 'ipVersion', IP_VERSIONS, p.ipVersion)}
+    ${segmented(t('IP version'), 'ipVersion', IP_VERSIONS, p.ipVersion)}`,
+
+  transport: (p) => `
     ${dropdown(t('Noize'), 'noize', NOIZE, p.noize)}
     ${dropdown(t('Endpoint'), 'endpointMode', ENDPOINT_MODES, p.endpointMode)}
-
     <div id="endpoint-extra">
       ${p.endpointMode === 'MANUAL_PEER' ? textField(t('Peer address'), 'manualPeer', p.manualPeer, '1.2.3.4:443') : ''}
       ${p.endpointMode === 'MANUAL_RANGE' ? textField(t('Address range'), 'manualRange', p.manualRange, '162.159.192.0/24') : ''}
     </div>
-
     ${dropdown('MTU', 'mtu', MTU_PRESETS.map((v) => [String(v), String(v)]), String(p.mtu))}
     ${dropdown('Keepalive', 'keepalive', KEEPALIVE_PRESETS.map((v) => [String(v), v === 0 ? t('Off') : `${v}s`]), String(p.keepalive))}
-
     ${toggle(t('Quick reconnect'), 'quickReconnect', t('Reconnect instantly after a drop'), p.quickReconnect)}
     ${toggle(t('MASQUE over HTTP/2'), 'masqueHttp2', t('Helps on networks that block HTTP/3'), p.masqueHttp2)}
     ${toggle(t('Packet fragmentation'), 'fragment', t('Splits the handshake to evade filtering'), p.fragment)}
-    ${toggle('ECH', 'ech', t('Encrypted Client Hello (auto)'), p.ech)}
-    ${toggle(t('Share over LAN'), 'lanShare', t('Let other devices on your network use this tunnel'), p.lanShare)}
+    ${toggle('ECH', 'ech', t('Encrypted Client Hello (auto)'), p.ech)}`,
 
-    <h3 class="view__subtitle">${t('Connection safety')}</h3>
+  safety: (p) => `
     ${toggle(t('Kill switch'), 'killSwitch', t('Block browser traffic if the tunnel drops'), p.killSwitch)}
     ${toggle(t('IPv6 leak protection'), 'ipv6Protection', t('Keep the IPv6 default route protected or block it safely'), p.ipv6Protection)}
-    ${dropdown(t('Automatic reconnect attempts'), 'reconnectAttempts', RECONNECT_ATTEMPTS.map((v) => [String(v), `${v}`]), String(p.reconnectAttempts ?? 3))}
+    ${dropdown(t('Automatic reconnect attempts'), 'reconnectAttempts', RECONNECT_ATTEMPTS.map((v) => [String(v), `${v}`]), String(p.reconnectAttempts ?? 3))}`,
 
-
+  apps: (p) => `
+    ${toggle(t('Share over LAN'), 'lanShare', t('Let other devices on your network use this tunnel'), p.lanShare)}
     ${dropdown(t('Split tunneling'), 'splitMode', SPLIT_MODES, p.splitMode)}
     <section class="field" id="split-apps" ${p.splitMode === 'OFF' ? 'hidden' : ''}>
       <span class="field__label">${t('Applications')}</span>
       <textarea class="input input--area ltr" dir="ltr" data-key="splitApps"
         placeholder="chrome.exe&#10;telegram.exe">${(p.splitApps || []).join('\n')}</textarea>
       <span class="field__hint">${t('One executable name per line.')}</span>
-    </section>
+    </section>`,
 
-    <h3 class="view__subtitle">${t('Zero Trust')}</h3>
+  zerotrust: (p) => `
     <section class="field" id="caps-note" hidden>
       <span class="field__hint" id="caps-note-text"></span>
     </section>
@@ -385,7 +386,16 @@ export function renderAdvanced() {
       ${toggle(t('Gateway proxy'), 'gateway', t('Route HTTP/HTTPS through your organization\'s Gateway (adds a hop and logs browsing)'), p.gateway)}
     </div>
     </div>
+    <div id="v17-identity">
+    <h3 class="view__subtitle">${t('Account identity')}</h3>
+    ${toggle(t('Replace a refused identity'), 'reprovision', t('If Cloudflare stops accepting the saved device, register a fresh one instead of handshaking a tunnel that carries no traffic'), p.reprovision !== false)}
+    </div>`,
 
+  dns: (p) => `
+    <div id="v15-dns">
+    <h3 class="view__subtitle">DNS</h3>
+    ${listArea(t('In-tunnel DNS servers'), 'dns', p.dns, '1.1.1.1&#10;9.9.9.9', t('Resolvers used inside the tunnel. Empty = engine defaults.'))}
+    </div>
     <div id="v15-routing">
     <h3 class="view__subtitle">${t('Routing rules')}</h3>
     ${listArea(t('Blocked destinations'), 'routeBlock', p.routeBlock, 'ads.example.com&#10;203.0.113.0/24', t('One rule per line — domain, IP or CIDR. These connections are refused.'))}
@@ -393,34 +403,32 @@ export function renderAdvanced() {
     <div id="v17-sniff">
     ${toggle(t('Match domain rules by real host name'), 'routeSniff', t('Reads the name from the first bytes (TLS SNI or HTTP Host), so domain rules keep working even though Windows hands the tunnel an IP address'), p.routeSniff !== false)}
     </div>
-    </div>
+    </div>`,
 
-    <div id="v15-dns">
-    <h3 class="view__subtitle">DNS</h3>
-    ${listArea(t('In-tunnel DNS servers'), 'dns', p.dns, '1.1.1.1&#10;9.9.9.9', t('Resolvers used inside the tunnel. Empty = engine defaults.'))}
-    </div>
-
+  upstream: (p) => `
     <div id="v17-upstream">
-    <h3 class="view__subtitle">${t('Upstream proxy')}</h3>
     ${textField(t('Proxy address'), 'upstream', p.upstream, 'socks5://127.0.0.1:1080', { hint: t('Aether dials out through this proxy — use it to chain behind another VPN or proxy already running on this PC. Empty = direct.') })}
     <section class="field">
       <span class="field__hint" id="upstream-note"></span>
     </section>
-    </div>
+    </div>`,
 
-    <div id="v17-identity">
-    <h3 class="view__subtitle">${t('Account identity')}</h3>
-    ${toggle(t('Replace a refused identity'), 'reprovision', t('If Cloudflare stops accepting the saved device, register a fresh one instead of handshaking a tunnel that carries no traffic'), p.reprovision !== false)}
-    </div>
+}
 
-    <section class="field field--row">
-      <div>
-        <span class="field__label">${t('Reset to defaults')}</span>
-        <span class="field__hint">${t('Restores every setting above to its factory value')}</span>
-      </div>
-      <button type="button" class="btn btn--danger" id="reset-defaults">${t('Reset')}</button>
-    </section>
-  `
+/**
+ * کنترل‌های بخش‌های نام‌بُرده را می‌سازد و سیم‌کشی می‌کند.
+ *
+ * @param {string[]} sections کلیدهایی از `SECTIONS`.
+ *
+ * نمای یک‌تکهٔ قدیمی حذف شد و این تابع فقط زیرمجموعه می‌دهد: منوی a2 تنها
+ * مصرف‌کننده است و نگه‌داشتن یک صفحهٔ تختِ موازی یعنی دو مسیر به یک گزینه —
+ * دو جایی که کاربر باید بگردد و دو چیدمانی که باید هم‌گام بمانند.
+ */
+export function renderAdvanced(sections) {
+  const p = app.profile
+  const root = document.createElement('div')
+  root.className = 'view view--advanced'
+  root.innerHTML = sections.map((key) => SECTIONS[key](p)).join('\n')
 
   // --- سیم‌کشی — هر تغییر فوراً ذخیره می‌شود (مثل DataStore در اندروید)
   root.querySelectorAll('.seg__item').forEach((b) => {
@@ -516,14 +524,6 @@ export function renderAdvanced() {
         i.placeholder = '•••••• (saved)'
       }
     })
-  })
-
-  // بازنشانی به تنظیمات کارخانه — دستور reset_profile سمت Rust پروفایل
-  // پیش‌فرض را ذخیره و همان را برمی‌گرداند؛ زبان کاربر دست نمی‌خورد.
-  root.querySelector('#reset-defaults').addEventListener('click', async () => {
-    const fresh = await invoke('reset_profile')
-    app.profile = fresh
-    rerender()
   })
 
   // v10: قابلیت‌سنجی هسته — اگر هستهٔ همراه قدیمی‌تر از 1.5.0 باشد (مثلاً

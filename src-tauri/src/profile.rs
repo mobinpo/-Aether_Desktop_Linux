@@ -619,6 +619,17 @@ impl ConnectionProfile {
             if self.masque_http2 || force_h2 { "1".into() } else { "0".into() },
         );
 
+        // بازه‌هایی که اسکنر موتور اجازه دارد در نظر بگیرد.
+        //
+        // 1.2.4: تا اینجا این سه متغیر فرستاده می‌شد و هستهٔ دسکتاپ هیچ‌کدام را
+        // نمی‌خواند — «بازهٔ آدرس» تنظیمی بود که فقط ادای کار کردن درمی‌آورد.
+        // پچِ `AETHER-APP-PATCH scan-cidrs` در prober.rs / wg_prober.rs /
+        // wireguard.rs همین‌ها را می‌خواند: متغیرِ مخصوصِ پروتکل مقدم است و
+        // AETHER_SCAN_CIDRS پشتیبانِ هر دو. دانه‌های توکارِ بیرون از بازه هم
+        // پروب نمی‌شوند، وگرنه تونل روی آدرسی بسته می‌شد که کاربر نخواسته.
+        //
+        // این متغیرها گِیتِ نسخه ندارند: هسته‌ای که همراه برنامه می‌آید همیشه
+        // همین بیلدِ پچ‌خورده است. روی هستهٔ پین‌شدهٔ قدیمی‌تر بی‌اثر می‌مانند.
         let range = self.manual_range.trim();
         if self.endpoint_mode == EndpointMode::ManualRange && !range.is_empty() {
             env.insert("AETHER_SCAN_CIDRS".into(), range.to_string());

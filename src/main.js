@@ -7,12 +7,16 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 import { renderHome } from './views/home.js'
-import { renderAdvanced } from './views/advanced.js'
+import { renderSettings } from './views/settings.js'
+import { renderAssistant } from './views/assistant.js'
+import { renderChat } from './views/chat.js'
 import { renderDiagnostics } from './views/diagnostics.js'
 import { renderShare } from './views/share.js'
 import { renderAbout } from './views/about.js'
 
 import { t, applyLang } from './i18n.js'
+import { initAi } from './ai.js'
+import { setTabRouter } from './ui/nav.js'
 
 // --- وضعیت سراسری ------------------------------------------------------
 export const app = {
@@ -55,9 +59,49 @@ function emit() {
   }
 }
 
+/**
+ * یک تنظیم را ذخیره می‌کند.
+ *
+ * # چرا اول خوانده می‌شود و بعد نوشته
+ *
+ * `set_profile` **کلِ** پروفایل را می‌گیرد و نه یک تغییر. پس نوشتن روی کپیِ
+ * محلی یعنی هر فیلدی که این کپی از آن بی‌خبر است، با مقدارِ کهنه‌اش بازنویسی
+ * می‌شود. تا وقتی هر نوشتنی از خودِ رابط شروع می‌شد این بی‌ضرر بود؛ مسیرهای
+ * هوش مصنوعی که در Rust می‌نویسند، این فرض را شکستند: کاربر تغییرِ دستیار را
+ * اعمال می‌کرد، بعد یک تنظیمِ بی‌ربط را عوض می‌کرد، و تغییرِ دستیار بی‌صدا
+ * برمی‌گشت.
+ *
+ * حالا مرجع، همیشه سمت Rust است: پروفایلِ فعلی خوانده می‌شود، تغییر روی همان
+ * می‌نشیند، و همان نوشته می‌شود. رخدادِ `aether://profile` هم هست، ولی این
+ * تابع به رسیدنِ آن **تکیه نمی‌کند** — یک رخدادِ ازدست‌رفته نباید به از‌دست‌رفتنِ
+ * تنظیمات ترجمه شود.
+ *
+ * فیلدهای محرمانه از این قاعده مستثنا نیستند و لازم هم نیست باشند:
+ * `get_profile` آن‌ها را برنمی‌گرداند (رشتهٔ خالی) و `set_profile` رشتهٔ خالی را
+ * «دست نزن» تفسیر می‌کند، پس رازِ این نشست با یک خواندن پاک نمی‌شود.
+ */
 export async function saveProfile(patch) {
-  app.profile = { ...app.profile, ...patch }
+  let base = app.profile
+  try {
+    base = await invoke('get_profile')
+  } catch (e) {
+    // خواندن شکست خورد: با کپیِ محلی جلو می‌رویم، چون نوشتنِ تنظیمِ کاربر مهم‌تر
+    // از تازه‌بودنِ بقیهٔ فیلدهاست — ولی *گفته* می‌شود.
+    console.error('get_profile before save failed; writing on the local copy', e)
+  }
+  app.profile = { ...base, ...patch }
   await invoke('set_profile', { profile: app.profile })
+  emit()
+}
+
+/**
+ * درِ پشتیِ تست برای رخدادِ `aether://profile` — بدونِ Tauri.
+ *
+ * هیچ کدِ محصولی صدایش نمی‌زند؛ هارنسِ jsdom با آن همان چیزی را بازی می‌کند که
+ * Rust پس از نوشتنِ پروفایل می‌فرستد.
+ */
+export function applyProfileSnapshot(profile) {
+  app.profile = profile
   emit()
 }
 
@@ -123,6 +167,8 @@ const ICON_CLOSE =
 const NAV_ICONS = {
   home: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/></svg>',
   advanced: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h8M18 7h2M4 17h2M10 17h10"/><circle cx="15" cy="7" r="2.4"/><circle cx="7" cy="17" r="2.4"/></svg>',
+  assistant: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3.2l2 5.4 5.4 2-5.4 2-2 5.4-2-5.4-5.4-2 5.4-2z" fill="currentColor"/><path d="M18.7 15.3l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" fill="currentColor" opacity=".6"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H9.5L5 20v-4"/><path d="M8.5 10h7"/><path d="M8.5 13h4"/></svg>',
   diagnostics: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg>',
   share: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4.5 12a10.5 10.5 0 0 1 15 0"/><path d="M7.8 15.2a6 6 0 0 1 8.4 0"/><circle cx="12" cy="18.6" r="1.5" fill="currentColor" stroke="none"/></svg>',
   about: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r="1" fill="currentColor" stroke="none"/></svg>',
@@ -173,7 +219,9 @@ function wireTitlebar() {
 // --- مسیریابی تب‌ها (در اندروید باتم‌شیت بود، در دسکتاپ ریل کناری) --
 const VIEWS = {
   home: renderHome,
-  advanced: renderAdvanced,
+  advanced: renderSettings,
+  assistant: renderAssistant,
+  chat: renderChat,
   diagnostics: renderDiagnostics,
   share: renderShare,
   about: renderAbout,
@@ -230,7 +278,7 @@ function wireRail() {
 }
 
 // --- راه‌اندازی ---------------------------------------------------------
-const NAV_LABELS = { home: 'Home', advanced: 'Advanced', diagnostics: 'Diagnostics', share: 'Share over LAN', about: 'About' }
+const NAV_LABELS = { home: 'Home', advanced: 'Settings', assistant: 'Assistant', chat: 'Chat', diagnostics: 'Diagnostics', share: 'Share over LAN', about: 'About' }
 
 // v9: retranslate the chrome (nav rail icons + labels + window title) for the
 // active language. The rail is a permanent Material-style navigation rail.
@@ -263,6 +311,13 @@ async function boot() {
   wireTitlebar()
   wireRail()
   translateChrome()
+  // درِ ناوبری برای بقیهٔ ماژول‌ها — رجوع به مستند `src/ui/nav.js` برای اینکه
+  // چرا این ثبت است و نه یک import مستقیم به `renderTab`.
+  setTabRouter((tab) => {
+    if (!(tab in VIEWS)) return
+    app.tab = tab
+    renderTab()
+  })
 
   // Paint a tiny, dependency-free shell immediately. Rendering a full view
   // before profile IPC caused the advanced view to do expensive work twice.
@@ -277,6 +332,12 @@ async function boot() {
   app.profile = profile
   app.snapshot = snapshot
 
+  // پروفایلی که خودِ Rust نوشته — مسیرهای هوش مصنوعی. بی این، صفحهٔ تنظیمات
+  // مقدارِ پیش از اعمال را نشان می‌داد و کاربر نتیجه می‌گرفت که «اعمال نشد».
+  await listen('aether://profile', (event) => {
+    if (event.payload) applyProfileSnapshot(event.payload)
+  })
+
   // جریان زندهٔ وضعیت — معادل StateFlow در اندروید (هر ۲۰۰ میلی‌ثانیه).
   let lastAccent = null
   await listen('aether://state', (event) => {
@@ -290,6 +351,11 @@ async function boot() {
     }
     emit()
   })
+
+  // جریان وضعیت هوش مصنوعی. عمداً `await` نمی‌شود و در `Promise.all` بالا هم
+  // نیست: صفحهٔ خانه به آن نیازی ندارد و انتظار برایش اولین رنگ‌آمیزی را عقب
+  // می‌انداخت. صفحهٔ دستیار به‌محض رسیدن اولین snapshot خودش را می‌سازد.
+  initAi().catch((error) => console.error('AI layer unavailable', error))
 
   // Repaint the already-visible shell with the real state once IPC returns.
   renderTab()

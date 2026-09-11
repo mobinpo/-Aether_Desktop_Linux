@@ -11,39 +11,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{AetherError, Result};
 
-/// Send-buffer size for one netstack TCP flow: how much app->network data may
-/// wait for the congestion controller to clock it out.
-///
-/// Generous is correct here now that a controller exists (see [`Cmd::OpenTcp`]):
-/// this buffer feeds CUBIC, it does not bypass it.
-fn tcp_tx_buf() -> usize {
-    crate::sysprofile::netstack_tcp_tx_buf_bytes()
-}
-
-/// Receive-buffer size for one netstack TCP flow.
-///
-/// ## 1.2.3-p1: this is the advertised TCP receive window
-///
-/// smoltcp derives the window it advertises from the free space in THIS buffer,
-/// so its size is a hard cap on how many bytes a remote server may have in
-/// flight towards this PC - and therefore a hard cap on download throughput,
-/// which can never exceed window / RTT no matter what the line can do.
-///
-/// It used to be the same figure as the send buffer, which on a 4-core PC
-/// resolved to 256 KB: about 1.7 MB/s over a 150 ms single-hop path, and half
-/// that through the `Aether -> Psiphon` chain where the RTT is paid twice. That
-/// is the "download speed is very low" ceiling, and it was a sizing decision,
-/// not a network limit.
-///
-/// Kept separate from [`tcp_tx_buf`] on purpose: the two have opposite
-/// requirements and sharing one number is what made the wrong one invisible.
 fn tcp_rx_buf() -> usize {
     crate::sysprofile::netstack_tcp_rx_buf_bytes()
 }
 
-/// Kept for the pending-write bound, which tracks the SEND side.
-fn tcp_buf() -> usize {
-    tcp_tx_buf()
+fn tcp_tx_buf() -> usize {
+    crate::sysprofile::netstack_tcp_tx_buf_bytes()
 }
 
 fn udp_buf() -> usize {
@@ -116,7 +89,7 @@ const TCP_KEEPALIVE: smoltcp::time::Duration = smoltcp::time::Duration::from_sec
 const TCP_DEAD_PEER_TIMEOUT: smoltcp::time::Duration = smoltcp::time::Duration::from_secs(90);
 
 fn max_tcp_pending() -> usize {
-    tcp_buf().saturating_mul(2).max(64 * 1024)
+    tcp_rx_buf().saturating_mul(2).max(64 * 1024)
 }
 
 type OpenTcpResp = oneshot::Sender<std::result::Result<TcpConn, String>>;
@@ -704,8 +677,6 @@ async fn sleep_opt(delay: Option<std::time::Duration>) {
 fn handle_cmd(s: &mut NetStack, cmd: Cmd) {
     match cmd {
         Cmd::OpenTcp { dst, resp } => {
-            // 1.2.3-p1: the receive buffer IS the advertised window, so it is
-            // sized independently of the send buffer. See [tcp_rx_buf].
             let rx_buf = tcp::SocketBuffer::new(vec![0u8; tcp_rx_buf()]);
             let tx_buf = tcp::SocketBuffer::new(vec![0u8; tcp_tx_buf()]);
             let mut socket = tcp::Socket::new(rx_buf, tx_buf);
@@ -736,7 +707,11 @@ fn handle_cmd(s: &mut NetStack, cmd: Cmd) {
             // `socket-tcp-cubic` is enabled, so a future edit that drops the
             // feature FAILS THE BUILD instead of quietly shipping this again.
             // ==============================================================
+            // >>> AETHER-APP-PATCH netstack-congestion-control
+            // ویژگی socket-tcp-cubic در Cargo.toml جفتِ همین خط است؛
+            // بی آن، AnyController::new() به NoControl می‌رسد.
             socket.set_congestion_control(tcp::CongestionControl::Cubic);
+            // <<< AETHER-APP-PATCH netstack-congestion-control
             // Without these a flow whose peer vanishes mid-transfer stays
             // Established forever, retransmitting into nothing and pinning its
             // buffers for the rest of the session.

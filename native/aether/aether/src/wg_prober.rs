@@ -546,16 +546,23 @@ fn build_wg_candidates(
     }
 
     if ip.want_v6() {
-        for s in wireguard::WG_SEEDS_V6 {
+        // >>> AETHER-APP-PATCH scan-cidrs — wg_seeds_v6() دانه‌های بیرون از بازهٔ
+        // پین‌شده را حذف می‌کند (بدون پین، همان WG_SEEDS_V6 است).
+        for s in wireguard::wg_seeds_v6() {
+            // <<< AETHER-APP-PATCH scan-cidrs
             if let Ok(a) = s.parse::<Ipv6Addr>() {
                 anchors.push(IpAddr::V6(a));
             }
         }
         let per = if st.sample_per_cidr == 0 { 80 } else { st.sample_per_cidr };
+        // >>> AETHER-APP-PATCH scan-cidrs — v4 جاسازی‌شده در آدرس v6 هم از بازهٔ کاربر
+        let embed_v4: Vec<&'static str> = crate::prober::pinned_cidrs_v4("AETHER_WG_CIDRS")
+            .unwrap_or_else(|| wireguard::WG_PREFIXES_V4.to_vec());
         let cidr6: Vec<Vec<Ipv6Addr>> = wireguard::wg_prefixes_v6()
             .iter()
-            .map(|c| sample_cidr_v6(c, per, wireguard::WG_PREFIXES_V4))
+            .map(|c| sample_cidr_v6(c, per, &embed_v4))
             .collect();
+        // <<< AETHER-APP-PATCH scan-cidrs
         let max6 = cidr6.iter().map(|v| v.len()).max().unwrap_or(0);
         for i in 0..max6 {
             for hosts in &cidr6 {

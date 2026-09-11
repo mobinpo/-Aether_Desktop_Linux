@@ -66,9 +66,14 @@
   --rail-width: 84px; /* v9: slim permanent Material navigation rail */
   --content-max: 560px;   /* عرض منطقی صفحهٔ موبایل، حفظ‌شده تا طراحی کشیده نشود */
   --titlebar-height: 40px;
-  --connect-button: 172px;
+  /* ۱.۲.۴-p1: قطرِ دیسک، معادل `DISC = 132.dp` موبایل و نه جعبهٔ ۱۹۰ آن. دکمهٔ
+     ۱۷۲/۱۹۶ پیکسلی پیش از این، تنها به‌تنهایی ۵۰ پیکسل از ارتفاعی را می‌خورد که
+     کارت اتصال برای کامل‌دیده‌شدن لازم داشت. */
+  --connect-button: 138px;
 }
 
 @media (min-width: 1280px) {
-  :root { --connect-button: 196px; --content-max: 620px; }
+  /* ستون محتوا پهن‌تر از موبایل است — در ویندوز فضا هست و کارت اتصال با عرض
+     بیشتر به سه‌نقطه و شکستنِ خط نمی‌افتد. دکمه با آن بزرگ نمی‌شود. */
+  :root { --connect-button: 146px; --content-max: 660px; }
 }

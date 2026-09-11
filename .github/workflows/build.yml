@@ -101,8 +101,11 @@ jobs:
             "vite.config.js"
             "src/index.html"
             "src/main.js"
+            "src/i18n.js"
+            "src/ai.js"
             "src/styles/tokens.css"
             "src/styles/app.css"
+            "src/styles/chat.css"
             "src/styles/desktop.css"
             "src/flags.js"
             "src/views/home.js"
@@ -110,6 +113,22 @@ jobs:
             "src/views/diagnostics.js"
             "src/views/share.js"
             "src/views/about.js"
+            "src/views/chat.js"
+            "src/views/assistant.js"
+            "src/views/settings.js"
+            "src/views/connectioncard.js"
+            "src/ui/nav.js"
+            "src/ui/glowcycle.js"
+            "tests/png-loader.mjs"
+            "tests/chat-smoke.mjs"
+            "tests/profile-sync.mjs"
+            "tests/settings-smoke.mjs"
+            "tests/assistant-smoke.mjs"
+            "tests/ui-smoke.mjs"
+            "tests/css-classes.mjs"
+            "tests/glow-direction.mjs"
+            "tests/layout-desktop.mjs"
+            "scripts/preflight-local.sh"
             "installer/Persian.isl"
             "installer/LICENSE.rtf"
             "installer/wizard-large.bmp"
@@ -149,6 +168,7 @@ jobs:
             ".github/release-notes.md"
             "README.md"
             "README.fa.md"
+            "UPGRADE-1.2.4.md"
             "SECURITY-AUDIT.md"
             "LICENSE"
           )
@@ -201,6 +221,26 @@ jobs:
             exit 1
           fi
           echo "✓ هیچ مسیر ک��ی برای Proxy Mode وجود ندارد."
+
+      # ۱.۲.۴-p2: تست‌های رابط کاربری در CI اجرا می‌شوند، نه فقط روی میز توسعه.
+      # سه ایراد ظاهریِ این نسخه (فیلد باریکِ کلید، کارتِ بریده، تگ‌های HTML که
+      # به‌صورت متن چاپ می‌شدند) هیچ‌کدام کامپایل را نمی‌شکستند — یعنی تنها چیزی
+      # که می‌توانست جلویشان را بگیرد همین گام است.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install web dependencies
+        run: npm ci
+      - name: UI tests (jsdom)
+        run: npm test
+      # چیدمان با یک مرورگر واقعی سنجیده می‌شود: jsdom ارتفاع را اندازه
+      # نمی‌گیرد و «کارت اتصال کامل دیده می‌شود» را نمی‌توانست ثابت کند. اگر
+      # روی رانر کرومی نبود، خودِ تست با SKIP رد می‌شود و بیلد را نمی‌شکند.
+      - name: Layout test (real browser, EN + FA)
+        run: npm run test:layout
+        env:
+          CHROME: /usr/bin/google-chrome
 
   # ---------------------------------------------------------------------------
   # 1) همگام‌سازی هسته — معادل scripts/sync-core.sh مخزن اندروید.

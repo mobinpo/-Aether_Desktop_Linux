@@ -11,7 +11,7 @@
 # =============================================================================
 set -euo pipefail
 
-BASELINE="1.8.0"
+BASELINE="1.9.0"
 CORE_DIR="native/aether"
 BASELINE_DIR="$CORE_DIR/.upstream-baseline"
 PREV_DIR="native/.core-prev"
@@ -23,6 +23,13 @@ STATE_FILE="native/.core-sync-state"
 # ۱.۲.۳-p3: پچ زمانِ کانکت (بودجهٔ اسکن، توقف زودهنگام روی کریرِ مسدود و
 # جست‌وجوی موازی/زمان‌بندی‌شدهٔ ECH) فایل dns.rs را هم لمس کرد؛ بدون این خط،
 # اولین sync موفق ۹ ثانیه تأخیر کانکت را بی‌صدا برمی‌گرداند.
+# ۱.۲.۴ (هستهٔ ۱.۹.۰): آپ‌استریم پچ‌های توان‌عبوریِ ۱.۲.۳ را خودش جذب کرد —
+# تفکیک بافر rx/tx نتستک، پنجره‌های HTTP/2 و دسته‌بندی کپسول‌ها. پس دو فایل از
+# این فهرست بیرون رفتند:
+#   * masque_h2.rs — آپ‌استریم مسیر ارسال را با تسک pump_outbound از نو نوشت.
+#   * (سایر پچ‌ها ماندند و حالا با نشانهٔ AETHER-APP-PATCH علامت‌دار هستند.)
+# چیزی که آپ‌استریم جذب نکرد و پچش سرِ جایش است: انتخاب CUBIC در smoltcp،
+# سقفِ صفِ تحویل بسته در lib.rs و تفکیک SO_RCVBUF/SO_SNDBUF در sysprofile.rs.
 PATCHED_FILES=(
   aether/src/prober.rs
   aether/src/wg_prober.rs
@@ -32,7 +39,6 @@ PATCHED_FILES=(
   aether/src/sysprofile.rs
   aether/src/upstream.rs
   aether/src/quic.rs
-  aether/src/masque_h2.rs
   aether/src/dns.rs
   aether/Cargo.toml
 )

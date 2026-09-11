@@ -8,24 +8,13 @@
 //   * تازه‌سازی زندهٔ تقریباً هر ۱ ثانیه — دیگر دکمهٔ «Refresh log» لازم نیست
 import { invoke } from '@tauri-apps/api/core'
 import { t } from '../i18n.js'
+import { toast } from '../ui/toast.js'
 
 const CHECK_COLOR = { PASS: '#32E0C4', FAIL: '#FF5C7A', RUNNING: '#F5C451', PENDING: '#8A93A6' }
 const LEVEL_CLASS = { E: 'log__line--e', W: 'log__line--w', I: 'log__line--i', D: 'log__line--d' }
 
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-function toast(msg) {
-  const el = document.createElement('div')
-  el.className = 'toast'
-  el.textContent = msg
-  document.body.appendChild(el)
-  requestAnimationFrame(() => el.classList.add('is-shown'))
-  setTimeout(() => {
-    el.classList.remove('is-shown')
-    setTimeout(() => el.remove(), 400)
-  }, 2200)
 }
 
 export function renderDiagnostics() {
@@ -91,7 +80,7 @@ export function renderDiagnostics() {
         <span class="check__dot" style="background:${CHECK_COLOR[c.state] || CHECK_COLOR.PENDING}"></span>
         <span class="check__name">${esc(c.label)}</span>
         <span class="check__state" style="color:${CHECK_COLOR[c.state] || CHECK_COLOR.PENDING}">${c.state}</span>
-        <span class="check__detail ltr" dir="ltr">${esc(c.detail || '')}</span>
+        ${c.detail ? `<span class="check__detail ltr" dir="ltr">${esc(c.detail)}</span>` : ''}
       </li>`).join('')
     paintOverall(checks)
   }
@@ -152,7 +141,7 @@ export function renderDiagnostics() {
       <li class="check check--${c.verdict}">
         <span class="check__badge">${ico[c.verdict]}</span>
         <span class="check__name">${esc(c.name)}</span>
-        <span class="check__detail ltr" dir="ltr">${esc(c.detail)}</span>
+        ${c.detail ? `<span class="check__detail ltr" dir="ltr">${esc(c.detail)}</span>` : ''}
       </li>`).join('')
   })
 

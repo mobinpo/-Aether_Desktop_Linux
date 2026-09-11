@@ -12,7 +12,18 @@
 //!   SmartAuto                -> smart_auto.rs
 //!   Diagnostics              -> diagnostics.rs
 //!   DiagnosticsLog           -> log.rs
+//!   ai/AiSession + GeminiClient -> ai_session.rs + ai_client.rs (+ ai_* siblings)
+//!   data/SecretStore         -> secret_store.rs (DPAPI instead of Keystore)
 
+mod ai_client;
+mod ai_gate;
+mod ai_http;
+mod ai_model_policy;
+mod ai_patch;
+mod ai_prompts;
+mod ai_redaction;
+mod ai_session;
+mod ai_topic;
 mod diagnostics;
 mod exit_regions;
 mod engine;
@@ -27,9 +38,11 @@ mod share;
 mod smart_auto;
 mod state;
 mod store;
+mod secret_store;
 mod sysproxy;
 mod tun;
 
+use ai_session::{AiSession, AiSnapshot};
 use profile::ConnectionProfile;
 use state::{AetherController, Snapshot};
 use std::sync::{Arc, Mutex, TryLockError};
@@ -55,6 +68,10 @@ pub struct AppState {
     /// window stopped answering. Reads are served from here instead; only writes
     /// touch the controller.
     latest: parking_lot::Mutex<Arc<Snapshot>>,
+    /// The AI layer. `Arc` because every network-facing AI command hands it to a
+    /// worker thread — see [`ai_session`] for why none of that work may happen
+    /// on the IPC thread.
+    ai: Arc<AiSession>,
 }
 
 /// Publishes a snapshot: refresh the lock-free cache, and push it to the UI only
@@ -223,6 +240,320 @@ fn core_version() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+// ===========================================================================
+//  v12 — لایهٔ هوش مصنوعی
+// ===========================================================================
+//
+// # چرا هر فرمانِ شبکه‌ای اینجا `async` است و کار را spawn_blocking می‌کند
+//
+// یک فراخوان جمینای از **دو** تونل رد می‌شود و می‌تواند ده‌ها ثانیه طول بکشد.
+// فرمان‌های Tauri روی رشتهٔ IPC اجرا می‌شوند؛ کارِ همگام آنجا یعنی پنجره تا
+// برگشتن پاسخ جواب ندهد — همان بیماری‌ای که `AppState::latest` برای درمانش وجود
+// دارد، فقط این بار با تأخیرِ صدبرابر. پس هر مسیری که به سوکت دست می‌زند به
+// استخر بلاک‌کننده می‌رود و رشتهٔ IPC فوراً آزاد می‌شود.
+//
+// # چرا پروفایل و وضعیت *پیش از* پرش خوانده می‌شوند
+//
+// `State<'_, AppState>` را نمی‌توان به یک تسک `'static` برد، و مهم‌تر: قفل
+// کنترلر نباید در طول یک فراخوان شبکه نگه داشته شود. یک `advise` که ۴۰ ثانیه
+// طول بکشد و قفل را داشته باشد، کل برنامه را برای ۴۰ ثانیه می‌خواباند. پس یک
+// کپی از پروفایل گرفته می‌شود، قفل رها می‌شود، و بعد شبکه.
+
+/// وضعیت دیدنیِ لایهٔ هوش مصنوعی. همگام و ارزان — هیچ I/O شبکه‌ای.
+#[tauri::command]
+fn ai_snapshot(app: State<'_, AppState>) -> AiSnapshot {
+    let snapshot = app.latest.lock().as_ref().clone();
+    let profile = app.controller.lock().unwrap().profile();
+    app.ai.snapshot(snapshot.state, &profile)
+}
+
+/// یک snapshot تازهٔ هوش مصنوعی را به رابط کاربری هل می‌دهد.
+///
+/// رخداد جدا از `aether://state` است چون منابعشان جداست: حالت اتصال پنج بار در
+/// ثانیه تیک می‌خورد، و حالت هوش مصنوعی فقط وقتی کاربر کاری کرده. یکی‌کردنشان
+/// یعنی صفحهٔ چت با هر تیکِ تایمر دوباره رندر شود.
+fn publish_ai(app: &AppHandle) {
+    let state: State<'_, AppState> = app.state();
+    let snapshot = state.latest.lock().as_ref().clone();
+    let profile = state.controller.lock().unwrap().profile();
+    let _ = app.emit("aether://ai", state.ai.snapshot(snapshot.state, &profile));
+}
+
+/// پروفایلی را که **خودِ Rust** نوشته به رابط کاربری اعلام می‌کند.
+///
+/// # چرا این رخداد لازم است
+///
+/// رابط کاربری پروفایل را یک بار در استارتاپ با `get_profile` می‌گیرد و از آن
+/// پس فقط کپیِ خودش را دست‌کاری می‌کند. تا وقتی هر نوشتنی از خودِ UI شروع
+/// می‌شد، این کافی بود. مسیرهای هوش مصنوعی این فرض را شکستند: آن‌ها پروفایل را
+/// در Rust می‌نویسند، پس کپیِ UI کهنه می‌شد و دو چیز رخ می‌داد — صفحهٔ تنظیمات
+/// مقدارِ قبلی را نشان می‌داد (کاربر نتیجه می‌گرفت «اعمال نشد»، حتی بعد از قطع و
+/// وصل)، و ویرایشِ بعدیِ هر تنظیمِ دیگر همان شیءِ کهنه را برمی‌گرداند و تغییرِ
+/// دستیار را بی‌صدا **باطل** می‌کرد.
+///
+/// رخدادِ جدا از `aether://ai` است چون گیرنده‌اش جداست: این یکی به همهٔ
+/// صفحه‌های تنظیمات می‌رسد و نه فقط به صفحهٔ چت.
+fn publish_profile(app: &AppHandle) {
+    let _ = app.emit("aether://profile", profile_copy(app));
+}
+
+/// پروفایل فعلی، بی‌آنکه قفل نگه داشته شود.
+fn profile_copy(app: &AppHandle) -> ConnectionProfile {
+    let state: State<'_, AppState> = app.state();
+    // پروفایل به یک متغیر بسته می‌شود و بعد قفل می‌افتد: برگرداندنِ مستقیمِ
+    // `…lock().unwrap().profile()` یعنی گاردِ موقتی تا پایان عبارت زنده بماند،
+    // که کامپایلر همان را رد کرد — و درست هم می‌گفت، چون هدفِ همین تابع این است
+    // که قفل را پیش از رفتن به شبکه رها کند.
+    let profile = state.controller.lock().unwrap().profile();
+    profile
+}
+
+fn ai_handle(app: &AppHandle) -> Arc<AiSession> {
+    let state: State<'_, AppState> = app.state();
+    state.ai.clone()
+}
+
+/// کلید API را ذخیره (یا با رشتهٔ خالی، پاک) می‌کند.
+///
+/// کلید فقط در همین یک جهت از مرز IPC رد می‌شود. هیچ فرمانی آن را برنمی‌گرداند؛
+/// رابط کاربری فقط `hasKey` و چهار نویسهٔ آخر را می‌بیند.
+#[tauri::command]
+fn ai_set_key(app: AppHandle, key: String) -> Result<(), String> {
+    let result = ai_handle(&app).set_api_key(&key);
+    // پیش از `?`: چه ذخیره موفق شده باشد چه نه، `hasKey` و `keyHint` عوض شده‌اند و
+    // صفحه باید همان را ببیند.
+    publish_ai(&app);
+    result
+}
+
+#[tauri::command]
+fn ai_select_model(app: AppHandle, id: String) -> Result<(), String> {
+    let result = ai_handle(&app).select_model(&id);
+    publish_ai(&app);
+    result
+}
+
+#[tauri::command]
+fn ai_clear_chat(app: AppHandle) {
+    ai_handle(&app).clear_chat();
+    publish_ai(&app);
+}
+
+#[tauri::command]
+fn ai_dismiss_error(app: AppHandle) {
+    ai_handle(&app).dismiss_error();
+    publish_ai(&app);
+}
+
+#[tauri::command]
+fn ai_dismiss_advisor(app: AppHandle) {
+    ai_handle(&app).dismiss_advisor();
+    publish_ai(&app);
+}
+
+/// «تست اتصال به API» — پورت از دکمهٔ `ai_test` در `AiPages.kt`.
+///
+/// دو انتشار دارد و این عمدی است: اولی پیش از کارِ شبکه می‌رود تا دکمه فوراً
+/// «در حال تست…» شود، دومی بعد از نتیجه. بدون اولی، کاربر روی دکمه‌ای کلیک
+/// می‌کند که تا ده ثانیه هیچ نشانی از زنده‌بودن نمی‌دهد — همان چیزی که باعث شد
+/// کاربر فکر کند «کار نمی‌کند» و دوباره کلیک کند.
+#[tauri::command]
+async fn ai_test_key(app: AppHandle) -> Result<(), String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    // `RUNNING` پیش از spawn نشانده و منتشر می‌شود؛ خودِ `test_connection` هم آن
+    // را می‌نشاند، ولی آن اتفاق داخل رشتهٔ کارگر می‌افتد و برای دکمه دیر است.
+    session.mark_probe_running();
+    publish_ai(&app);
+    let result = tauri::async_runtime::spawn_blocking(move || session.test_connection(&profile))
+        .await
+        .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    publish_ai(&app);
+    result
+}
+
+/// مدل‌های موجود برای این کلید را کشف می‌کند.
+#[tauri::command]
+async fn ai_refresh_models(app: AppHandle) -> Result<(), String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let result = tauri::async_runtime::spawn_blocking(move || session.refresh_models(&profile))
+        .await
+        .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    // در هر دو حالت منتشر می‌شود: شکست هم بخشی از snapshot است (`error`,
+    // `busy=false`) و رابط کاربری باید اسپینر را پایین بیاورد.
+    publish_ai(&app);
+    result
+}
+
+/// «این تنظیم چه کار می‌کند؟»
+#[tauri::command]
+async fn ai_explain(
+    app: AppHandle,
+    lang: String,
+    title: String,
+    subtitle: String,
+    value: String,
+) -> Result<String, String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        session.explain(&profile, &lang, &title, &subtitle, &value)
+    })
+    .await
+    .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    publish_ai(&app);
+    result
+}
+
+/// یک نوبت چت.
+///
+/// # ترتیب، و چرا مهم است
+///
+/// حبابِ کاربر روی همین رشته و **پیش از** رفتن به کارگر نشانده می‌شود، بعد یک
+/// انتشار، بعد درخواستِ شبکه. نسخهٔ قبل هر دو کار را به کارگر می‌داد و بلافاصله
+/// `publish_ai` می‌زد — یک مسابقه که انتشار تقریباً همیشه می‌برد، پس snapshot پیش
+/// از وجودِ حباب گرفته می‌شد و پرسشِ کاربر تا رسیدنِ پاسخ روی صفحه نبود. یعنی
+/// کاربر متن را می‌فرستاد و یک جعبهٔ خالی می‌دید.
+///
+/// حالا ترتیب خودش تضمین است و نه یک تأخیر: وقتی `append_user_message` برمی‌گردد،
+/// حباب در تاریخ هست. رجوع به [`ai_session::AiSession::append_user_message`].
+#[tauri::command]
+async fn ai_send_chat(app: AppHandle, lang: String, text: String) -> Result<(), String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let prompt = session.append_user_message(&text)?;
+    publish_ai(&app);
+    let handle =
+        tauri::async_runtime::spawn_blocking(move || session.ask_existing(&profile, &lang, &prompt));
+    let result = handle.await.map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    publish_ai(&app);
+    result
+}
+
+/// همان پرسشِ شکست‌خورده را دوباره می‌فرستد — دکمهٔ «تلاش مجدد».
+///
+/// حبابِ شکست را برمی‌دارد و با همان `sourcePrompt` می‌پرسد. به همان دلیلِ
+/// `ai_send_chat` دو نیم شده: برداشتنِ حبابِ قرمز همگام انجام می‌شود و انتشار
+/// **بعد** از آن می‌آید، نه در مسابقه با آن.
+#[tauri::command]
+async fn ai_retry(app: AppHandle, lang: String, id: u64) -> Result<(), String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let prompt = session.take_failed_prompt(id)?;
+    publish_ai(&app);
+    let handle =
+        tauri::async_runtime::spawn_blocking(move || session.ask_existing(&profile, &lang, &prompt));
+    let result = handle.await.map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    publish_ai(&app);
+    result
+}
+
+/// یکی از پیام‌های خودِ کاربر را بازنویسی می‌کند و از همان نقطه دوباره می‌پرسد.
+#[tauri::command]
+async fn ai_edit_message(app: AppHandle, lang: String, id: u64, text: String) -> Result<(), String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let echo = app.clone();
+    let handle =
+        tauri::async_runtime::spawn_blocking(move || session.edit_message(&profile, &lang, id, &text));
+    publish_ai(&echo);
+    let result = handle.await.map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    publish_ai(&app);
+    result
+}
+
+/// چند حباب را در یک رفت حذف می‌کند. همگام — هیچ I/O شبکه‌ای.
+#[tauri::command]
+fn ai_delete_messages(app: AppHandle, ids: Vec<u64>) {
+    ai_handle(&app).delete_messages(&ids);
+    publish_ai(&app);
+}
+
+/// پاسخِ در راه را رها می‌کند. رجوع به [`ai_session::AiSession::stop`].
+#[tauri::command]
+fn ai_stop(app: AppHandle) {
+    ai_handle(&app).stop();
+    publish_ai(&app);
+}
+
+/// تنظیماتی که یک پاسخ پیشنهاد کرده را می‌نویسد — دکمهٔ «اعمال».
+///
+/// همگام است: هیچ I/O شبکه‌ای ندارد. ذخیره اینجا انجام می‌شود و نه در
+/// `ai_session`، به همان دلیلِ [`ai_advise`]: `set_profile` تنها دروازهٔ نوشتن است
+/// — همان چیزی که به دیسک می‌نویسد، `settings_rev` را بالا می‌برد و تصمیم می‌گیرد
+/// نشستِ در جریان باید بازپیکربندی شود.
+///
+/// حباب فقط پس از یک نوشتنِ **موفق** «اعمال‌شده» علامت می‌خورد: یک تیکِ سبز روی
+/// تغییری که به دیسک نرسیده، دروغ است.
+#[tauri::command]
+fn ai_apply_changes(app: AppHandle, id: u64) -> Result<Vec<(String, String)>, String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let (patched, applied) = session.changes_for(&profile, id)?;
+    if !applied.is_empty() {
+        let state: State<'_, AppState> = app.state();
+        let written = state.controller.lock().unwrap().set_profile(patched);
+        if let Err(e) = written {
+            log::DiagnosticsLog::e("ai", &format!("chat changes could not be saved: {e}"));
+            publish_ai(&app);
+            return Err(format!("The changes could not be saved: {e}"));
+        }
+        // نوشتن بی‌اعلام‌کردن، همان اشکالی بود که کاربر دید: تنظیم روی دیسک
+        // عوض می‌شد و صفحهٔ تنظیمات مقدارِ قبلی را نشان می‌داد.
+        publish_profile(&app);
+        log::DiagnosticsLog::i(
+            "ai",
+            &format!(
+                "chat applied: {}",
+                applied.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", ")
+            ),
+        );
+    }
+    session.mark_applied(id);
+    publish_ai(&app);
+    Ok(applied)
+}
+
+/// مشاورِ ضد‌DPI: لاگ را می‌خواند، پچ می‌گیرد، و اگر چیزی پذیرفته شد ذخیره می‌کند.
+///
+/// # چرا ذخیره‌کردن اینجاست و نه در `ai_session`
+///
+/// نوشتنِ پروفایل مالِ کنترلر است: `set_profile` است که به دیسک می‌نویسد،
+/// `settings_rev` را بالا می‌برد و تصمیم می‌گیرد آیا نشستِ در جریان باید
+/// بازپیکربندی شود. لایهٔ نشست پروفایلِ **نتیجه** را برمی‌گرداند و همین‌جا، پس
+/// از آزاد‌شدنِ رشتهٔ شبکه، از همان یک دروازهٔ نوشتن رد می‌شود.
+#[tauri::command]
+async fn ai_advise(app: AppHandle, lang: String) -> Result<ai_session::AdvisorResult, String> {
+    let session = ai_handle(&app);
+    let profile = profile_copy(&app);
+    let outcome = tauri::async_runtime::spawn_blocking(move || session.advise(&profile, &lang))
+        .await
+        .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    let result = match outcome {
+        Ok((patched, result)) => {
+            if !result.applied.is_empty() {
+                let state: State<'_, AppState> = app.state();
+                let written = state.controller.lock().unwrap().set_profile(patched);
+                if written.is_ok() {
+                    publish_profile(&app);
+                }
+                if let Err(e) = written {
+                    // پچ اعمال شد ولی ذخیره نشد: باید *گفته* شود، چون وگرنه
+                    // کاربر فهرست تغییرات را می‌بیند و باور می‌کند نشسته‌اند.
+                    log::DiagnosticsLog::e("ai", &format!("advisor changes could not be saved: {e}"));
+                    publish_ai(&app);
+                    return Err(format!("The changes could not be saved: {e}"));
+                }
+            }
+            Ok(result)
+        }
+        Err(message) => Err(message),
+    };
+    publish_ai(&app);
+    result
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -240,9 +571,11 @@ fn main() {
 
             let controller = AetherController::new(&data_dir);
             let first = controller.snapshot();
+            let prefs = Arc::new(store::PrefsStore::new(&data_dir));
             app.manage(AppState {
                 controller: Mutex::new(controller),
                 latest: parking_lot::Mutex::new(Arc::new(first)),
+                ai: Arc::new(AiSession::new(&data_dir, prefs)),
             });
 
             // Equivalent of collecting StateFlow in Compose, with two rules the
@@ -299,6 +632,22 @@ fn main() {
             webrtc_leak_test,
             about_info,
             core_caps,
+            ai_snapshot,
+            ai_set_key,
+            ai_test_key,
+            ai_select_model,
+            ai_refresh_models,
+            ai_explain,
+            ai_send_chat,
+            ai_retry,
+            ai_apply_changes,
+            ai_edit_message,
+            ai_delete_messages,
+            ai_stop,
+            ai_advise,
+            ai_clear_chat,
+            ai_dismiss_error,
+            ai_dismiss_advisor,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aether");

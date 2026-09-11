@@ -1,31 +1,53 @@
-// پورت از ui/HomeScreen.kt + ConnectButton.kt + StatusLine.kt + ConnectionMeta.kt + TrafficPanel.kt
+// =============================================================================
+//  صفحهٔ اصلی — پورت از `ui/HomeScreen.kt` + `ConnectButton.kt` + `ConnectionCard.kt`
+// -----------------------------------------------------------------------------
+//  ۱.۲.۴ — دو تغییری که این فایل را بازنویسی کرد، هر دو از مخزن موبایل ۱.۲.۹:
 //
-// رفع ریشه‌ای مشکل ۷: دکمهٔ قبلی فقط یک رنگ عوض می‌کرد؛ حالا مثل
-// ConnectButton.kt چهار مود کامل دارد (IDLE / BUSY / CONNECTED / ERROR):
-//   * آیکون عوض می‌شود: Power → Autorenew (چرخان) → Bolt
-//   * در BUSY یک کمان ۹۰درجهٔ دور دکمه می‌چرخد (۱۱۰۰ms)
-//   * در CONNECTED هاله نبض می‌زند (.92→1.06، ۱۶۰۰ms)
-//   * گذار رنگ ۶۰۰ms — همان tween اندروید
-// به‌علاوه نشان IP + پرچم کشور (Your IP / Server IP) و تایمر «Connected for».
-import { app, onChange, toggleConnection, accentFor, formatBytes, formatUptime } from '../main.js'
-import { flagHtml } from '../flags.js'
+//  ۱) **بلوک اطلاعات اتصال یک کارت شد.** پیش از این، وضعیت/آی‌پی/ترافیک/متا
+//     چهار سطح شناور جدا بودند. حالا همه فرزندِ یک کارت‌اند — منطقش کامل در
+//     `views/connectioncard.js` است و همین‌جا فقط ساخته و رنگ‌آمیزی می‌شود.
+//
+//  ۲) **تیک رفت؛ A آمد.** حالت متصل دیگر آیکون Bolt نشان نمی‌دهد، بلکه نشانِ
+//     خود اِتِر است: همان A آیکون برنامه، روشن، اسکن‌شده و در حال چرخش در رمپ
+//     لهجه‌های برنامه (`ui/aethermark.js`). این نشان **فقط** در حالت متصل ساخته
+//     می‌شود و در هر گذارِ دیگری حلقهٔ فریمش لغو می‌شود، پس دکمهٔ بی‌کار و
+//     مشغول دقیقاً همان هزینهٔ قبلی را دارند.
+//
+//  نمایش نور، فقط روی کارت است. در موبایل هم حلقهٔ نور یک بار دور دکمه گذاشته
+//  شد و برداشته شد: دو نمایش نور روی یک صفحه برای چشم با هم می‌جنگند. دکمه
+//  هالهٔ نبض‌دار و کمانِ مشغول خودش را نگه می‌دارد.
+// =============================================================================
+
+import { app, onChange, toggleConnection, accentFor } from '../main.js'
 import { t } from '../i18n.js'
+import { createConnectionCard } from './connectioncard.js'
+import { startAetherMark } from '../ui/aethermark.js'
 
 const BUSY_STATES = ['STARTING_ENGINE', 'CONNECTING', 'VERIFYING', 'RECONNECTING', 'DISCONNECTING']
 
-// همان آیکون‌های متریال ConnectButton.kt — PowerSettingsNew / Autorenew / Bolt.
+// همان دو آیکون متریالِ ConnectButton.kt — PowerSettingsNew / Autorenew.
+// حالت سوم (Bolt) حذف شد: جایش را AetherMark گرفت.
 const ICON_POWER =
-  '<svg viewBox="0 0 24 24" width="56" height="56" aria-hidden="true"><path d="M12 3v9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M6.5 6.8a8 8 0 1 0 11 0" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>'
+  '<svg viewBox="0 0 24 24" width="52" height="52" aria-hidden="true"><path d="M12 3v9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M6.5 6.8a8 8 0 1 0 11 0" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>'
 const ICON_RENEW =
-  '<svg viewBox="0 0 24 24" width="56" height="56" aria-hidden="true"><path d="M12 5a7 7 0 0 1 6.3 4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M18.6 4.6V9h-4.4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 19a7 7 0 0 1-6.3-4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M5.4 19.4V15h4.4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-const ICON_BOLT =
-  '<svg viewBox="0 0 24 24" width="56" height="56" aria-hidden="true"><path d="M13 2 4.5 13.5H11L9.8 22 18.5 10.5H12L13 2Z" fill="currentColor"/></svg>'
+  '<svg viewBox="0 0 24 24" width="52" height="52" aria-hidden="true"><path d="M12 5a7 7 0 0 1 6.3 4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M18.6 4.6V9h-4.4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 19a7 7 0 0 1-6.3-4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round"/><path d="M5.4 19.4V15h4.4" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
-// پرچم کشور: SVG درون‌ساخت از flags.js — ویندوز فونت ایموجی پرچم ندارد و
-// کد کشور به‌صورت دو حرف (مثل «DE») رندر می‌شد؛ رفع ریشه‌ای بخش پرچم مشکل ۴.
+/** عنوان وضعیت — همان رشته‌های strings.xml. */
+function titleFor(state) {
+  return {
+    DISCONNECTED: t('Disconnected'),
+    STARTING_ENGINE: t('Starting engine…'),
+    CONNECTING: t('Connecting…'),
+    VERIFYING: t('Verifying connection…'),
+    CONNECTED: t('Connected'),
+    RECONNECTING: t('Reconnecting…'),
+    DISCONNECTING: t('Disconnecting…'),
+    FAILED: t('Connection failed'),
+  }[state] ?? state
+}
 
-// زیرنویس وضعیت — همان رشته‌های strings.xml در StatusLine.kt.
-function subtitleFor(snapshot) {
+/** زیرنویس وضعیت — همان رشته‌های StatusLine.kt. */
+function captionFor(snapshot) {
   switch (snapshot.state) {
     case 'DISCONNECTED': return t('Tap to connect securely')
     case 'CONNECTED': return t('Tap to disconnect')
@@ -51,55 +73,27 @@ export function renderHome() {
           <circle cx="50" cy="50" r="47" fill="none" stroke="currentColor" stroke-width="2.5"
                   stroke-linecap="round" stroke-dasharray="73.8 221.4"/>
         </svg>
+        <!-- هستهٔ جمعیِ نرم پشت نشان، تا گلیف از دیسک بیرون بتابد و صاف
+             رویش نچسبد — همان Canvas(CORE) در ConnectButton.kt. -->
+        <span class="connect__core" id="ccore" aria-hidden="true"></span>
         <span class="connect__icon" id="cicon">${ICON_POWER}</span>
+        <canvas class="connect__mark" id="cmark" aria-hidden="true" hidden></canvas>
       </button>
     </div>
 
-    <p class="status" id="status">${t('Disconnected')}</p>
-    <p class="status__detail" id="detail">${t('Tap to connect securely')}</p>
-
-    <div class="ipbadge ltr" dir="ltr" id="ipbadge">
-      <span class="ipbadge__flag" id="ip-flag">${flagHtml(null)}</span>
-      <span class="ipbadge__label" id="ip-label">${t('Your IP')}</span>
-      <span class="ipbadge__value" id="ip-value">${t('Checking IP…')}</span>
-    </div>
-
-    <!-- v1.2.0: نشان محافظت WebRTC — نتیجهٔ سنجش واقعی، نه ادعای تزئینی. -->
+    <!-- v1.2.0: نشان محافظت WebRTC — نتیجهٔ سنجش واقعی، نه ادعای تزئینی.
+         بیرون کارت می‌ماند چون یک هشدار امنیتی است، نه یک واقعیتِ اتصال. -->
     <p class="shield" id="shield" hidden><span class="shield__dot"></span><span id="shield-text"></span></p>
-
-    <p class="uptime" id="uptime" hidden><span class="uptime__k">${t('Connected for')}</span> <span class="uptime__v ltr" dir="ltr" id="uptime-v">00:00</span></p>
-
-    <div class="meta" id="meta">
-      <div class="meta__cell"><span class="meta__k">${t('Protocol')}</span><span class="meta__v ltr" dir="ltr" id="m-proto">—</span></div>
-      <div class="meta__cell"><span class="meta__k">${t('Endpoint')}</span><span class="meta__v ltr" dir="ltr" id="m-endpoint">—</span></div>
-      <div class="meta__cell"><span class="meta__k">${t('Latency')}</span><span class="meta__v" id="m-latency">—</span></div>
-    </div>
-
-    <div class="traffic" id="traffic" hidden>
-      <div class="traffic__cell">
-        <span class="traffic__badge traffic__badge--down" aria-hidden="true">↓</span>
-        <span class="traffic__text">
-          <span class="traffic__k">${t('Download')}</span>
-          <span class="traffic__rate ltr" dir="ltr" id="t-rx-rate">0 B/s</span>
-          <span class="traffic__total ltr" dir="ltr" id="t-rx">0 B</span>
-        </span>
-      </div>
-      <span class="traffic__divider" aria-hidden="true"></span>
-      <div class="traffic__cell">
-        <span class="traffic__badge traffic__badge--up" aria-hidden="true">↑</span>
-        <span class="traffic__text">
-          <span class="traffic__k">${t('Upload')}</span>
-          <span class="traffic__rate ltr" dir="ltr" id="t-tx-rate">0 B/s</span>
-          <span class="traffic__total ltr" dir="ltr" id="t-tx">0 B</span>
-        </span>
-      </div>
-    </div>
   `
+
+  const card = createConnectionCard()
+  root.appendChild(card.node)
 
   root.querySelector('#connect').addEventListener('click', toggleConnection)
 
-  // محاسبهٔ نرخ لحظه‌ای — همان کاری که TrafficPanel.kt با دلتای بایت‌ها می‌کرد.
-  let lastRx = 0, lastTx = 0, lastAt = 0
+  const markCanvas = root.querySelector('#cmark')
+  const iconEl = root.querySelector('#cicon')
+  let stopMark = null
   const spinAnims = []
 
   const paint = ({ snapshot }) => {
@@ -114,63 +108,55 @@ export function renderHome() {
     btn.classList.toggle('is-error', snapshot.state === 'FAILED')
     root.querySelector('#halo').classList.toggle('is-on', connected)
 
-    // تعویض آیکون — فقط وقتی مود واقعاً عوض شده (تا انیمیشن ریست نشود).
+    // تعویض مود — فقط وقتی مود واقعاً عوض شده، تا انیمیشن ریست نشود و تا
+    // نشان در هر snapshot (پنج بار در ثانیه) از اول متولد نشود.
     const mode = busy ? 'busy' : connected ? 'on' : 'idle'
-    const iconEl = root.querySelector('#cicon')
-    if (iconEl.dataset.mode !== mode) {
-      iconEl.dataset.mode = mode
-      iconEl.innerHTML = busy ? ICON_RENEW : connected ? ICON_BOLT : ICON_POWER
-      // Root fix (recurring problem 2): drive the busy spin with the Web
-      // Animations API. Plain CSS animations get globally neutralised when
-      // Windows reports prefers-reduced-motion (animation effects off /
-      // VM / RDP), which is exactly why the arc + arrows looked frozen.
-      // WAAPI animations run on the compositor and win over stylesheets.
+    if (btn.dataset.mode !== mode) {
+      btn.dataset.mode = mode
+
       for (const a of spinAnims.splice(0)) a.cancel()
-      if (busy) {
-        const spin = [
-          { transform: 'translateZ(0) rotate(0deg)' },
-          { transform: 'translateZ(0) rotate(360deg)' },
-        ]
-        const arcEl = root.querySelector('.connect__arc')
-        if (arcEl && arcEl.animate) {
-          spinAnims.push(arcEl.animate(spin, { duration: 1100, iterations: Infinity }))
-        }
-        if (iconEl.animate) {
-          spinAnims.push(iconEl.animate(spin, { duration: 1400, iterations: Infinity }))
-        }
+      if (stopMark) {
+        stopMark()
+        stopMark = null
       }
-    }
 
-    const title = {
-      DISCONNECTED: t('Disconnected'),
-      STARTING_ENGINE: t('Starting engine…'),
-      CONNECTING: t('Connecting…'),
-      VERIFYING: t('Verifying connection…'),
-      CONNECTED: t('Connected'),
-      RECONNECTING: t('Reconnecting…'),
-      DISCONNECTING: t('Disconnecting…'),
-      FAILED: t('Connection failed'),
-    }[snapshot.state] ?? snapshot.state
-    const statusEl = root.querySelector('#status')
-    statusEl.textContent = title
-    statusEl.style.color = accent
-    root.querySelector('#detail').textContent = subtitleFor(snapshot)
-
-    // نشان IP + پرچم — همان رفتار MainActivity: در حالت‌های گذار مخفی.
-    const badge = root.querySelector('#ipbadge')
-    badge.hidden = busy
-    if (!busy) {
-      const info = snapshot.ipInfo
-      root.querySelector('#ip-label').textContent = info && info.viaTunnel ? t('Server IP') : t('Your IP')
-      badge.classList.toggle('is-tunnel', !!(info && info.viaTunnel))
-      if (info) {
-        root.querySelector('#ip-flag').innerHTML = flagHtml(info.countryCode)
-        root.querySelector('#ip-value').textContent = info.countryCode ? `${info.ip} · ${info.countryCode}` : info.ip
+      if (connected) {
+        // نشان جای آیکون را می‌گیرد؛ حلقهٔ فریمش همین‌جا شروع می‌شود و در
+        // گذار بعدی لغو می‌شود.
+        iconEl.hidden = true
+        markCanvas.hidden = false
+        stopMark = startAetherMark(markCanvas)
       } else {
-        root.querySelector('#ip-flag').innerHTML = flagHtml(null)
-        root.querySelector('#ip-value').textContent = snapshot.ipLoading ? t('Checking IP…') : t('IP unavailable')
+        markCanvas.hidden = true
+        iconEl.hidden = false
+        iconEl.innerHTML = busy ? ICON_RENEW : ICON_POWER
+        // ریشهٔ مشکل تکرارشوندهٔ ۲: چرخش مشغول را با Web Animations API
+        // می‌رانیم. انیمیشن‌های سادهٔ CSS وقتی ویندوز prefers-reduced-motion
+        // گزارش می‌کند (افکت‌ها خاموش / ماشین مجازی / RDP) سراسری بی‌اثر
+        // می‌شوند و همین بود که کمان و فلش‌ها یخ‌زده به نظر می‌رسیدند.
+        if (busy) {
+          const spin = [
+            { transform: 'translateZ(0) rotate(0deg)' },
+            { transform: 'translateZ(0) rotate(360deg)' },
+          ]
+          const arcEl = root.querySelector('.connect__arc')
+          if (arcEl && arcEl.animate) {
+            spinAnims.push(arcEl.animate(spin, { duration: 1100, iterations: Infinity }))
+          }
+          if (iconEl.animate) {
+            spinAnims.push(iconEl.animate(spin, { duration: 1400, iterations: Infinity }))
+          }
+        }
       }
     }
+
+    // کارت خودش را رنگ می‌کند؛ عنوان و زیرنویس از همین‌جا می‌روند تا رشته‌ها
+    // یک منبع داشته باشند.
+    card.paint(snapshot, {
+      busy,
+      title: titleFor(snapshot.state),
+      caption: captionFor(snapshot),
+    })
 
     // نشان محافظت WebRTC — سه حالت: در حال سنجش / محافظت‌شده / نشتی.
     const shield = root.querySelector('#shield')
@@ -186,38 +172,27 @@ export function renderHome() {
             ? t('WebRTC protected — no IP leak')
             : t('Checking for WebRTC leaks…')
     }
+  }
 
-    // تایمر «Connected for»
-    const up = root.querySelector('#uptime')
-    up.hidden = !connected
-    if (connected) root.querySelector('#uptime-v').textContent = formatUptime(snapshot.uptimeSecs)
-
-    root.querySelector('#m-proto').textContent = snapshot.protocol ?? '—'
-    root.querySelector('#m-endpoint').textContent = snapshot.endpoint ?? '—'
-    root.querySelector('#m-latency').textContent = snapshot.latencyMs != null ? `${snapshot.latencyMs} ms` : '—'
-
-    // پنل ترافیک — فقط در حالت متصل (مثل TrafficPanel موبایل).
-    const traffic = root.querySelector('#traffic')
-    traffic.hidden = !connected
-    if (connected) {
-      const now = Date.now()
-      if (lastAt && now > lastAt) {
-        const dt = (now - lastAt) / 1000
-        const rxRate = Math.max(0, (snapshot.rxBytes - lastRx) / dt)
-        const txRate = Math.max(0, (snapshot.txBytes - lastTx) / dt)
-        root.querySelector('#t-rx-rate').textContent = `${formatBytes(rxRate)}/s`
-        root.querySelector('#t-tx-rate').textContent = `${formatBytes(txRate)}/s`
-      }
-      root.querySelector('#t-rx').textContent = formatBytes(snapshot.rxBytes)
-      root.querySelector('#t-tx').textContent = formatBytes(snapshot.txBytes)
-      lastRx = snapshot.rxBytes
-      lastTx = snapshot.txBytes
-      lastAt = now
-    } else {
-      lastRx = 0
-      lastTx = 0
-      lastAt = 0
+  // نماها کَش می‌شوند و در تعویض تب فقط جدا/وصل می‌شوند (main.js). پس حلقه‌های
+  // فریم باید با پنهان‌شدن نما بخوابند، وگرنه کارتِ نامرئی تا پایان عمر برنامه
+  // شصت فریم در ثانیه می‌کشد.
+  root.__onHide = () => {
+    if (stopMark) {
+      stopMark()
+      stopMark = null
     }
+    // مود را باطل کن تا بازگشت به تب، نشان را از نو بسازد.
+    root.querySelector('#connect').dataset.mode = ''
+    card.stop()
+  }
+
+  root.__onShow = () => {
+    card.start()
+    // رنگ‌آمیزی فوری با وضعیت فعلی: جریان وضعیت فقط وقتی چیزی عوض شود
+    // امیت می‌کند، پس بازگشت به تب به خودی خود هیچ فریمی نمی‌سازد و نشان
+    // متصل دیگر برنمی‌گشت.
+    paint(app)
   }
 
   paint(app)

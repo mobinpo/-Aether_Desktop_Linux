@@ -12,7 +12,58 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 
 ---
 
-## What's new in 1.2.3
+## What's new in 1.2.4
+
+**Upgrade notice:** 1.2.4 brings the mobile edition's **AI assistant** to Windows — including a full chat page whose assistant can *apply* tuning settings for you — rebuilds the entire settings area as the mobile **hub-and-subpage menu**, bundles **Aether Core 1.9.0**, and fixes a setting that never did anything: a pinned **address range** was handed to the engine and read by nobody. Saved profiles load unchanged, and the desktop version is `1.2.4` across `tauri.conf.json`, `package.json`, the embedded manifest and the installer script.
+
+### New in this release
+
+**An AI assistant, ported from Aether Mobile 1.2.9.** A ✨ button next to every setting explains what that setting does on this machine, plus an Assistant page with a chat, a connection advisor that reads a redacted log excerpt, and a settings advisor whose suggestions pass a hard allowlist before anything is written. Six boundaries make it safe to ship in a censorship-circumvention tool:
+
+* **The key is sealed by Windows, not by us.** `secrets.bin` is written through DPAPI (`CryptProtectData`, `CRYPTPROTECT_UI_FORBIDDEN`), so the ciphertext is worthless on another account or machine — the real equivalent of the Android Keystore seal the mobile edition uses. It is a separate store from `profile.json`, so *Reset all settings* does not take the key with it.
+* **AI traffic uses the tunnel.** Requests are dialled through the app's own local SOCKS5 proxy with the host name sent as `ATYP=DOMAIN`, so the exit resolves `generativelanguage.googleapis.com` instead of the operator's resolver — a query that would both fail and announce intent. A gate refuses to send anything while the tunnel is down, and says why.
+* **What leaves the device is filtered, not merely shortened.** Secret-shaped strings are replaced (the user's own Gemini key included), public IPv4 is masked to /16 and IPv6 to /32, WARP `device=` enrolment ids and bare UUIDs are dropped, loopback and private ranges are kept because `127.0.0.1:1819` is the most diagnostic string in the log, and the excerpt is size-capped.
+* **One model allowlist, applied at four points**: the fresh `models.list` response, the cached list replayed at startup, the default pick, and the id that actually reaches `generateContent`. Filtering only the first is the bug this file exists to prevent.
+* **The model cannot write security settings.** Only keys in `WRITABLE` are applied; an unknown key is rejected and logged rather than ignored; `accessSecret` and `accessToken` are deliberately absent; and every value is type- and range-checked before the profile's own `normalize` runs. The allowlist is derived from `ConnectionProfile`, not copied from the Android field names, because a copied list would have silently rejected every suggestion while telling the user it was applied.
+* **The chat can write even less, and only on your click.** Settings proposed in a conversation pass a narrower allowlist than the advisor's, are re-validated at the moment you press Apply rather than trusted from when the answer arrived, and are written through the one gate that also persists the profile and revises the running session. The model proposes; it never applies.
+
+**Chat is its own tab, with everything the mobile edition has.** Four ready-made questions on the empty page, your message on screen the moment you press send, copy on any answer, editing a message you already sent, deleting one or several, *Try again* on a message that never went out, and *Stop* for an answer in flight. A failed request becomes a retryable bubble carrying a translated sentence with Google's raw text kept underneath as detail — not an anonymous line in an error bar. Nothing is deleted without a confirmation that names the count, whether it is one bubble or the whole conversation. The ✨ explanation of any setting ends with *Did not understand? Ask the assistant*, which carries the question — and the explanation you just read — into this tab.
+
+**The assistant can change settings for you.** Ask for a change and the answer arrives with a proposal card: every entry as `setting: old → new` with the model's own one-line reason, an **Apply** button, and a note that tunnel settings are handed to the engine at start-up, so they take effect on the next connect. The settings pages refresh the moment the write lands — the profile has one source of truth, Rust, which announces what it wrote, and the front end re-reads it before saving an edit of its own, so a change applied from the chat cannot be overwritten by a stale copy. Pressing Apply confirms the reconnect in a dialog rather than a line of small print, because the single most important sentence in the feature — that what you just approved is not live yet — must not be something you can scroll past.
+
+Two rules make this safe. A proposal is validated against the allowlist **before it is drawn**, so a change the app would refuse never appears as a button that does nothing. And the chat's allowlist is deliberately **narrower than the advisor's**: the network backend, the upstream proxy, routing rules, split tunnelling, a manual endpoint, LAN sharing, the kill switch and every credential are not writable from a conversation, because those decide which traffic is protected and where it goes — a writable upstream proxy is a writable *"send all of this user's traffic through a host of my choosing"*, and a `direct` routing rule reads like a performance tip while being a de-anonymisation. Tuning is writable: protocol, obfuscation strength, MTU, fragmentation, keepalive, DNS, IP version, ECH, MASQUE-over-HTTP/2, IPv6 leak protection and reconnect behaviour.
+
+**The settings area is now the mobile menu.** A hub of grouped rows — icon, title, subtitle, current value, chevron, and a per-row ✨ — opening subpages, with the old flat *Advanced* page gone and the reset row as a separate confirmed action. Hub and subpages are rendered from one section definition, so no control exists twice and storage behaviour cannot drift between the two. A jsdom test asserts that every field carries exactly one ✨, that displayed values are human-readable rather than raw enum names, that edits reach the profile store, and that the ✨ bubble refuses to call the model when the gate is closed.
+
+**Aether Core 1.8.0 → 1.9.0.** The upgrade is a real three-way merge — upstream 1.9.0, this repository's patched 1.8.0, and the recorded 1.8.0 baseline — with 20 conflicts resolved and none left; the merged core type-checks and passes its own suite at 265 tests. Upstream absorbed the 1.2.3 throughput work (the rx/tx window split, the HTTP/2 send path, capsule batching), so the `masque_h2.rs` patch was **dropped** rather than carried: keeping it would have meant maintaining a fork of code upstream now owns, and `sync-core.sh` no longer merges that file. What upstream did not absorb still ships as a patch and now carries `AETHER-APP-PATCH` markers in the source, so the next upgrade cannot lose it quietly: CUBIC selection in smoltcp (pinned by the `socket-tcp-cubic` feature), the packet-queue depth cap, and the split `SO_RCVBUF`/`SO_SNDBUF` budgets. `CoreCaps::for_version` compares with `>=`, so every 1.5.0 and 1.7.0 capability stays enabled.
+
+**Fixed: a pinned address range did nothing.** Endpoint mode *Manual range* sent `AETHER_SCAN_CIDRS`, `AETHER_MASQUE_CIDRS` and `AETHER_WG_CIDRS` — and no core version has ever read them, so a typed range was swept over the engine's own built-in ranges instead. Both scanners now honour them (the protocol-specific variable first, `AETHER_SCAN_CIDRS` as the shared fallback):
+
+* an entry is validated before use, and `10.0.0.0/64` is rejected — the engine's parser accepts any prefix that fits in a `u8` and then collapses it to a single address, so a mistyped range used to become one silent host;
+* a bare address becomes a one-host range, and the order you typed is preserved;
+* built-in seed addresses outside the pinned range are no longer probed, because seeds are probed first and the tunnel would otherwise still land on an address you did not ask for — seeds *inside* the range are kept, so start-up stays fast;
+* the IPv4 address embedded in a WARP IPv6 address comes from your range too;
+* with nothing valid left, the built-in behaviour returns: an empty scan means never connecting, which no one typing a range is asking for.
+
+**Upgrade note:** saved profiles load untouched. The AI layer is inert until you enter a key, and every AI control is additive — no existing setting changed its default, its name, or its meaning.
+
+### Security audit summary
+
+| Area | Result |
+|---|---|
+| Secrets and keys | No hardcoded credentials; the Gemini key is DPAPI-sealed; Zero Trust secrets and upstream credentials are not persisted |
+| AI boundary | Requests only through the tunnel's SOCKS5 with exit-side DNS; log excerpts redacted and capped; model output cannot write security settings |
+| TLS and certificates | Platform validation plus SPKI pin verification |
+| DNS, IPv6 and WebRTC | Protected path verified; direct UDP and unsafe IPv6 fallback blocked |
+| Chained backend | Stage 2 listens on loopback only; every Psiphon connection is forced through stage 1 |
+| User input to the engine | Pinned ranges are validated before they reach the scanner; an invalid entry is dropped, never silently reinterpreted |
+| Local storage and logs | IPs masked; secrets excluded; identity-file protection remains a hardening item |
+| Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
+
+Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+<details>
+<summary>Version 1.2.3 — bundled Aether Core 1.8.0</summary>
 
 **Upgrade notice:** 1.2.3 adds the **Aether → Psiphon** chained transport backend — the capability of Aether Mobile 1.2.8, brought to Windows with the same method — bundles **Aether Core 1.8.0**, and gives the exit-country picker a flag on every row. Saved profiles load unchanged, and the desktop version stays `1.2.3` across `tauri.conf.json`, `package.json` and the installer script.
 
@@ -75,6 +126,8 @@ Android's third layer (`PsiphonSocksFront`, with udpgw, a dedicated DNS lane, QU
 | Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
 
 Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+</details>
 
 <details>
 <summary>Version 1.2.2 — bundled Aether Core 1.7.0</summary>
@@ -294,10 +347,10 @@ All files are produced automatically by GitHub Actions and published to
 
 | File | Description |
 |---|---|
-| `Aether-Setup-1.2.3-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
-| `Aether-Setup-1.2.3-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
-| `Aether-Portable-1.2.3-x64.zip` | Portable, no installation, 64-bit |
-| `Aether-Portable-1.2.3-x86.zip` | Portable, no installation, 32-bit |
+| `Aether-Setup-1.2.4-x64.exe` | Windows 64-bit — graphical installer with uninstaller (recommended) |
+| `Aether-Setup-1.2.4-x86.exe` | Windows 32-bit — graphical installer with uninstaller |
+| `Aether-Portable-1.2.4-x64.zip` | Portable, no installation, 64-bit |
+| `Aether-Portable-1.2.4-x86.zip` | Portable, no installation, 32-bit |
 | `SHA256SUMS.txt` | Checksums for verifying file integrity |
 
 **Requirements:** Windows 10 build 1809 (October 2018 Update) or newer.

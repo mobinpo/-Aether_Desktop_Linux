@@ -5,6 +5,19 @@
 
 * { box-sizing: border-box; }
 
+/* ۱.۲.۴-p4 — ریشهٔ «جرقهٔ جامانده زیر A».
+
+   `hidden` در HTML با `display: none` از شیوه‌نامهٔ مرورگر کار می‌کند، و هر
+   قاعدهٔ کلاسیِ ما که `display` بگذارد بر آن **مقدم** است. `.connect__icon`
+   دقیقاً `display: grid` داشت، پس در حالت متصل `iconEl.hidden = true` هیچ
+   کاری نمی‌کرد و آیکون پاور همان‌جا زیرِ نشانِ A می‌ماند — همان دو لکهٔ
+   فیروزه‌ای که کاربر دید (کمانِ آیکون، به رنگِ `--accent` منت).
+
+   یک قاعدهٔ سراسری و نه یک وصله روی همان کلاس: `.ccard__pill-flag` و `.shield`
+   هم `display` دارند و هم با `hidden` خاموش می‌شوند، پس همین باگ آنجا هم
+   کمین کرده بود. `!important` لازم است چون باید بر هر قاعدهٔ کلاسی غلبه کند. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -130,6 +143,25 @@ bdi { direction: ltr; unicode-bidi: isolate; }
   display: flex;
   justify-content: center;
 }
+
+/* ۱.۲.۴-p2 — ریشهٔ سه ایرادِ ظاهری، در یک قاعده که هرگز نوشته نشده بود.
+   `#view` تنها فرزندِ `.main` است و در CSS **هیچ** قاعده‌ای نداشت. یک flex item
+   بدون `width` به عرضِ محتوایش جمع می‌شود: اندازه‌گیریِ واقعی در پنجرهٔ ۹۶۰px
+   عرض ۲۷۶px داد. `width: 100%` روی `.view` هم نجاتش نمی‌داد، چون ۱۰۰٪ِ همان
+   ظرفِ جمع‌شده بود و `--content-max: 560px` عملاً هیچ‌وقت به کار نمی‌آمد.
+   پیامدها همان سه چیزی بود که کاربر دید: کارت اتصال باریک می‌شد، برای همین
+   ردیف‌هایش دو خطی و کارت بلند می‌شد و ته‌اش زیر لبهٔ پنجره می‌رفت؛ و فیلد کلید
+   API به یک نوارِ کوچک بدل می‌شد. jsdom هیچ‌کدام را نمی‌دید، چون چیدمان را
+   اندازه نمی‌گیرد — `tests/layout-desktop.mjs` برای همین اضافه شد. */
+#view {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: var(--content-max);
+  display: flex;
+  flex-direction: column;
+}
+
 .view {
   width: 100%;
   max-width: var(--content-max);
@@ -392,11 +424,16 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
 /* ---- عیب‌یابی ------------------------------------------------------ */
 .summary { margin: 0; color: var(--on-dark-muted); }
 .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* ۱.۲.۴-p1 — چهار فرزند در یک گریدِ سه‌ستونه: ریشهٔ «متن انگلیسی از کادر بیرون
+   زده». هر ردیف بررسی چهار عنصر دارد (نقطه، نام، وضعیت، شرح) و عنصر چهارم
+   خودبه‌خود به سطر دوم و ستونِ ۲۶پیکسلی می‌افتاد — پس کلمه‌به‌کلمه می‌شکست و از
+   ارتفاع کارت می‌زد بیرون. جای‌گذاری حالا صریح است و شرح کلِ عرض را دارد — در هر
+   دو زبان. */
 .check {
   display: grid;
-  grid-template-columns: 26px 1fr auto;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   background: var(--navy-800);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 10px;
@@ -411,7 +448,19 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
 .check--pass .check__badge { background: var(--aether-cyan); }
 .check--warn .check__badge { background: #F0B429; }
 .check--fail .check__badge { background: var(--aether-error); color: #fff; }
-.check__detail { color: var(--on-dark-muted); font-size: 12px; }
+.check__dot, .check__badge { grid-column: 1; grid-row: 1; }
+.check__name { grid-column: 2; grid-row: 1; min-width: 0; }
+.check__state { grid-column: 3; grid-row: 1; }
+.check__detail {
+  /* شرح زیرِ نام می‌نشیند و تا لبهٔ کارت کشیده می‌شود. */
+  grid-column: 2 / -1;
+  grid-row: 2;
+  color: var(--on-dark-muted);
+  font-size: 12px;
+  /* یک جملهٔ بلندِ بدون فاصله (مسیر، پیام خطا) نباید از کارت بیرون بزند. */
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
 
 .log {
   background: #070B14;
@@ -441,6 +490,16 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
 }
 .card__k { font-size: 11px; color: var(--on-dark-muted); text-transform: uppercase; letter-spacing: 0.6px; }
 .card__v { font-size: 15px; font-variant-numeric: tabular-nums; user-select: text; }
+/* ۱.۲.۴-p1 — عنوانِ کارت. بدون این قاعده، عنوان‌های صفحهٔ دستیار یک `<h3>` خامِ
+   مرورگر بودند: درشت‌تر از بقیهٔ رابط و با حاشیهٔ پیش‌فرض که ریتمِ `gap` کارت را
+   می‌شکست. */
+.card__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--on-dark);
+  letter-spacing: 0.2px;
+}
 .note { margin: 0; font-size: 12px; color: var(--on-dark-muted); }
 
 .view--about { align-items: center; text-align: center; }
@@ -590,8 +649,32 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
   50%      { transform: translateZ(0) scale(1.06); }
 }
 
-.connect { margin: 0; transition: transform 140ms ease, box-shadow 600ms ease, color 600ms ease; }
+/* =============================================================================
+   ۱.۲.۴-p1 — دیسکِ پشتِ نشان، دقیقاً مثل موبایل
+   -----------------------------------------------------------------------------
+   دو چیز بود که A را در دسکتاپ روی یک «پس‌زمینه» می‌نشاند و در موبایل نیست:
+     ۱) گرادیانِ navy-600 → navy-800 که یک دیسکِ خاکستریِ روشن‌تر از پس‌زمینه
+        می‌ساخت. موبایل دیسک را با خودِ لهجه رنگ می‌زند (`accent 28%` → `#0F1626`)،
+        پس دیسک دیده نمی‌شود و فقط درخششِ همان رنگ دیده می‌شود.
+     ۲) دو حلقه: `.connect__ring` و خطِ ۱پیکسلیِ `box-shadow`. موبایل صریحاً هیچ
+        حلقه‌ای دور دیسک ندارد (مستندِ ConnectButton.kt: «No travelling ring
+        around the disc»)؛ تنها حلقهٔ مجاز کمانِ مشغول است.
+   بلومِ نرم می‌ماند: همان هالهٔ موبایل است.
+   ============================================================================= */
+.connect {
+  margin: 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent, #4C8DFF) 28%, transparent),
+    #0F1626
+  );
+  box-shadow: 0 18px 60px -20px color-mix(in srgb, var(--accent, #4C8DFF) 70%, transparent);
+  transition: transform 140ms ease, box-shadow 600ms ease, color 600ms ease;
+}
 .connect.is-error { color: var(--aether-error); }
+/* حلقهٔ درونی حذف شد — رجوع به بالا. گرهِ DOM در جایی ساخته نمی‌شود، و این قاعده
+   برای هر نسخهٔ کش‌شدهٔ قدیمی هم بیمه است. */
+.connect__ring { display: none; }
 
 /* کمان ۹۰ درجهٔ در حال چرخش — فقط در BUSY (۱۱۰۰ms خطی). */
 .connect__arc {
@@ -718,3 +801,456 @@ html[dir="rtl"] .switch.is-on .switch__knob { transform: translateX(-20px); }
 
 .boot-skeleton { min-height: 420px; border-radius: 18px; background: linear-gradient(90deg, rgba(255,255,255,.02), rgba(255,255,255,.07), rgba(255,255,255,.02)); background-size: 240% 100%; animation: boot-shimmer 1.2s ease-in-out infinite; }
 @keyframes boot-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+
+/* =============================================================================
+   ۱.۲.۴ — کارت اتصال + نشانِ A  (پورت از ConnectionCard.kt و AetherMark.kt)
+   -----------------------------------------------------------------------------
+   رنگ‌های این بلوک عمداً از توکن‌های تم گرفته نمی‌شوند و به پالت برند پین
+   شده‌اند — همان تصمیم مخزن موبایل و به همان دلیل: `tokens.css` تم برنامه را
+   می‌سازد، و کارت اتصال باید در هر تمی مثل اِتِر دیده شود، نه مثل تمِ فعال.
+   یک navy عمیق پشت، یک سطح شیشهٔ اسلیت برای همهٔ زیرظرف‌ها، یک لهجهٔ mint.
+   ============================================================================= */
+
+.ccard {
+  --cc-accent: #4C8DFF;
+  --cc-surface-top: #121A2B;
+  --cc-surface-bottom: #0C1220;
+  --cc-sub: rgba(255, 255, 255, 0.04);
+  --cc-sub-border: rgba(62, 219, 176, 0.12);
+  --cc-text: #E9EEF8;
+  --cc-muted: rgba(233, 238, 248, 0.58);
+  --cc-dim: rgba(233, 238, 248, 0.34);
+  position: relative;
+  width: 100%;
+  /* ۱.۲.۴-p4: ۶۲۰ → ۴۳۰. اندازهٔ قلم‌های این کارت دقیقاً همان sp‌های موبایل‌اند
+     (۲۷/۳۳/۱۳/۱۱/۱۰)، پس تناسب فقط وقتی مانند موبایل می‌شود که عرض هم مانند
+     موبایل باشد: کارت در گوشی ۴۱۱dp منهای دو پدینگ ۱۶dp ، یعنی حدود ۳۸۰px.
+     در ۵۶۰px قلم‌ها ریز به نظر می‌رسیدند و ردیف ۲۶ دایرهٔ پینگ کشیده می‌شد.
+     ۴۳۰ و نه ۳۸۰: در فارسی برچسب‌ها بلندترند و همین پنجاه پیکسل، فرقِ
+     `نقطهٔ پایانی  188.114.99.205:3581` در یک خط و در دو خط است. */
+  max-width: 430px;
+  margin-inline: auto;
+  border-radius: 26px;
+  background: linear-gradient(180deg, var(--cc-surface-top), var(--cc-surface-bottom));
+  /* clip نمی‌شود: بلوم نور باید بتواند از لبهٔ کارت بیرون بزند — همان
+     `shadow(clip = false)` سمت Compose. */
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  text-align: start;
+}
+
+/* لبه: هالهٔ درونی، حاشیهٔ مویی و نور متحرک. همه در canvas کشیده می‌شوند،
+   چون یک قطعهٔ نور که دور محیط گردگوشه می‌چرخد در CSS شدنی نیست. */
+.ccard__edge {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.ccard__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* ۹ پیکسل (پیش‌تر ۱۱): سه اسلاید متا جای یک نوار سه‌ستونی را گرفته‌اند و کارت
+     تناسبش را با تنگ‌کردن ریتم نگه می‌دارد، نه با بلندشدن. */
+  gap: 9px;
+  align-items: center;
+  padding: 13px 16px;
+}
+
+/* ---- ۱. وضعیت ---- */
+.ccard__status { text-align: center; }
+.ccard__title {
+  margin: 0;
+  font-size: 27px;
+  line-height: 31px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--cc-accent);
+  transition: color 600ms ease;
+}
+.ccard__caption { margin: 4px 0 0; font-size: 13px; color: var(--cc-muted); min-height: 18px; }
+
+/* ---- ۲. تایمر ---- */
+.ccard__timer { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.ccard__timer-k {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--cc-muted);
+}
+.ccard__timer-v {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-weight: 700;
+  font-size: 33px;
+  letter-spacing: 1.2px;
+  color: var(--cc-text);
+  font-variant-numeric: tabular-nums;
+}
+.ccard__timer-v.is-dim { color: var(--cc-dim); }
+
+/* ---- ۳. پیل آی‌پی ---- */
+.ccard__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 15px;
+  border-radius: 999px;
+  background: var(--cc-sub);
+  border: 1px solid var(--cc-sub-border);
+}
+.ccard__pill.is-tunnel { border-color: rgba(62, 219, 176, 0.42); }
+.ccard__pill-k { font-size: 12px; color: var(--cc-muted); }
+.ccard__pill-flag { display: inline-flex; width: 22px; height: 15px; line-height: 0; }
+.ccard__pill-flag .flag {
+  width: 22px; height: 15px; border-radius: 2px; display: block;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.ccard__pill-v {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--cc-text);
+}
+
+/* ---- ۴. نوار سرعت ---- */
+.ccard__speeds {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: var(--cc-sub);
+  border: 1px solid var(--cc-sub-border);
+}
+.ccard__speed { flex: 1; display: flex; align-items: center; justify-content: center; }
+.ccard__speed-badge {
+  display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; flex: none;
+}
+.ccard__speed-badge--down { color: #3EDBB0; background: rgba(62, 219, 176, 0.14); }
+.ccard__speed-badge--up { color: #35D0E8; background: rgba(53, 208, 232, 0.14); }
+.ccard__speed-text { display: flex; flex-direction: column; margin-inline-start: 9px; min-width: 0; }
+.ccard__speed-rate {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-weight: 700; font-size: 13px; color: var(--cc-text); white-space: nowrap;
+}
+.ccard__speed-total {
+  font-size: 10px; color: var(--cc-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ccard__divider { width: 1px; height: 28px; background: rgba(255, 255, 255, 0.12); flex: none; }
+
+/* ---- ۵–۷. اسلایدهای متا ---- */
+.ccard__slide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 14px;
+  border-radius: 18px;
+  background: var(--cc-sub);
+  border: 1px solid var(--cc-sub-border);
+}
+.ccard__slide--stack { flex-direction: column; align-items: stretch; gap: 9px; }
+.ccard__slide-row { display: flex; align-items: center; gap: 12px; }
+.ccard__slide-k {
+  font-size: 11px; letter-spacing: 0.6px; color: var(--cc-muted);
+  white-space: nowrap; flex: none;
+}
+/* مقدار هر پیکسلی را که برچسب برنداشته مالک است — کل نکتهٔ اسلایدها همین
+   است: `WIREGUARD → PSIPHON` و یک `ip:port` باید کامل خوانده شوند. */
+.ccard__slide-v {
+  flex: 1;
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cc-text);
+  text-align: end;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* اندپوینت تا ۲۱ نویسه برای IPv4:port و بیشتر برای IPv6 است، پس دو خط
+   می‌گیرد نه سه‌نقطه. */
+.ccard__slide-v--wrap { white-space: normal; word-break: break-all; line-height: 1.35; }
+
+/* ---- متر قدرت پینگ ---- */
+.ccard__ping { display: flex; flex-direction: column; gap: 6px; }
+.ccard__ping-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ccard__ping-k { font-size: 10px; letter-spacing: 0.4px; color: var(--cc-dim); }
+.ccard__ping-q { font-size: 10px; font-weight: 600; color: var(--cc-dim); }
+.ccard__ping-wave { display: block; width: 100%; height: 22px; }
+
+/* =============================================================================
+   دکمهٔ اتصال — هستهٔ جمعی و نشانِ A
+   ============================================================================= */
+
+/* هستهٔ نرم پشت نشان: گلیف باید از دیسک بیرون بتابد، نه صاف رویش بنشیند. */
+.connect__core {
+  position: absolute;
+  width: calc(var(--connect-button) * 0.75);
+  height: calc(var(--connect-button) * 0.75);
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%);
+  opacity: 0;
+  transition: opacity 600ms ease;
+  pointer-events: none;
+}
+.connect.is-on .connect__core { opacity: 1; }
+
+/* نشان، اندازه‌شده تا دیسک را پر کند بی‌آنکه لبه‌اش را لمس کند: لبهٔ نئون
+   چند پیکسل بیرون می‌تابد و آیکون قبلی بلومی نداشت که برایش جا بگذاریم. */
+.connect__mark {
+  position: absolute;
+  width: calc(var(--connect-button) * 0.58);
+  height: calc(var(--connect-button) * 0.58);
+  pointer-events: none;
+}
+
+/* =============================================================================
+   v1.2.4 — دستیار هوش مصنوعی
+   پورت از ui/ai/AiScreen.kt + AiHintIcon.kt
+   ============================================================================= */
+
+/* --- آیکن ✨ کنار هر گزینهٔ تنظیمات ---------------------------------------
+   اندازه و شکلِ چیپِ گردِ a2: یک مربعِ ۲۸px با پس‌زمینهٔ بنفشِ کم‌رنگ. رنگ از
+   --accent مشتق **نمی‌شود**، عمداً: --accent با حالت اتصال سبز/قرمز می‌شود و
+   آیکن دستیار با آن چشمک می‌زد، در حالی که به وضعیت تونل هیچ ربطی ندارد. */
+.aihint {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, #8b7cff 18%, transparent);
+  color: #a89bff;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+.aihint:hover { background: color-mix(in srgb, #8b7cff 30%, transparent); color: #c3baff; }
+.aihint:focus-visible { outline: 2px solid #8b7cff; outline-offset: 2px; }
+/* دروازه بسته: کم‌رنگ ولی **کلیک‌پذیر** — رجوع به مستند aiHintButton. */
+.aihint.is-muted { opacity: 0.45; }
+
+/* --- حبابِ توضیح ---------------------------------------------------------
+   fixed، چون ردیف‌های تنظیمات داخل کارت‌هایی با overflow پنهان‌اند. */
+.aibubble {
+  position: fixed;
+  z-index: 90;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface, #131a24) 96%, #8b7cff);
+  border: 1px solid color-mix(in srgb, #8b7cff 35%, transparent);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+.aibubble__head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.aibubble__title { flex: 1; font-weight: 600; font-size: 12px; color: #c3baff; }
+.aibubble__close {
+  border: 0; background: none; color: var(--text-dim, #8b97a8);
+  font-size: 17px; line-height: 1; cursor: pointer;
+}
+.aibubble__body { color: var(--text, #e6edf6); white-space: pre-wrap; }
+.aibubble__body.is-blocked { color: #ffd479; }
+.aibubble__body.is-error { color: #ff8fa3; }
+
+/* اسپینر — همان یک گلیف در حباب و در چت استفاده می‌شود. */
+.aibubble__spin {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid color-mix(in srgb, #8b7cff 35%, transparent);
+  border-top-color: #a89bff;
+  border-radius: 50%;
+  animation: aispin 720ms linear infinite;
+}
+@keyframes aispin { to { transform: rotate(360deg); } }
+
+/* --- صفحهٔ دستیار -------------------------------------------------------- */
+.view--ai { display: flex; flex-direction: column; gap: 14px; }
+/* `align-items: stretch` — ریشهٔ دومِ «فیلد کوچک و زشت». `.card` فرزندانش را با
+   `flex-start` جمع می‌کند، پس ردیفِ کلید عرضِ کارت را نمی‌گرفت و `flex: 1` روی
+   اینپوت هیچ فضایی برای توزیع نداشت. دکمه‌ها درون ردیف‌های خودشان می‌نشینند، پس
+   پهن‌شدنِ کارت آن‌ها را کشیده نمی‌کند. */
+.ai__section { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.ai__section > .btn { align-self: flex-start; }
+.ai__note { margin: 0; font-size: 12px; line-height: 1.7; color: var(--text-dim, #8b97a8); }
+.ai__subhead { margin: 8px 0 2px; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-dim, #8b97a8); }
+.ai__link { font-size: 12px; color: #a89bff; text-decoration: none; }
+.ai__link:hover { text-decoration: underline; }
+
+/* نوار دروازه — همان نوار اطلاعِ آبی a2: بالای صفحه، پیش از خودِ محتوا. */
+.ai__gate,
+.ai__error {
+  padding: 11px 13px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.ai__gate {
+  background: color-mix(in srgb, #4c8dff 14%, transparent);
+  border: 1px solid color-mix(in srgb, #4c8dff 32%, transparent);
+  color: #cfe0ff;
+}
+.ai__error {
+  background: color-mix(in srgb, #ff5c7a 13%, transparent);
+  border: 1px solid color-mix(in srgb, #ff5c7a 32%, transparent);
+  color: #ffc9d3;
+}
+
+/* ردیف کلید: فیلد تمام عرضِ باقیمانده را می‌گیرد و قدِ دکمه می‌شود — یک کادرِ
+   ۱۸۰پیکسلی کنار یک دکمهٔ بلندتر، همان ناهماهنگی‌ای بود که گزارش شد. */
+.ai__keyrow { display: flex; gap: 8px; align-items: stretch; }
+.ai__keyrow .input { flex: 1; min-width: 0; }
+.ai__keyrow .btn { flex: none; }
+.ai__keyactions { display: flex; gap: 6px; align-items: center; }
+.btn--small { padding: 6px 12px; font-size: 12.5px; }
+.ai__keystate { margin: 0; font-size: 12px; color: var(--text-dim, #8b97a8); }
+/* خطِ خلاصهٔ تست اتصال — سبز وقتی کلید سالم است، قرمز وقتی نیست. */
+.ai__probe.is-ok { color: var(--aether-cyan); }
+.ai__probe.is-bad { color: #ff8fa3; }
+
+.ai__models { display: flex; flex-direction: column; gap: 6px; }
+.ai__model {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, #ffffff 4%, transparent);
+  color: var(--text, #e6edf6);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: start;
+}
+.ai__model:hover { background: color-mix(in srgb, #ffffff 8%, transparent); }
+.ai__model.is-active { border-color: #8b7cff; background: color-mix(in srgb, #8b7cff 15%, transparent); }
+.ai__modelname { flex: 1; }
+.ai__modelmeta { font-size: 11px; color: var(--text-dim, #8b97a8); }
+
+.ai__advisor { display: flex; flex-direction: column; gap: 5px; }
+.ai__reason { margin: 0; font-size: 12.5px; line-height: 1.75; color: var(--text, #e6edf6); }
+.ai__change, .ai__refused { margin: 0; font-size: 12px; font-family: var(--mono, ui-monospace, monospace); direction: ltr; }
+.ai__change { color: #32e0c4; }
+.ai__refused { color: #ffd479; }
+
+/* --- چت ------------------------------------------------------------------ */
+.ai__chat {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 320px; overflow-y: auto;
+  padding: 2px;
+}
+.ai__msg {
+  align-self: flex-start;
+  max-width: 86%;
+  padding: 9px 12px;
+  border-radius: 14px 14px 14px 4px;
+  background: color-mix(in srgb, #ffffff 6%, transparent);
+  font-size: 12.5px; line-height: 1.7;
+  white-space: pre-wrap;
+}
+.ai__msg.is-user {
+  align-self: flex-end;
+  border-radius: 14px 14px 4px 14px;
+  background: color-mix(in srgb, #4c8dff 20%, transparent);
+}
+/* پاسخِ بریده: نشان داده می‌شود، ولی علامت‌دار — رجوع به AiErrorKind::Truncated. */
+.ai__msg.is-failed { border: 1px dashed color-mix(in srgb, #ffd479 55%, transparent); }
+.ai__msg.is-pending { background: none; }
+.ai__composer { display: flex; gap: 8px; align-items: stretch; }
+.ai__composer .input { flex: 1; min-width: 0; }
+.ai__composer .btn { flex: none; }
+
+/* =============================================================================
+   v1.2.4 — منوی تنظیمات (پورت a2)
+   ============================================================================= */
+
+.view--settings { display: flex; flex-direction: column; gap: 4px; }
+
+/* سرصفحهٔ زیرصفحه: فلش بازگشت + عنوان بزرگ، مثل a2. */
+.setpage__head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.setpage__back {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  border: 0; border-radius: 10px;
+  background: color-mix(in srgb, #ffffff 6%, transparent);
+  color: var(--text, #e6edf6); cursor: pointer;
+}
+.setpage__back:hover { background: color-mix(in srgb, #ffffff 12%, transparent); }
+.setpage__title { margin: 0; font-size: 23px; font-weight: 600; letter-spacing: -0.01em; }
+.setpage__title--hub { margin: 2px 0 12px; font-size: 27px; }
+
+/* نوار اطلاع — همان کارتِ آبیِ بالای a2 با آیکن i در یک دایره. */
+.setnotice {
+  display: flex; align-items: flex-start; gap: 12px;
+  margin: 0 0 14px;
+  padding: 13px 15px;
+  border-radius: 14px;
+  background: color-mix(in srgb, #4c8dff 12%, transparent);
+}
+.setnotice__icon {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border-radius: 9px;
+  background: color-mix(in srgb, #4c8dff 26%, transparent);
+  color: #9dc0ff; font-weight: 700; font-size: 13px;
+}
+.setnotice__text { font-size: 13px; line-height: 1.65; color: var(--text, #e6edf6); }
+
+/* برچسب گروه — کوچک، آبی، بالای کارت. */
+.sethub__group {
+  margin: 16px 4px 8px;
+  font-size: 12.5px; font-weight: 600;
+  color: #6f9fff;
+}
+
+/* کارتِ گروه: ردیف‌ها با یک جداکنندهٔ نازک بین‌شان، بدون خط زیر آخرین ردیف. */
+.sethub__card {
+  border-radius: 18px;
+  background: color-mix(in srgb, #ffffff 4%, transparent);
+  overflow: hidden;
+}
+.sethub__card--danger { background: color-mix(in srgb, #ff5c7a 8%, transparent); }
+
+.setrow {
+  display: flex; align-items: center; gap: 13px;
+  padding: 15px 16px;
+  cursor: pointer;
+  border-top: 1px solid color-mix(in srgb, #ffffff 7%, transparent);
+  transition: background 140ms ease;
+}
+.setrow:first-child { border-top: 0; }
+.setrow:hover { background: color-mix(in srgb, #ffffff 5%, transparent); }
+.setrow:focus-visible { outline: 2px solid #4c8dff; outline-offset: -2px; }
+
+.setrow__icon {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px;
+  border-radius: 12px;
+  background: color-mix(in srgb, #4c8dff 16%, transparent);
+  color: #8fb6ff;
+}
+.setrow__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.setrow__title { font-size: 14.5px; color: var(--text, #e6edf6); }
+.setrow__sub { font-size: 12px; line-height: 1.5; color: var(--text-dim, #8b97a8); }
+/* مقدار فعلی: آبی و بدون شکستن — طول ردیف را نباید تعیین کند. */
+.setrow__value {
+  flex: 0 1 auto;
+  max-width: 38%;
+  font-size: 13px; color: #6f9fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.setrow__chev { flex: 0 0 auto; color: var(--text-dim, #8b97a8); display: inline-flex; }
+
+.setrow--danger .setrow__icon { background: color-mix(in srgb, #ff5c7a 16%, transparent); color: #ff8fa3; }
+.setrow--danger .setrow__title { color: #ff8fa3; }
+
+/* برچسبِ گزینه + ✨ در یک ردیف — چیدمان a2. */
+.field__head { display: flex; align-items: center; gap: 8px; }
+.field__head .field__label { flex: 1; min-width: 0; }

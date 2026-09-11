@@ -1,8 +1,8 @@
 [package]
 name = "aether"
-version = "1.8.0"
+version = "1.9.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.91"
 
 [lib]
 name = "aether"
@@ -34,29 +34,15 @@ env_logger = "0.11"
 thiserror = "2"
 anyhow = "1"
 futures = "0.3"
-# ============================================================================
-# 1.2.3-p1: this feature list contained NO congestion-control algorithm.
-#
-# `default-features = false` switches off smoltcp's defaults, and
-# `socket-tcp-cubic` is one of them, so `AnyController::new()` resolved to
-# `NoControl`: the netstack's TCP sender ran with no congestion window at all -
-# no slow start, no AIMD, no backoff on loss. It emitted as fast as the peer's
-# advertised window allowed, forever.
-#
-# Aether TERMINATES TCP inside smoltcp, so this stack - not Windows' own TCP -
-# owns congestion control for everything that leaves the machine through the
-# tunnel. Handing that job to nobody is what builds a standing queue on the
-# uplink, and a standing queue on the uplink delays the ACKs of the DOWNLOAD
-# direction, which is why "download speed is very low" was the symptom of an
-# unthrottled sender. In chained `Aether -> Psiphon` mode the whole PC rides one
-# SSH connection, so that queue sits in front of every flow at once.
-#
-# `socket-tcp-cubic` is added here AND selected explicitly per socket in
-# `netstack.rs` (`set_congestion_control`), so a future feature-list edit cannot
-# silently switch it back off: without the feature the enum variant does not
-# exist and the build fails loudly instead of shipping this bug again.
-# ============================================================================
-smoltcp = { version = "0.12", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-tcp-cubic"] }
+# >>> AETHER-APP-PATCH netstack-congestion-control
+# `default-features = false` کنترل ازدحام smoltcp را هم خاموش می‌کند، پس
+# `AnyController::new()` به `NoControl` می‌رسید: فرستندهٔ TCP نتستک بی هیچ پنجرهٔ
+# ازدحامی کار می‌کرد. اِتِر TCP را داخل smoltcp خاتمه می‌دهد، پس همین پشته —
+# نه TCP خودِ ویندوز — مالک کنترل ازدحامِ هر چیزی است که از تونل بیرون می‌رود.
+# ویژگی اینجا و انتخاب صریح در netstack.rs (`set_congestion_control`) با هم
+# هستند تا حذفِ ویژگی، بیلد را بشکند و نه اینکه بی‌صدا این باگ را برگرداند.
+smoltcp = { version = "0.14", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-tcp-cubic"] }
+# <<< AETHER-APP-PATCH netstack-congestion-control
 boringtun = "0.7"
 x25519-dalek = "2.0.1"
 blake2 = "0.10"

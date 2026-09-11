@@ -950,15 +950,36 @@ pub const WG_SEEDS_V4: &[&str] = &[
 pub const WG_SEEDS_V6: &[&str] = &["2606:4700:d0::a29f:c001", "2606:4700:d1::a29f:c001", "2606:4700:d0::a29f:c301", "2606:4700:d0::bc72:6001"];
 
 pub fn wg_prefixes_v4() -> Vec<&'static str> {
+    // >>> AETHER-APP-PATCH scan-cidrs — «بازهٔ آدرس» در تنظیمات برنامه
+    if let Some(pinned) = crate::prober::pinned_cidrs_v4("AETHER_WG_CIDRS") {
+        return pinned;
+    }
+    // <<< AETHER-APP-PATCH scan-cidrs
     crate::prober::prioritize(WG_PREFIXES_V4, WG_ZT_PREFIXES_V4)
 }
 
 pub fn wg_prefixes_v6() -> Vec<&'static str> {
+    // >>> AETHER-APP-PATCH scan-cidrs
+    if let Some(pinned) = crate::prober::pinned_cidrs_v6("AETHER_WG_CIDRS") {
+        return pinned;
+    }
+    // <<< AETHER-APP-PATCH scan-cidrs
     crate::prober::prioritize(WG_PREFIXES_V6, WG_ZT_PREFIXES_V6)
 }
 
 pub fn wg_seeds_v4() -> Vec<&'static str> {
-    crate::prober::prioritize(WG_SEEDS_V4, &["162.159.193.1"])
+    // >>> AETHER-APP-PATCH scan-cidrs — دانهٔ بیرون از بازهٔ پین‌شده پروب نمی‌شود
+    crate::prober::seeds_within(
+        &crate::prober::prioritize(WG_SEEDS_V4, &["162.159.193.1"]),
+        "AETHER_WG_CIDRS",
+    )
+    // <<< AETHER-APP-PATCH scan-cidrs
+}
+
+/// دانه‌های IPv6؛ مثل همتای v4 به بازهٔ پین‌شده محدود می‌شود.
+/// (AETHER-APP-PATCH scan-cidrs)
+pub fn wg_seeds_v6() -> Vec<&'static str> {
+    crate::prober::seeds_within(WG_SEEDS_V6, "AETHER_WG_CIDRS")
 }
 
 #[cfg(test)]

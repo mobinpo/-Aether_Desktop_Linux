@@ -81,3 +81,64 @@ fn migrate(profile: &mut ConnectionProfile) -> bool {
     profile.settings_rev = SETTINGS_REV;
     true
 }
+
+// ===========================================================================
+//  v12 — انبار ترجیحاتِ کوچک (فقط لایهٔ هوش مصنوعی)
+// ===========================================================================
+
+/// یک انبار کلید/مقدارِ متنی برای ترجیحاتی که نه پروفایل اتصال‌اند و نه راز.
+///
+/// # چرا یک انبار سومِ کوچک
+///
+/// لایهٔ هوش مصنوعی دو چیز را باید به یاد بسپارد: مدلِ انتخاب‌شده و فهرست
+/// مدل‌هایی که کلیدِ کاربر آخرین بار می‌دید. هیچ‌کدام جایی برای زندگی نداشتند و
+/// هر سه گزینهٔ موجود غلط بودند:
+///
+/// * **`profile.json`** — پروفایل *پیکربندی تونل* است و با «بازنشانی همهٔ
+///   تنظیمات» پاک می‌شود. انتخاب مدل به تونل بی‌ربط است و نباید با ریست‌کردن
+///   MTU از بین برود.
+/// * **`secrets.bin`** — با DPAPI مهر می‌شود. شناسهٔ یک مدل راز نیست، و
+///   گذاشتنش آنجا هزینهٔ رمزنگاری را به داده‌ای عمومی می‌داد و مرزِ «هر چیزی که
+///   در این فایل است محرمانه است» را گل‌آلود می‌کرد.
+/// * **`localStorage`** — جایی است که ترجیحات رابط کاربری (زبان) می‌مانند، ولی
+///   *سمت جاوااسکریپت* است، و این مقادیر را **Rust** موقع ساخت نشست می‌خواند.
+///   خواندنشان از فرانت‌اند یعنی هر فراخوان هوش مصنوعی باید مدل را به‌عنوان
+///   پارامتر پاس بدهد و فهرست مجاز روی مرزی اعمال شود که کاربر کنترلش می‌کند.
+///
+/// همان قواعد `ProfileStore`: خواندن هرگز خطا نمی‌دهد، نوشتن اتمیک است.
+pub struct PrefsStore {
+    path: PathBuf,
+}
+
+impl PrefsStore {
+    pub fn new(data_dir: &Path) -> Self {
+        Self { path: data_dir.join("prefs.json") }
+    }
+
+    fn read_all(&self) -> std::collections::BTreeMap<String, String> {
+        std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        self.read_all().get(key).cloned().filter(|v| !v.is_empty())
+    }
+
+    pub fn set_string(&self, key: &str, value: &str) -> Result<()> {
+        let mut all = self.read_all();
+        if value.is_empty() {
+            all.remove(key);
+        } else {
+            all.insert(key.to_string(), value.to_string());
+        }
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let tmp = self.path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&all)?)?;
+        std::fs::rename(&tmp, &self.path)?;
+        Ok(())
+    }
+}

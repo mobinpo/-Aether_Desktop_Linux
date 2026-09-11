@@ -1,6 +1,6 @@
 [package]
 name = "aether-desktop"
-version = "1.2.3"
+version = "1.2.4"
 description = "Aether Desktop - Windows edition"
 authors = ["Cluvex Studio"]
 edition = "2021"
@@ -34,6 +34,8 @@ windows = { version = "0.58", features = [
   "Win32_Networking_WinSock",
   "Win32_System_Threading",
   "Win32_Security",
+  # v12: DPAPI (CryptProtectData) — انبار رازِ مهرشدهٔ کلید API.
+  "Win32_Security_Cryptography",
 ] }
 
 [profile.release]
