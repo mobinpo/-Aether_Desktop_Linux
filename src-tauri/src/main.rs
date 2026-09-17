@@ -25,22 +25,37 @@ mod ai_redaction;
 mod ai_session;
 mod ai_topic;
 mod diagnostics;
-mod exit_regions;
 mod engine;
+mod exit_regions;
+// >>> AETHER-APP-PATCH endpoint-is-the-first-hop
+mod firsthop;
+// >>> AETHER-APP-PATCH the-flag-is-already-on-disk
+mod geoip;
+// <<< AETHER-APP-PATCH the-flag-is-already-on-disk
+// <<< AETHER-APP-PATCH endpoint-is-the-first-hop
+mod budgets;
 mod leakguard;
 mod log;
 mod ping;
 mod probe;
 mod profile;
+mod provenance;
 mod psiphon;
 mod psiphon_health;
+mod pt;
+mod secret_store;
 mod share;
 mod smart_auto;
 mod state;
 mod store;
-mod secret_store;
 mod sysproxy;
+mod tor_bootstrap;
+// >>> AETHER-APP-PATCH tor-native-carrier
+// tor.exe رسمی به‌عنوان فرزندِ نظارت‌شده؛ دلیلش در سرِ خودِ ماژول.
+mod tor_native;
+// <<< AETHER-APP-PATCH tor-native-carrier
 mod tun;
+mod window;
 
 use ai_session::{AiSession, AiSnapshot};
 use profile::ConnectionProfile;
@@ -76,13 +91,68 @@ pub struct AppState {
 
 /// Publishes a snapshot: refresh the lock-free cache, and push it to the UI only
 /// if it actually differs from the last thing the UI was told.
-fn publish(app: &AppHandle, state: &AppState, snapshot: Snapshot, last: &mut Option<Arc<Snapshot>>) {
+/// کمترین فاصلهٔ بین دو انتشارِ snapshot به رابط کاربری.
+///
+/// # چرا این لازم است، در حالی که `publish` «فقط در صورت تغییر» می‌فرستد
+///
+/// آن محافظ در حالت **قطع** کار می‌کرد و در حالت **متصل** بی‌اثر بود:
+/// `Snapshot` شامل `uptime_secs`، `rx_bytes` و `tx_bytes` است و هر سه در هر
+/// تیک عوض می‌شوند. یعنی به‌محض برقراری اتصال، همان پنج انتشار در ثانیه
+/// برمی‌گشت — و هر انتشار یک سریال‌سازیِ JSON، یک عبور از مرز IPC، و یک
+/// رنگ‌آمیزیِ کاملِ صفحهٔ خانه بود. همان چیزی که کاربر به‌عنوان «مصرف CPU پس از
+/// Connect» گزارش کرد.
+///
+/// تیکِ کنترل روی ۲۰۰ms می‌ماند و دست نمی‌خورد: پاسخِ دکمه، واچ‌داگ و
+/// نظارتِ پردازه به آن بسته‌اند. تنها چیزی که کند می‌شود، *گفتنِ* وضعیت به
+/// رابط کاربری است، و آن هم فقط وقتی چیزِ معناداری عوض نشده باشد.
+///
+/// ۵۰۰ms و نه بیشتر: تنها چیزی که در این فاصله دیده می‌شود ساعتِ نشست است
+/// (`HH:MM:SS`) و با دو انتشار در ثانیه هیچ ثانیه‌ای از قلم نمی‌افتد.
+const UI_MIN_INTERVAL: Duration = Duration::from_millis(500);
+
+/// آیا این snapshot چیزی جز شمارنده‌های همیشه‌درحال‌تغییر را عوض کرده؟
+///
+/// مقایسه روی کپی‌ای انجام می‌شود که سه فیلدِ پرنوسان در آن صفر شده‌اند. هر
+/// تغییرِ دیگری — حالت، خطا، اندپوینت، پروتکل، تأخیر، آی‌پی، گارد نشتی، درصد
+/// تور — «معنادار» است و فوراً می‌رود.
+fn only_counters_changed(previous: Option<&Snapshot>, next: &Snapshot) -> bool {
+    let Some(previous) = previous else { return false };
+    let strip = |s: &Snapshot| {
+        let mut c = s.clone();
+        c.uptime_secs = 0;
+        c.rx_bytes = 0;
+        c.tx_bytes = 0;
+        c
+    };
+    strip(previous) == strip(next)
+}
+
+fn publish(
+    app: &AppHandle,
+    state: &AppState,
+    snapshot: Snapshot,
+    last: &mut Option<Arc<Snapshot>>,
+    last_emit_at: &mut Option<Instant>,
+) {
     let snapshot = Arc::new(snapshot);
+    // `latest` همیشه و بی‌قید تازه می‌شود: `get_snapshot` از همین می‌خواند و
+    // نباید هرگز مقدارِ خفه‌شده ببیند.
     *state.latest.lock() = snapshot.clone();
     if last.as_deref() == Some(snapshot.as_ref()) {
         return;
     }
+    // چیزی جز شمارنده‌ها عوض نشده و هنوز نوبتِ انتشار نرسیده؟ رد کن. مقدار
+    // در `latest` نشسته و انتشارِ بعدی همان تازه‌ترین را می‌برد، پس هیچ چیزی
+    // گم نمی‌شود — فقط دیرتر گفته می‌شود.
+    if only_counters_changed(last.as_deref(), snapshot.as_ref()) {
+        if let Some(at) = last_emit_at {
+            if at.elapsed() < UI_MIN_INTERVAL {
+                return;
+            }
+        }
+    }
     *last = Some(snapshot.clone());
+    *last_emit_at = Some(Instant::now());
     let _ = app.emit("aether://state", snapshot.as_ref());
 }
 
@@ -227,6 +297,9 @@ fn core_caps() -> serde_json::Value {
         "customDns": caps.custom_dns,
         "upstream": caps.upstream,
         "routeSniff": caps.route_sniff,
+        // ۱.۲.۵ — بدون این، پنل چهار بک‌اند تور را روی هستهٔ قدیمی هم پیشنهاد
+        // می‌داد و کاربر تنظیمی را پر می‌کرد که هرگز به موتور نمی‌رسد.
+        "tor": caps.tor,
     })
 }
 
@@ -424,9 +497,12 @@ async fn ai_send_chat(app: AppHandle, lang: String, text: String) -> Result<(), 
     let profile = profile_copy(&app);
     let prompt = session.append_user_message(&text)?;
     publish_ai(&app);
-    let handle =
-        tauri::async_runtime::spawn_blocking(move || session.ask_existing(&profile, &lang, &prompt));
-    let result = handle.await.map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        session.ask_existing(&profile, &lang, &prompt)
+    });
+    let result = handle
+        .await
+        .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
     publish_ai(&app);
     result
 }
@@ -442,23 +518,34 @@ async fn ai_retry(app: AppHandle, lang: String, id: u64) -> Result<(), String> {
     let profile = profile_copy(&app);
     let prompt = session.take_failed_prompt(id)?;
     publish_ai(&app);
-    let handle =
-        tauri::async_runtime::spawn_blocking(move || session.ask_existing(&profile, &lang, &prompt));
-    let result = handle.await.map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        session.ask_existing(&profile, &lang, &prompt)
+    });
+    let result = handle
+        .await
+        .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
     publish_ai(&app);
     result
 }
 
 /// یکی از پیام‌های خودِ کاربر را بازنویسی می‌کند و از همان نقطه دوباره می‌پرسد.
 #[tauri::command]
-async fn ai_edit_message(app: AppHandle, lang: String, id: u64, text: String) -> Result<(), String> {
+async fn ai_edit_message(
+    app: AppHandle,
+    lang: String,
+    id: u64,
+    text: String,
+) -> Result<(), String> {
     let session = ai_handle(&app);
     let profile = profile_copy(&app);
     let echo = app.clone();
-    let handle =
-        tauri::async_runtime::spawn_blocking(move || session.edit_message(&profile, &lang, id, &text));
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        session.edit_message(&profile, &lang, id, &text)
+    });
     publish_ai(&echo);
-    let result = handle.await.map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
+    let result = handle
+        .await
+        .map_err(|_| "The request thread stopped unexpectedly.".to_string())?;
     publish_ai(&app);
     result
 }
@@ -506,7 +593,11 @@ fn ai_apply_changes(app: AppHandle, id: u64) -> Result<Vec<(String, String)>, St
             "ai",
             &format!(
                 "chat applied: {}",
-                applied.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(", ")
+                applied
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         );
     }
@@ -541,7 +632,10 @@ async fn ai_advise(app: AppHandle, lang: String) -> Result<ai_session::AdvisorRe
                 if let Err(e) = written {
                     // پچ اعمال شد ولی ذخیره نشد: باید *گفته* شود، چون وگرنه
                     // کاربر فهرست تغییرات را می‌بیند و باور می‌کند نشسته‌اند.
-                    log::DiagnosticsLog::e("ai", &format!("advisor changes could not be saved: {e}"));
+                    log::DiagnosticsLog::e(
+                        "ai",
+                        &format!("advisor changes could not be saved: {e}"),
+                    );
                     publish_ai(&app);
                     return Err(format!("The changes could not be saved: {e}"));
                 }
@@ -552,6 +646,117 @@ async fn ai_advise(app: AppHandle, lang: String) -> Result<ai_session::AdvisorRe
     };
     publish_ai(&app);
     result
+}
+
+/// هندسهٔ پنجره را از `prefs.json` بازمی‌گردانَد.
+///
+/// چرا این‌جا و نه در `tauri.conf.json`: آن فایل یک اندازهٔ ثابت می‌دهد و از
+/// نمایشگرِ کاربر چیزی نمی‌داند. اندازهٔ پیش‌فرضِ ۱۱۸۰×۷۸۰ روی لپ‌تاپِ
+/// ۱۳۶۶×۷۶۸ بلندتر از خودِ صفحه بود، و چون پنجره `decorations: false` است،
+/// لبهٔ پایینی — یعنی تنها دستگیرهٔ تغییرِ اندازه — زیرِ صفحه گم می‌شد.
+///
+/// همهٔ حساب‌ها در `window.rs` است و آزمون دارد؛ این تابع فقط واحدها را
+/// ترجمه می‌کند: API فیزیکی می‌دهد، منطق منطقی می‌خواهد.
+fn restore_window_geometry(win: &tauri::WebviewWindow, prefs: &store::PrefsStore) {
+    let saved = prefs
+        .get_string(window::PREFS_KEY)
+        .as_deref()
+        .and_then(window::decode);
+
+    let scale = win.scale_factor().unwrap_or(1.0).max(0.1);
+    // `current_monitor` روی مانیتوری که پنجره رویش است؛ اگر معلوم نبود،
+    // مانیتورِ اصلی. اگر هیچ‌کدام معلوم نبود، هیچ کاری نمی‌کنیم — بهتر از
+    // جابه‌جا کردنِ پنجره بر اساسِ یک حدس.
+    let monitor = match win.current_monitor() {
+        Ok(Some(m)) => Some(m),
+        _ => win.primary_monitor().ok().flatten(),
+    };
+    let Some(monitor) = monitor else {
+        log::DiagnosticsLog::w(
+            "ui",
+            "No monitor could be queried, so the window keeps the size from the config.",
+        );
+        return;
+    };
+    let area = monitor.work_area();
+    let work = window::Rect::new(
+        (f64::from(area.position.x) / scale).round() as i32,
+        (f64::from(area.position.y) / scale).round() as i32,
+        (f64::from(area.size.width) / scale).round() as u32,
+        (f64::from(area.size.height) / scale).round() as u32,
+    );
+
+    // اندازهٔ پیش‌فرض از خودِ پنجره خوانده می‌شود (همان چیزی که
+    // `tauri.conf.json` ساخته)، نه از عددی که این‌جا دوباره نوشته شده باشد.
+    let (default_w, default_h) = match win.inner_size() {
+        Ok(s) => (
+            (f64::from(s.width) / scale).round() as u32,
+            (f64::from(s.height) / scale).round() as u32,
+        ),
+        Err(_) => (window::MIN_W, window::MIN_H),
+    };
+
+    let g = window::place(saved, work, default_w, default_h);
+    let _ = win.set_size(tauri::LogicalSize::new(g.rect.w, g.rect.h));
+    let _ = win.set_position(tauri::LogicalPosition::new(g.rect.x, g.rect.y));
+    if g.maximized {
+        let _ = win.maximize();
+    }
+}
+
+/// اندازه و جای فعلیِ پنجره را می‌نویسد.
+///
+/// موقع بیشینه‌بودن، اندازهٔ صفحه ذخیره **نمی‌شود**: کاربری که بیشینه را لغو
+/// می‌کند باید پنجرهٔ خودش را ببیند. فقط پرچمِ `maximized` تازه می‌شود.
+fn remember_window_geometry(win: &tauri::WebviewWindow, prefs: &store::PrefsStore) {
+    let maximized = win.is_maximized().unwrap_or(false);
+    let previous = prefs
+        .get_string(window::PREFS_KEY)
+        .as_deref()
+        .and_then(window::decode);
+
+    let rect = if maximized {
+        match previous {
+            Some(g) => g.rect,
+            // هیچ اندازهٔ قبلی‌ای نیست (اولین اجرا، و کاربر همان اول بیشینه
+            // کرده): همان اندازهٔ فعلی، تا چیزی برای بازگشت وجود داشته باشد.
+            None => match current_rect(win) {
+                Some(r) => r,
+                None => return,
+            },
+        }
+    } else {
+        match current_rect(win) {
+            Some(r) => r,
+            None => return,
+        }
+    };
+
+    let g = window::Geometry { rect, maximized };
+    if previous == Some(g) {
+        return; // نوشتنِ همان مقدار، یک I/O بی‌دلیل در هر پیکسل کشیدن است.
+    }
+    if let Err(e) = prefs.set_string(window::PREFS_KEY, &window::encode(&g)) {
+        log::DiagnosticsLog::w("ui", &format!("Could not save the window size: {e}"));
+    }
+}
+
+/// اندازه/جای فعلی در واحدِ منطقی.
+fn current_rect(win: &tauri::WebviewWindow) -> Option<window::Rect> {
+    let scale = win.scale_factor().unwrap_or(1.0).max(0.1);
+    let size = win.inner_size().ok()?;
+    let pos = win.outer_position().ok()?;
+    let w = (f64::from(size.width) / scale).round() as u32;
+    let h = (f64::from(size.height) / scale).round() as u32;
+    if w == 0 || h == 0 {
+        return None; // پنجرهٔ کمینه‌شده روی ویندوز صفر گزارش می‌شود.
+    }
+    Some(window::Rect::new(
+        (f64::from(pos.x) / scale).round() as i32,
+        (f64::from(pos.y) / scale).round() as i32,
+        w,
+        h,
+    ))
 }
 
 fn main() {
@@ -572,6 +777,28 @@ fn main() {
             let controller = AetherController::new(&data_dir);
             let first = controller.snapshot();
             let prefs = Arc::new(store::PrefsStore::new(&data_dir));
+
+            // پیش از نخستین فریم: اندازه/جای پنجره از اجرای قبلی، و جا دادنش
+            // در نمایشگرِ همین لحظه. بعد از نمایش انجام‌دادنش یعنی کاربر یک
+            // جهشِ اندازه ببیند.
+            if let Some(win) = app.get_webview_window("main") {
+                restore_window_geometry(&win, &prefs);
+                let prefs_for_events = prefs.clone();
+                let watched = win.clone();
+                win.on_window_event(move |event| match event {
+                    // Resized هم هنگام بیشینه/بازگردانی می‌آید، پس پرچم هم با
+                    // همین مسیر تازه می‌شود.
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) => {
+                        remember_window_geometry(&watched, &prefs_for_events);
+                    }
+                    // و یک نوشتنِ آخر: بستن ممکن است پیش از رسیدنِ آخرین
+                    // Resized برسد.
+                    tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                        remember_window_geometry(&watched, &prefs_for_events);
+                    }
+                    _ => {}
+                });
+            }
             app.manage(AppState {
                 controller: Mutex::new(controller),
                 latest: parking_lot::Mutex::new(Arc::new(first)),
@@ -591,6 +818,7 @@ fn main() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last: Option<Arc<Snapshot>> = None;
+                let mut last_emit_at: Option<Instant> = None;
                 loop {
                     let began = Instant::now();
                     let st: State<'_, AppState> = handle.state();
@@ -607,7 +835,7 @@ fn main() {
                         }
                     };
                     if let Some(snapshot) = snapshot {
-                        publish(&handle, &st, snapshot, &mut last);
+                        publish(&handle, &st, snapshot, &mut last, &mut last_emit_at);
                     }
                     // Sleep the REMAINDER of the beat. A tick that took 900ms must
                     // not then wait another 200ms before the next one.

@@ -369,7 +369,9 @@ fn looks_like_ipv6(token: &str) -> bool {
         return false;
     }
     if parts.len() == 8 {
-        return parts.iter().all(|p| p.chars().all(|c| c.is_ascii_hexdigit()));
+        return parts
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()));
     }
     if parts.len() == 7 {
         let (hex, last) = parts.split_at(6);
@@ -418,9 +420,9 @@ fn mask_ipv6(ip: &str) -> String {
 fn looks_like_ipv4(token: &str) -> bool {
     let parts: Vec<&str> = token.split('.').collect();
     parts.len() == 4
-        && parts.iter().all(|p| {
-            !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit())
-        })
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn mask_ipv4_literals(line: &str) -> String {
@@ -504,7 +506,12 @@ mod tests {
 
     #[test]
     fn a_timestamp_is_never_mistaken_for_an_address() {
-        for line in ["10:23:41", "00:00:08 connected", "23:59:59.123 tick", "version 1.2.9"] {
+        for line in [
+            "10:23:41",
+            "00:00:08 connected",
+            "23:59:59.123 tick",
+            "version 1.2.9",
+        ] {
             assert_eq!(redact_line(line), line, "line: {line}");
         }
     }
@@ -517,7 +524,10 @@ mod tests {
 
     #[test]
     fn a_public_v4_keeps_only_its_16() {
-        assert_eq!(redact_line("endpoint 188.114.99.205:3581"), "endpoint 188.114.x.x:3581");
+        assert_eq!(
+            redact_line("endpoint 188.114.99.205:3581"),
+            "endpoint 188.114.x.x:3581"
+        );
         assert_eq!(redact_line("server 139.162.179.163"), "server 139.162.x.x");
     }
 
@@ -557,7 +567,10 @@ mod tests {
     #[test]
     fn an_address_that_elides_from_the_front_is_masked_whole() {
         let out = redact_line("addr 2606::1234 seen");
-        assert!(out.contains("2606:") || out.contains("[REDACTED-IPV6]"), "{out}");
+        assert!(
+            out.contains("2606:") || out.contains("[REDACTED-IPV6]"),
+            "{out}"
+        );
         let out2 = redact_line("addr ::1234:5678 seen");
         assert!(out2.contains("[REDACTED-IPV6]"), "{out2}");
     }

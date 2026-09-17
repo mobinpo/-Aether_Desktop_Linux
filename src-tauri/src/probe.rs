@@ -14,8 +14,11 @@ use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 /// مقاصد راستی‌آزمایی — همان لیست NetProbe.kt.
-const PROBE_HOSTS: [(&str, u16); 3] =
-    [("cloudflare.com", 80), ("www.gstatic.com", 80), ("1.1.1.1", 80)];
+const PROBE_HOSTS: [(&str, u16); 3] = [
+    ("cloudflare.com", 80),
+    ("www.gstatic.com", 80),
+    ("1.1.1.1", 80),
+];
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(4_000);
 /// `connection not allowed by ruleset` (RFC 1928 §6) — تنها کد پاسخی که
@@ -36,26 +39,57 @@ pub struct IpInfo {
     pub country_code: Option<String>,
 }
 
-/// فراهم‌کنندگان جای‌یابی — همان GEO_PROVIDERS اندروید، منهای مورد TLS
-/// (دسکتاپ عمداً وابستگی TLS اضافه نمی‌کند؛ ip-api و 1.1.1.1 هر دو HTTP خام‌اند).
+/// یک فراهم‌کنندهٔ جای‌یابی — معادل `GeoProvider` اندروید.
 struct GeoProvider {
-    host: &'static str,
+    /// چیزی که به آن وصل می‌شویم — نام یا IP.
+    dial: &'static str,
+    /// نامی که گواهی TLS با آن سنجیده می‌شود و در سرآیند `Host:` می‌رود.
+    ///
+    /// برای فراهم‌کنندهٔ IP این دو یکی نیستند و همین نکتهٔ کار است: به
+    /// `1.1.1.1` وصل می‌شویم (بی‌نیاز از DNS) و گواهی را با
+    /// `www.cloudflare.com` می‌سنجیم — همان میزبان، همان گواهی، همان مسیر.
+    verify_as: &'static str,
     port: u16,
     path: &'static str,
-    /// آیا این فراهم‌کننده روی TLS/443 است (معادل tls=true در NetProbe.kt).
     tls: bool,
 }
 
-// رفع ریشه‌ای مشکل ۲: روی شبکهٔ اپراتورهای ایران، درخواست HTTP خام روی :80
-// به ip-api / 1.1.1.1 فیلتر/دستکاری می‌شود (در لاگ: «direct geo ... failed»).
-// دقیقاً مانند نسخهٔ موبایل، یک فراهم‌کنندهٔ TLS (cloudflare:443) اضافه شد
-// که روی 443 و با دست‌دادن TLS واقعی عبور می‌کند. ترتیب عیناً مانند NetProbe.kt.
-// v8 audit: the TLS provider is now FIRST so the default geo path is
-// encrypted; plain HTTP (:80) is only a fallback after a TLS failure.
-const GEO_PROVIDERS: [GeoProvider; 3] = [
-    GeoProvider { host: "www.cloudflare.com", port: 443, path: "/cdn-cgi/trace", tls: true },
-    GeoProvider { host: "ip-api.com", port: 80, path: "/json/?fields=status,query,countryCode", tls: false },
-    GeoProvider { host: "1.1.1.1", port: 80, path: "/cdn-cgi/trace", tls: false },
+/// فراهم‌کنندگان جای‌یابی — همان GEO_PROVIDERS اندروید ۱.۳.۰.
+///
+/// # چرا هیچ‌کدام دیگر HTTP خام نیست (F-5)
+///
+/// تا ۱.۲.۴ دو فراهم‌کننده از سه فراهم‌کننده روی `:80` و بدون رمز بودند.
+/// نه اعتبارنامه‌ای در آن‌ها بود و نه داده‌ای از کاربر، پس افشای محتوا مسئله
+/// نبود؛ مسئله این بود که ناظرِ مسیر می‌دید *این دستگاه پرسید «IP من چیست؟»*
+/// و آن هم با شکلی که قابل تشخیص است — یعنی یک انگشت‌نگاریِ ضعیف اما واقعی
+/// از خودِ برنامه، روی شبکه‌ای که وجود همین برنامه در آن، حساس است. کلودفلر
+/// همان `/cdn-cgi/trace` را روی ۴۴۳ هم می‌دهد، پس این هزینه‌ای نداشت.
+///
+/// # چرا فراهم‌کنندهٔ دوم با IP وصل می‌شود ولی با نام سنجیده می‌شود
+///
+/// اندروید `1.1.1.1:443` را با اتکا به iPAddress SAN گواهی می‌سنجد؛ سنجندهٔ
+/// پیش‌فرضِ جاوا این را پشتیبانی می‌کند. TLS دسکتاپ `native_tls` است و روی
+/// ویندوز یعنی schannel — و اینکه schannel یک IP خام را با آن SAN می‌سنجد یا
+/// نه، چیزی نیست که این پورت بتواند تأییدش کند. اگر نسنجد، این فراهم‌کننده
+/// می‌مرد، و همین فراهم‌کننده تنها مسیر جای‌یابیِ بی‌نیاز از DNS است — یعنی
+/// دقیقاً چیزی که شبکهٔ با resolverِ آلوده را می‌گذراند. پس به IP وصل می‌شود
+/// و گواهی با `www.cloudflare.com` سنجیده می‌شود: بی‌DNS، با سنجشِ کاملِ نام،
+/// و بی‌وابستگی به پشتیبانیِ IP-SAN در هیچ لایه‌ای.
+const GEO_PROVIDERS: [GeoProvider; 2] = [
+    GeoProvider {
+        dial: "www.cloudflare.com",
+        verify_as: "www.cloudflare.com",
+        port: 443,
+        path: "/cdn-cgi/trace",
+        tls: true,
+    },
+    GeoProvider {
+        dial: "1.1.1.1",
+        verify_as: "www.cloudflare.com",
+        port: 443,
+        path: "/cdn-cgi/trace",
+        tls: true,
+    },
 ];
 
 /// معادل `PortProbe.isReady()` — آیا SOCKS5 محلی موتور بالا آمده؟
@@ -190,8 +224,11 @@ pub fn socks5_stream_on(
 /// self-probes: a refusal of one of the app's own probes is not evidence that the
 /// exit filters, and counting it used to convict healthy servers and trigger a
 /// rotation that killed every live flow.
-pub const WATCHDOG_TARGETS: [(&str, u16); 3] =
-    [("cloudflare.com", 80), ("www.gstatic.com", 80), ("1.1.1.1", 80)];
+pub const WATCHDOG_TARGETS: [(&str, u16); 3] = [
+    ("cloudflare.com", 80),
+    ("www.gstatic.com", 80),
+    ("1.1.1.1", 80),
+];
 
 /// The watchdog destinations, for whoever needs to exempt them from scoring.
 pub fn watchdog_targets() -> impl Iterator<Item = (&'static str, u16)> {
@@ -205,9 +242,7 @@ pub fn watchdog_targets() -> impl Iterator<Item = (&'static str, u16)> {
 pub fn watchdog_probe() -> bool {
     let passed = WATCHDOG_TARGETS
         .iter()
-        .filter(|(host, port)| {
-            socks5_stream(*host, *port, Duration::from_secs(5)).is_some()
-        })
+        .filter(|(host, port)| socks5_stream(*host, *port, Duration::from_secs(5)).is_some())
         .count();
     passed >= 2
 }
@@ -258,17 +293,17 @@ fn http_head_ok(host: &str, port: u16) -> Option<()> {
 pub fn fetch_ip_direct(timeout_ms: u64) -> Option<IpInfo> {
     for p in &GEO_PROVIDERS {
         let got = if p.tls {
-            connect_direct_ipv4(p.host, p.port, timeout_ms)
-                .and_then(|s| tls_get(s, p.host, p.path))
+            connect_direct_ipv4(p.dial, p.port, timeout_ms)
+                .and_then(|s| tls_get(s, p.verify_as, p.path))
                 .and_then(|body| parse_ip_info(&body))
         } else {
-            connect_direct_ipv4(p.host, p.port, timeout_ms)
-                .and_then(|mut s| http_get(&mut s, p.host, p.path))
+            connect_direct_ipv4(p.dial, p.port, timeout_ms)
+                .and_then(|mut s| http_get(&mut s, p.verify_as, p.path))
                 .and_then(|body| parse_ip_info(&body))
         };
         match got {
-            Some(info) => return Some(refine_country(info, p.host, false, timeout_ms)),
-            None => DiagnosticsLog::d("netprobe", &format!("direct geo {} failed", p.host)),
+            Some(info) => return Some(refine_country(info, p.dial, false, timeout_ms)),
+            None => DiagnosticsLog::d("netprobe", &format!("direct geo {} failed", p.dial)),
         }
     }
     None
@@ -278,18 +313,20 @@ pub fn fetch_ip_direct(timeout_ms: u64) -> Option<IpInfo> {
 pub fn fetch_ip_via_socks(timeout_ms: u64) -> Option<IpInfo> {
     let timeout = Duration::from_millis(timeout_ms);
     for p in &GEO_PROVIDERS {
+        // `socks5_stream` خودش تشخیص می‌دهد که مقصد IP است یا نام و ATYP را
+        // همان‌طور می‌فرستد — معادلِ `hostIsDomain` اندروید، بدون فیلد اضافه.
         let got = if p.tls {
-            socks5_stream(p.host, p.port, timeout)
-                .and_then(|s| tls_get(s, p.host, p.path))
+            socks5_stream(p.dial, p.port, timeout)
+                .and_then(|s| tls_get(s, p.verify_as, p.path))
                 .and_then(|body| parse_ip_info(&body))
         } else {
-            socks5_stream(p.host, p.port, timeout)
-                .and_then(|mut s| http_get(&mut s, p.host, p.path))
+            socks5_stream(p.dial, p.port, timeout)
+                .and_then(|mut s| http_get(&mut s, p.verify_as, p.path))
                 .and_then(|body| parse_ip_info(&body))
         };
         match got {
-            Some(info) => return Some(refine_country(info, p.host, true, timeout_ms)),
-            None => DiagnosticsLog::d("netprobe", &format!("proxied geo {} failed", p.host)),
+            Some(info) => return Some(refine_country(info, p.dial, true, timeout_ms)),
+            None => DiagnosticsLog::d("netprobe", &format!("proxied geo {} failed", p.dial)),
         }
     }
     None
@@ -321,22 +358,91 @@ pub fn fetch_ip_via_socks_retry(attempts: u32, delay_ms: u64, timeout_ms: u64) -
     None
 }
 
-/// معادل `refineCountry` در اندروید: پرچم همیشه از یک پایگاه دادهٔ واحد
-/// (ip-api) بیاید تا بین فراهم‌کنندگان فرق نکند و «پرچم‌پرش» رخ ندهد.
+/// آیا اصلاً سراغ `ip-api.com` برویم؟ (تصمیم جدا شده تا آزمون‌پذیر باشد)
+///
+/// # چرا این تابع وجود دارد
+///
+/// اندروید ۱.۳.۰ فراهم‌کنندگانِ بی‌رمز را حذف کرد ولی *اصلاحِ* بی‌رمز را نگه
+/// داشت: بعد از هر جست‌وجوی موفق، یک
+/// `GET /json/<IP عمومیِ خودِ کاربر>` به `ip-api.com:80` می‌فرستد. این همان
+/// انگشت‌نگاریِ F-5 است و بدتر از یافتهٔ اولیه، چون این درخواست IP واقعیِ
+/// کاربر را بی‌رمز و در مسیرِ مستقیم — یعنی جایی که ناظر همان اپراتور است —
+/// حمل می‌کند.
+///
+/// و دیگر چیزی هم نمی‌خرد: هر دو فراهم‌کننده `/cdn-cgi/trace` کلودفلرند که
+/// خودش `loc=` می‌دهد؛ پایگاه دادهٔ دومی نمانده که با آن اختلاف پیدا کند، پس
+/// «پرچم‌پرش»ی هم نمانده که صاف شود.
+///
+/// پس فقط وقتی که کشور واقعاً ناشناخته است، و فقط از داخل تونل: آنجا آنچه
+/// افشا می‌شود IPِ سرور است به ip-api، و برای اپراتور هیچ. در مسیر مستقیم،
+/// نبودنِ پرچم بهتر از اعلامِ بی‌رمزِ IP خودِ کاربر است.
+/// آیا این دو حرف واقعاً کدِ کشور است؟
+///
+/// کلودفلر در `loc=` چند کدِ شبهٔ‌کشور هم می‌دهد که هیچ جایی روی نقشه
+/// نیستند: `T1` برای خروجیِ تور، `A1` پراکسیِ ناشناس، `A2` ماهواره‌ای،
+/// `O1` دیگر، و `XX`/`ZZ` نامعلوم.
+fn is_real_country(code: &str) -> bool {
+    const PSEUDO: [&str; 5] = ["T1", "A1", "A2", "O1", "XX"];
+    let code = code.trim();
+    if code.len() != 2 || !code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    let upper = code.to_ascii_uppercase();
+    !PSEUDO.contains(&upper.as_str()) && upper != "ZZ"
+}
+
+fn should_refine_country(country_known: bool, via_socks: bool) -> bool {
+    !country_known && via_socks
+}
+
+/// معادل `refineCountry` در اندروید — با محدودیتِ بالا.
 fn refine_country(info: IpInfo, provider_host: &str, via_socks: bool, timeout_ms: u64) -> IpInfo {
     if provider_host == "ip-api.com" {
         return info;
     }
+    if !should_refine_country(info.country_code.is_some(), via_socks) {
+        if info.country_code.is_none() {
+            DiagnosticsLog::d(
+                "netprobe",
+                "country unknown and this is the direct path - skipping the cleartext \
+                 ip-api refinement rather than sending this device's own IP in the clear",
+            );
+        }
+        return info;
+    }
     let path = format!("/json/{}?fields=status,countryCode", info.ip);
-    let body = if via_socks {
-        socks5_stream("ip-api.com", 80, Duration::from_millis(timeout_ms))
-            .and_then(|mut s| http_get(&mut s, "ip-api.com", &path))
-    } else {
-        connect_direct_ipv4("ip-api.com", 80, timeout_ms)
-            .and_then(|mut s| http_get(&mut s, "ip-api.com", &path))
-    };
+    // >>> AETHER-APP-PATCH the-flag-is-already-on-disk
+    // قبل از هر بایتی روی سیم: همین دو حرف روی دیسکِ کاربر هست —
+    // `geoip`ِ خودِ Tor. رجوع به [`crate::geoip`]. اگر نبود، مسیرِ زیر سرِ
+    // جایش می‌ماند.
+    if let Ok(addr) = info.ip.parse::<std::net::IpAddr>() {
+        if let Some(code) = crate::geoip::lookup(addr) {
+            if is_real_country(&code) {
+                DiagnosticsLog::d(
+                    "netprobe",
+                    &format!("country for {} came from the local geoip file", info.ip),
+                );
+                return IpInfo {
+                    ip: info.ip,
+                    country_code: Some(code),
+                };
+            }
+        }
+    }
+    // <<< AETHER-APP-PATCH the-flag-is-already-on-disk
+    // فقط از داخلِ تونل. مسیرِ مستقیم اینجا عمداً وجود ندارد و نه فقط
+    // «فراخوانده نمی‌شود»: تا وقتی یک شاخهٔ `connect_direct_ipv4` در این تابع
+    // باشد، تضمینِ «بی‌رمز از سیمِ کاربر رد نمی‌شود» به درستیِ شرطِ بالا و به
+    // هر صداکنندهٔ آیندهٔ این تابع وابسته می‌ماند. با نبودنش، ساختاری است.
+    let body = socks5_stream("ip-api.com", 80, Duration::from_millis(timeout_ms))
+        .and_then(|mut s| http_get(&mut s, "ip-api.com", &path));
     if let Some(cc) = body.and_then(|b| json_str(&b, "countryCode")) {
-        return IpInfo { ip: info.ip, country_code: Some(cc) };
+        if is_real_country(&cc) {
+            return IpInfo {
+                ip: info.ip,
+                country_code: Some(cc.to_ascii_uppercase()),
+            };
+        }
     }
     info
 }
@@ -345,7 +451,11 @@ fn refine_country(info: IpInfo, provider_host: &str, via_socks: bool, timeout_ms
 fn connect_direct_ipv4(host: &str, port: u16, timeout_ms: u64) -> Option<TcpStream> {
     let timeout = Duration::from_millis(timeout_ms);
     let addrs: Vec<SocketAddr> = (host, port).to_socket_addrs().ok()?.collect();
-    let addr = addrs.iter().find(|a| a.is_ipv4()).or_else(|| addrs.first()).copied()?;
+    let addr = addrs
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or_else(|| addrs.first())
+        .copied()?;
     let s = TcpStream::connect_timeout(&addr, timeout).ok()?;
     s.set_read_timeout(Some(timeout)).ok()?;
     s.set_write_timeout(Some(timeout)).ok()?;
@@ -363,7 +473,10 @@ pub fn network_looks_filtered() -> bool {
         .iter()
         .any(|(host, port)| connect_direct_ipv4(host, *port, 1_200).is_some());
     if !reachable {
-        DiagnosticsLog::w("netprobe", "fingerprint: direct :80 egress is blocked on this network");
+        DiagnosticsLog::w(
+            "netprobe",
+            "fingerprint: direct :80 egress is blocked on this network",
+        );
     }
     !reachable
 }
@@ -393,8 +506,12 @@ pub fn udp_egress_ok() -> bool {
 /// Cloudflare edges the MASQUE prober itself tries first, plus one public
 /// HTTP/3 endpoint as a control. IP literals only - a poisoned resolver must not
 /// be able to change the verdict.
-const QUIC_PROBE_EDGES: [&str; 4] =
-    ["162.159.198.1:443", "162.159.197.1:443", "162.159.196.1:443", "1.1.1.1:443"];
+const QUIC_PROBE_EDGES: [&str; 4] = [
+    "162.159.198.1:443",
+    "162.159.197.1:443",
+    "162.159.196.1:443",
+    "1.1.1.1:443",
+];
 
 /// Whole-probe budget for the QUIC leg. Every edge is dialled at once, so this
 /// is the total cost added to a connect, not the cost per edge.
@@ -597,9 +714,7 @@ fn udp_dns_probe(server: &str, timeout: Duration) -> bool {
     let mut buf = [0u8; 512];
     match bound.recv_from(&mut buf) {
         // A well-formed reply: our transaction id back, and the QR bit set.
-        Ok((n, _)) if n >= 12 => {
-            buf[0] == QUERY[0] && buf[1] == QUERY[1] && (buf[2] & 0x80) != 0
-        }
+        Ok((n, _)) if n >= 12 => buf[0] == QUERY[0] && buf[1] == QUERY[1] && (buf[2] & 0x80) != 0,
         _ => false,
     }
 }
@@ -665,7 +780,11 @@ fn parse_ip_info(response: &str) -> Option<IpInfo> {
     let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
     // قالب ۱: JSONِ ip-api  {"query":"1.2.3.4","countryCode":"DE"}
     if let Some(ip) = json_str(body, "query") {
-        return Some(IpInfo { ip, country_code: json_str(body, "countryCode") });
+        let cc = json_str(body, "countryCode").filter(|cc| is_real_country(cc));
+        return Some(IpInfo {
+            ip,
+            country_code: cc,
+        });
     }
     // قالب ۲: خطوط key=value در /cdn-cgi/trace
     let mut ip: Option<String> = None;
@@ -676,12 +795,23 @@ fn parse_ip_info(response: &str) -> Option<IpInfo> {
             ip = Some(v.trim().to_string());
         } else if let Some(v) = line.strip_prefix("loc=") {
             let v = v.trim();
-            if v.len() == 2 {
+            // >>> AETHER-APP-PATCH a-pseudo-country-is-not-a-country
+            // دو حرفی که کشور نیست را نگه نمی‌داریم: خروجیِ تور از دید
+            // کلودفلر `loc=T1` است — در تصویرِ کاربر همین دو حرف بود که هم
+            // کنارِ IP چسبیده بود و هم پرچم را به کرهٔ خالی می‌برد.
+            // `None` گذاشتنش دو کار می‌کند: دروغ را پاک می‌کند، و پالایشِ
+            // از‌داخلِ‌تونل را — که فقط برای کشورِ ناشناخته راه می‌افتد — روشن
+            // می‌کند، پس پرچمِ واقعیِ گرهِ خروجی می‌آید.
+            if is_real_country(v) {
                 loc = Some(v.to_uppercase());
             }
+            // <<< AETHER-APP-PATCH a-pseudo-country-is-not-a-country
         }
     }
-    ip.map(|ip| IpInfo { ip, country_code: loc })
+    ip.map(|ip| IpInfo {
+        ip,
+        country_code: loc,
+    })
 }
 
 /// استخراج مقدار رشته‌ای یک کلید JSON بدون وابستگی regex.
@@ -727,15 +857,45 @@ pub struct StunResult {
     pub reflexive_ip: String,
 }
 
+/// یک لحظه بیشتر از مهلتِ یک پرسش — سهمِ نامیابیِ DNS داخلِ همان تردها.
+const STUN_JOIN_SLACK: Duration = Duration::from_millis(750);
+
 /// `Some` یعنی دیتاگرام از کارت فیزیکی بیرون رفت و آی‌پی برگشته قابل دیدن
 /// است — یعنی نشتی. `None` یعنی مسیر UDP مستقیم بسته است (حالت مطلوب).
 pub fn stun_reflexive_ip(timeout: Duration) -> Option<StunResult> {
+    // >>> AETHER-APP-PATCH the-leak-check-asks-every-server-at-once
+    // چهار کارگزار هم‌زمان پرسیده می‌شوند، نه یکی پس از دیگری.
+    //
+    // # چرا این ۸ ثانیه از زمانِ اتصال کم می‌کند
+    //
+    // این سنجش در حالتِ سالم **هیچ** جوابی نمی‌گیرد: گاردِ نشتی UDP مستقیم را
+    // بسته، پس هر چهار پرسش تا آخرِ مهلت ساکت می‌مانند. پشت‌سرهم یعنی
+    // ۴ × ۲.۵s ≈ ۱۰s، و لاگِ ۱۷ سپتامبر دقیقاً همین را نشان می‌دهد: بین
+    // `DNS+HTTP via tunnel: OK` در ۰۶:۲۹:۱۱ و `WebRTC / UDP leak check` در
+    // ۰۶:۲۹:۲۲ — ۱۰.۷ ثانیه سکوت، تنها بزرگ‌ترین تکهٔ آن ۳۴ ثانیه.
+    //
+    // پوششش عوض نمی‌شود: هر چهار کارگزار همچنان پرسیده می‌شوند و اولین پاسخ
+    // برنده است. مرورگر هم همین کار را می‌کند — نامزدهای srflx را هم‌زمان
+    // می‌فرستد، نه نوبتی.
+    let (tx, rx) = std::sync::mpsc::channel::<StunResult>();
     for server in STUN_SERVERS {
-        if let Some(ip) = stun_query(server, timeout) {
-            return Some(StunResult { server: server.to_string(), reflexive_ip: ip });
-        }
+        let tx = tx.clone();
+        let _ = std::thread::Builder::new()
+            .name("aether-stun".into())
+            .spawn(move || {
+                if let Some(ip) = stun_query(server, timeout) {
+                    let _ = tx.send(StunResult {
+                        server: server.to_string(),
+                        reflexive_ip: ip,
+                    });
+                }
+            });
     }
-    None
+    // فرستندهٔ اصلی باید بیفتد، وگرنه وقتی همهٔ تردها ساکت تمام شدند `recv`
+    // تا آخرِ مهلت می‌نشیند به‌جای آنکه فوراً «هیچ‌کس جواب نداد» بگوید.
+    drop(tx);
+    rx.recv_timeout(timeout + STUN_JOIN_SLACK).ok()
+    // <<< AETHER-APP-PATCH the-leak-check-asks-every-server-at-once
 }
 
 fn stun_query(server: &str, timeout: Duration) -> Option<String> {
@@ -871,6 +1031,32 @@ mod tests {
         assert_eq!(info.country_code.as_deref(), Some("NL"));
     }
 
+    // >>> AETHER-APP-PATCH a-pseudo-country-is-not-a-country
+    /// `loc=T1` کدِ کشور نیست، پس نه در کارت می‌نشیند و نه پالایش را می‌بندد.
+    ///
+    /// همان چیزی که تصویرِ «تور تنها» نشان می‌داد: `185.220.101.146 · T1` و
+    /// کره‌ی خالی جای پرچم.
+    #[test]
+    fn a_tor_exit_has_no_country_yet() {
+        let resp = "HTTP/1.1 200 OK\r\n\r\nfl=1\nip=185.220.101.146\nloc=T1\n";
+        let info = parse_ip_info(resp).unwrap();
+        assert_eq!(info.ip, "185.220.101.146");
+        assert_eq!(info.country_code, None);
+        // و چون ناشناخته است، پالایشِ از-داخلِ-تونل مجاز می‌شود.
+        assert!(should_refine_country(info.country_code.is_some(), true));
+    }
+
+    #[test]
+    fn the_pseudo_codes_are_all_rejected() {
+        for code in ["T1", "A1", "A2", "O1", "XX", "ZZ", "t1", "x", "DEU", "1D"] {
+            assert!(!is_real_country(code), "{code} باید رد شود");
+        }
+        for code in ["DE", "nl", "IR", "us"] {
+            assert!(is_real_country(code), "{code} باید پذیرفته شود");
+        }
+    }
+    // <<< AETHER-APP-PATCH a-pseudo-country-is-not-a-country
+
     // --- v1.2.0: کدک STUN (پایهٔ سنجش نشتی WebRTC) ---
 
     #[test]
@@ -897,13 +1083,16 @@ mod tests {
         msg.push(0x00);
         msg.push(0x01); // IPv4
         msg.extend_from_slice(&[0x00, 0x00]); // پورت (بی‌اهمیت)
-        // 5.61.25.9 در XOR با magic cookie
+                                              // 5.61.25.9 در XOR با magic cookie
         let ip = [5u8, 61, 25, 9];
         let cookie = 0x2112_A442u32.to_be_bytes();
         for k in 0..4 {
             msg.push(ip[k] ^ cookie[k]);
         }
-        assert_eq!(parse_binding_response(&msg, &txid).as_deref(), Some("5.61.25.9"));
+        assert_eq!(
+            parse_binding_response(&msg, &txid).as_deref(),
+            Some("5.61.25.9")
+        );
     }
 
     /// پاسخ با شناسهٔ تراکنش دیگر باید دور ریخته شود (ضد جعل).
@@ -928,10 +1117,18 @@ mod tests {
     #[test]
     fn quic_probe_is_a_padded_long_header_with_a_reserved_version() {
         let (pkt, scid) = build_quic_version_probe();
-        assert_eq!(pkt.len(), 1200, "an Initial-sized datagram is never dropped as too small");
+        assert_eq!(
+            pkt.len(),
+            1200,
+            "an Initial-sized datagram is never dropped as too small"
+        );
         assert_eq!(pkt[0] & 0x80, 0x80, "long header");
         assert_eq!(pkt[0] & 0x40, 0x40, "fixed bit");
-        assert_eq!(&pkt[1..5], &[0x0a, 0x0a, 0x0a, 0x0a], "reserved: forces version negotiation");
+        assert_eq!(
+            &pkt[1..5],
+            &[0x0a, 0x0a, 0x0a, 0x0a],
+            "reserved: forces version negotiation"
+        );
         assert_eq!(pkt[5], 8, "destination connection id length");
         assert_eq!(pkt[14], 8, "source connection id length");
         assert_eq!(&pkt[15..23], &scid, "the id we expect echoed back");
@@ -976,5 +1173,54 @@ mod tests {
         assert_ne!(probe_cid(0xD0), probe_cid(0xD0));
         assert_ne!(probe_cid(0xD0), probe_cid(0x5C));
     }
+}
 
+#[cfg(test)]
+mod f5_tests {
+    use super::*;
+
+    /// F-5: هیچ فراهم‌کنندهٔ جای‌یابی نباید بی‌رمز باشد. این آزمون هست تا اگر
+    /// روزی کسی «برای اطمینان» یک `:80` به جدول برگرداند، ساخت بشکند.
+    #[test]
+    fn no_geo_provider_is_cleartext() {
+        for p in &GEO_PROVIDERS {
+            assert!(p.tls, "geo provider {} is cleartext", p.dial);
+            assert_eq!(p.port, 443, "geo provider {} is not on 443", p.dial);
+        }
+    }
+
+    /// نامی که گواهی با آن سنجیده می‌شود باید دامنه باشد، نه IP: سنجشِ IP-SAN
+    /// در schannel تأییدنشده است و همین فراهم‌کننده تنها مسیرِ بی‌DNS است.
+    #[test]
+    fn every_provider_is_verified_against_a_domain() {
+        for p in &GEO_PROVIDERS {
+            assert!(
+                p.verify_as.parse::<std::net::IpAddr>().is_err(),
+                "provider {} would rely on an IP-SAN match",
+                p.dial,
+            );
+            assert!(p.verify_as.contains('.') && p.verify_as.contains("cloudflare"));
+        }
+    }
+
+    /// و یکی از آن‌ها باید با IP وصل شود، وگرنه شبکه‌ای که DNS را آلوده کرده
+    /// جای‌یابی را کاملاً می‌کشد.
+    #[test]
+    fn one_provider_needs_no_dns() {
+        let dns_free = GEO_PROVIDERS
+            .iter()
+            .any(|p| p.dial.parse::<std::net::IpAddr>().is_ok());
+        assert!(dns_free, "no DNS-free geo provider left");
+    }
+
+    #[test]
+    fn refinement_only_when_unknown_and_tunnelled() {
+        // مسیر عادی: کشور از `loc=` آمده — هیچ درخواست اضافه‌ای نباید برود.
+        assert!(!should_refine_country(true, true));
+        assert!(!should_refine_country(true, false));
+        // ناشناخته و مستقیم: IP خودِ کاربر بی‌رمز نمی‌رود.
+        assert!(!should_refine_country(false, false));
+        // ناشناخته و از داخل تونل: آنجا اشکالی ندارد.
+        assert!(should_refine_country(false, true));
+    }
 }

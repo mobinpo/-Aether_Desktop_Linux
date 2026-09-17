@@ -17,7 +17,7 @@
 //  یک فهرست دستی کنار فهرست کنترل‌ها: فهرست دوم بی‌صدا از قالب عقب می‌ماند و
 //  گزینه‌های تازه بی‌✨ می‌مانند.
 
-import { app, onChange, refreshTab, STATE_LABEL } from '../main.js'
+import { app, onChange, refreshTab, emit, STATE_LABEL } from '../main.js'
 import { renderAdvanced } from './advanced.js'
 import { aiHintButton } from '../ai.js'
 import { t, getLang } from '../i18n.js'
@@ -45,7 +45,9 @@ const ICON = {
 // کاربر را مجبور می‌کند برای خواندنِ وضعیت وارد زیرصفحه شود.
 const VALUE_LABEL = {
   AETHER: 'Aether', AETHER_PSIPHON: 'Aether \u2192 Psiphon',
-  SMART: 'Smart', MASQUE: 'MASQUE', WIREGUARD: 'WireGuard', GOOL: 'WARP\u00d72',
+  TOR: 'Tor', AETHER_TOR: 'Aether \u2192 Tor',
+  TOR_PSIPHON: 'Tor \u2192 Psiphon', TOR_AETHER: 'Tor \u2192 Aether',
+  SMART: 'Smart', MASQUE: 'MASQUE', WIREGUARD: 'WireGuard', GOOL: 'WARP\u00d72', MIM: 'MASQUE\u00d72',
   OFF: 'Off', LIGHT: 'Light', FIREWALL: 'Firewall', BALANCED: 'Balanced',
   GFW: 'GFW', AGGRESSIVE: 'Aggressive',
   INCLUDE: 'Only these apps', EXCLUDE: 'All except these',
@@ -317,7 +319,18 @@ export function renderSettings() {
   const hub = document.createElement('div')
   hub.className = 'sethub'
 
-  const show = (node) => host.replaceChildren(node)
+  // v14 — ریشهٔ باگ: هاب و هر زیرصفحه در همین یک تب زنده می‌مانند و با
+  // `replaceChildren` جا عوض می‌کنند؛ نودی که همین الان جایش را به دیگری داد
+  // از DOM جدا می‌شود و `emit()` (در main.js) هر listenerِ متعلق به یک مالکِ
+  // جداشده را بی‌صدا رد می‌کند. یعنی وقتی کاربر داخل «Transport & anti-DPI»
+  // چیزی را عوض می‌کرد، `saveProfile` را صدا می‌زد و آن `emit()` را هم اجرا
+  // می‌کرد، ولی ردیفِ هاب دقیقاً همان لحظه از DOM جدا بود و آن emit را از دست
+  // می‌داد؛ برگشتن به هاب فقط همان نودِ قدیمی (با مقدارِ قبل از تغییر) را
+  // دوباره وصل می‌کرد، بدون هیچ resync‌ای — پس ردیف «Off» می‌ماند در حالی که
+  // `app.profile.noize` واقعاً «Light» بود (تصویرهای a1/a2). فراخوانیِ `emit()`
+  // همین‌جا، بعد از هر تعویض، تضمین می‌کند نودی که تازه دوباره متصل شد فوراً
+  // با آخرین پروفایل هم‌گام شود — نه فقط با رخدادِ بعدیِ تصادفی.
+  const show = (node) => { host.replaceChildren(node); emit() }
   const goHub = () => { OPEN = null; show(hub) }
   const go = (row) => { OPEN = row.id; show(subPage(row, goHub)) }
 

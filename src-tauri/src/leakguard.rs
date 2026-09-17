@@ -109,6 +109,14 @@ pub struct GuardStatus {
     pub firewall_rules: u32,
     /// تعداد سیاست‌های مرورگر که نوشته شدند.
     pub browser_policies: u32,
+    /// آیا بلوکِ UDP فقط به مرورگرها بسته شده است؟
+    ///
+    /// در خطِ لولهٔ تور جواب «بله» است و این یک تصمیمِ آگاهانه است: بلوکِ
+    /// سیستمیِ STUN/UDP، ترابرهای خودِ برنامه را هم می‌کشد (snowflake به
+    /// UDP:3478 و بروکرش به IPv6 نیاز دارد). پس در این حالت، بازبودنِ UDP
+    /// برای **فرآیندهای خودمان** انتظارِ طرح است، نه نشتی — و داوریِ نشتی
+    /// باید همین را بداند، وگرنه نشستی را رد می‌کند که خودش این‌طور خواسته.
+    pub udp_browser_scoped: bool,
 }
 
 fn status_cell() -> &'static parking_lot::Mutex<GuardStatus> {
@@ -135,6 +143,8 @@ struct PolicyEdit {
 pub struct LeakGuard {
     rules: u32,
     kill_rules: u32,
+    /// ببینید `GuardStatus::udp_browser_scoped`.
+    udp_browser_scoped: bool,
     /// Policies already correct count as active even when this session did not write them.
     policies: u32,
     edits: Vec<PolicyEdit>,
@@ -155,6 +165,11 @@ impl LeakGuard {
         delete_kill_switch_rules();
 
         let mut me = Self::default();
+        // این تصمیم پیش از هر قاعده گرفته می‌شود، چون خودِ `apply_kill_switch`
+        // بر اساسِ همین است که بلوکِ UDP را سیستمی می‌بندد یا فقط روی
+        // مرورگرها: خطِ لولهٔ تور به UDP خروجیِ خودش نیاز دارد
+        // (snowflake → UDP:3478، بروکرش روی IPv6).
+        me.udp_browser_scoped = needs_pluggable_transport_egress(profile);
         me.apply_browser_policies();
         me.apply_firewall(profile);
         me.apply_kill_switch(profile);
@@ -163,6 +178,7 @@ impl LeakGuard {
             engaged: true,
             firewall_rules: me.rules + me.kill_rules,
             browser_policies: me.policies,
+            udp_browser_scoped: me.udp_browser_scoped,
         };
 
         if me.rules == 0 {
@@ -178,7 +194,9 @@ impl LeakGuard {
                 );
             }
         }
-        let protection = if me.rules > 0 {
+        let protection = if me.rules > 0 && needs_pluggable_transport_egress(profile) {
+            "browser-scoped UDP kill-switch active (Tor pipeline)"
+        } else if me.rules > 0 {
             "system-wide UDP kill-switch active"
         } else if me.policies > 0 {
             "browser policy active for newly started browsers"
@@ -233,13 +251,53 @@ impl LeakGuard {
 
     /// لایهٔ ۲ — کلید قطع فایروال. بدون دسترسی مدیر بی‌صدا رد می‌شود.
     fn apply_firewall(&mut self, profile: &ConnectionProfile) {
+        // >>> AETHER-APP-FIX pt-egress-not-blocked
+        // چرا این شرط اینجاست (لاگ ۲۰۲۶-۰۹-۱۶، حالت «Tor alone»):
+        //
+        //     [pt lyrebird] broker failure dial tcp …: connectex: An attempt was
+        //     made to access a socket in a way forbidden by its access permissions.
+        //
+        // این WSAEACCES است — خطای خودِ ویندوز، نه رفتار سانسور. سانسور با
+        // reset یا سکوت جواب می‌دهد؛ این پیام یعنی فیلترِ محلی اجازهٔ connect
+        // را نداد. در همان لحظه خودِ موتور می‌توانست مستقیم به گاردهای تور
+        // وصل شود (تا ۱۵٪ رفت) و فقط `lyrebird.exe` نمی‌توانست، که یعنی
+        // فیلتر per-application — و تنها فیلتر per-application روی آن مسیر،
+        // همین دو قاعدهٔ زیر بود.
+        //
+        // پل‌های snowflakeِ داخلیِ هسته (`bridges.rs`) همه‌شان
+        // `ice=stun:…:3478` هستند و ۳۴۷۸ داخل STUN_TURN_PORTS است؛ brokerشان
+        // هم domain-fronted روی cdn77 است که AAAA دارد، پس قاعدهٔ 2000::/3 هم
+        // روی همان dial می‌افتد. با هر دو قاعده در جای خود، snowflake هرگز
+        // نمی‌توانست وصل شود — نه روی این شبکه، نه روی هیچ شبکه‌ای.
+        //
+        // راه‌حل: این دو قاعده به‌جای «همهٔ برنامه‌ها» فقط به مرورگرها بسته
+        // می‌شوند وقتی خط لوله ترانسپورتِ افزودنی لازم دارد. بردارِ واقعیِ
+        // نشتی WebRTC همان مرورگر است (قاعدهٔ ۲.۱ هم از اول program-scoped
+        // بود)، پس پوشش امنیتی از دست نمی‌رود؛ چیزی که از دست می‌رفت، تور بود.
+        //
+        // یک قاعدهٔ block در WFP بر هر قاعدهٔ allow برتری دارد، پس «allow برای
+        // lyrebird» راه‌حل نبود: باید خودِ block باریک شود.
+        let pt_egress = needs_pluggable_transport_egress(profile);
+        if pt_egress {
+            DiagnosticsLog::w(
+                TAG,
+                "Tor pipeline: the STUN/TURN and IPv6 blocks are scoped to browsers instead of the whole system, because a system-wide block also blocks this app's own pluggable transports (snowflake needs UDP 3478 and its broker answers over IPv6).",
+            );
+        }
+        // <<< AETHER-APP-FIX pt-egress-not-blocked
         // ۲.۱ — UDP خروجیِ خودِ مرورگرها. مرورگر پشت پروکسی هیچ UDP مشروعی
         // ندارد (QUIC هم با پروکسی خاموش می‌شود و به TCP برمی‌گردد)، پس بستن
         // کامل UDP همهٔ نامزدهای host/srflx را از بین می‌برد.
         for exe in discover_browsers() {
             let program = exe.to_string_lossy().to_string();
             let ok = fw_add(
-                &["dir=out", "action=block", "protocol=udp", "profile=any", "enable=yes"],
+                &[
+                    "dir=out",
+                    "action=block",
+                    "protocol=udp",
+                    "profile=any",
+                    "enable=yes",
+                ],
                 Some(&program),
             );
             if ok {
@@ -252,7 +310,22 @@ impl LeakGuard {
         // پورت‌ها حرف نمی‌زند، پس تونل آسیبی نمی‌بیند.
         let ports = format!("remoteport={STUN_TURN_PORTS}");
         for proto in ["protocol=udp", "protocol=tcp"] {
-            if fw_add(&["dir=out", "action=block", proto, &ports, "profile=any", "enable=yes"], None) {
+            let args = [
+                "dir=out",
+                "action=block",
+                proto,
+                &ports,
+                "profile=any",
+                "enable=yes",
+            ];
+            if pt_egress {
+                for exe in discover_browsers() {
+                    let program = exe.to_string_lossy().to_string();
+                    if fw_add(&args, Some(&program)) {
+                        self.rules += 1;
+                    }
+                }
+            } else if fw_add(&args, None) {
                 self.rules += 1;
             }
         }
@@ -261,11 +334,22 @@ impl LeakGuard {
         // WebRTC. فقط 2000::/3 بسته می‌شود تا link-local و ULA شبکهٔ محلی
         // (کشف چاپگر، mDNS و…) سالم بماند.
         if profile.ipv6_protection {
-            let ok = fw_add(
-                &["dir=out", "action=block", "protocol=any", "remoteip=2000::/3", "profile=any", "enable=yes"],
-                None,
-            );
-            if ok {
+            let args = [
+                "dir=out",
+                "action=block",
+                "protocol=any",
+                "remoteip=2000::/3",
+                "profile=any",
+                "enable=yes",
+            ];
+            if pt_egress {
+                for exe in discover_browsers() {
+                    let program = exe.to_string_lossy().to_string();
+                    if fw_add(&args, Some(&program)) {
+                        self.rules += 1;
+                    }
+                }
+            } else if fw_add(&args, None) {
                 self.rules += 1;
             }
         }
@@ -281,7 +365,18 @@ impl LeakGuard {
         }
         for exe in discover_browsers() {
             let program = exe.to_string_lossy().to_string();
-            if fw_add_named(KILL_RULE, &["dir=out", "action=block", "protocol=any", "remoteip=any", "profile=any", "enable=yes"], Some(&program)) {
+            if fw_add_named(
+                KILL_RULE,
+                &[
+                    "dir=out",
+                    "action=block",
+                    "protocol=any",
+                    "remoteip=any",
+                    "profile=any",
+                    "enable=yes",
+                ],
+                Some(&program),
+            ) {
                 self.kill_rules += 1;
             }
         }
@@ -291,9 +386,30 @@ impl LeakGuard {
         // remains the fail-closed fallback for the physical adapter.
         // The Wintun route is installed when available; otherwise blocking is
         // the safe fail-closed behavior, never a silent IPv6 leak.
-        if profile.ipv6_protection && fw_add_named(KILL_RULE, &["dir=out", "action=block", "protocol=any", "remoteip=2000::/3", "profile=any", "enable=yes"], None) {
-            self.kill_rules += 1;
+        // >>> AETHER-APP-FIX pt-egress-not-blocked
+        // همان دلیلِ apply_firewall: در خط لولهٔ تور این قاعده هم اگر
+        // سیستم‌گسترده بسته شود، dialِ IPv6ِ خودِ ترانسپورت را می‌بندد.
+        if profile.ipv6_protection {
+            let args = [
+                "dir=out",
+                "action=block",
+                "protocol=any",
+                "remoteip=2000::/3",
+                "profile=any",
+                "enable=yes",
+            ];
+            if needs_pluggable_transport_egress(profile) {
+                for exe in discover_browsers() {
+                    let program = exe.to_string_lossy().to_string();
+                    if fw_add_named(KILL_RULE, &args, Some(&program)) {
+                        self.kill_rules += 1;
+                    }
+                }
+            } else if fw_add_named(KILL_RULE, &args, None) {
+                self.kill_rules += 1;
+            }
         }
+        // <<< AETHER-APP-FIX pt-egress-not-blocked
     }
 
     /// Transfer ownership without deleting the process-wide rules. This is
@@ -314,18 +430,12 @@ impl LeakGuard {
             delete_firewall_rules();
         }
         self.rules = 0;
-        let edits = std::mem::take(&mut self.edits);
-        for edit in edits {
-            match &edit.previous {
-                Some(v) => { reg_write(&edit.key, &edit.name, edit.kind, v); }
-                None => { reg_delete_value(&edit.key, &edit.name); }
-            }
-            reg_delete_value(&edit.key, SENTINEL_NAME);
-        }
+        restore_policies(std::mem::take(&mut self.edits));
         *status_cell().lock() = GuardStatus {
             engaged: self.kill_rules > 0,
             firewall_rules: self.kill_rules,
             browser_policies: 0,
+            udp_browser_scoped: self.udp_browser_scoped,
         };
     }
 
@@ -341,22 +451,15 @@ impl LeakGuard {
         }
         self.kill_rules = 0;
         let had_edits = !self.edits.is_empty();
-        for edit in std::mem::take(&mut self.edits) {
-            match &edit.previous {
-                Some(v) => {
-                    reg_write(&edit.key, &edit.name, edit.kind, v);
-                }
-                None => {
-                    reg_delete_value(&edit.key, &edit.name);
-                }
-            }
-            reg_delete_value(&edit.key, SENTINEL_NAME);
-        }
+        restore_policies(std::mem::take(&mut self.edits));
         let had_rules = self.rules > 0;
         self.rules = 0;
         *status_cell().lock() = GuardStatus::default();
         if had_rules || had_edits {
-            DiagnosticsLog::i(TAG, "Leak guard released — firewall rules and browser policies restored.");
+            DiagnosticsLog::i(
+                TAG,
+                "Leak guard released — firewall rules and browser policies restored.",
+            );
         }
     }
 }
@@ -389,7 +492,9 @@ pub fn purge_stale() {
     if cleaned > 0 {
         DiagnosticsLog::w(
             TAG,
-            &format!("Cleared {cleaned} leak-guard policy value(s) left behind by a previous session."),
+            &format!(
+                "Cleared {cleaned} leak-guard policy value(s) left behind by a previous session."
+            ),
         );
     }
     *status_cell().lock() = GuardStatus::default();
@@ -398,6 +503,18 @@ pub fn purge_stale() {
 // ---------------------------------------------------------------------------
 //  کمکی‌ها
 // ---------------------------------------------------------------------------
+
+// >>> AETHER-APP-FIX pt-egress-not-blocked
+/// آیا این خط لوله برای رسیدن به شبکه به یک ترانسپورتِ افزودنی نیاز دارد؟
+///
+/// فقط حالت‌های تور — و در آن‌ها فقط وقتی پل به کلی خاموش نشده باشد.
+/// مسیر WARP خودِ موتور است و به STUN یا IPv6 خروجی کاری ندارد، پس آنجا
+/// قاعدهٔ سیستم‌گسترده می‌ماند — کمترین تغییر در پوششِ امنیتی، فقط
+/// جایی که باید.
+pub(crate) fn needs_pluggable_transport_egress(profile: &ConnectionProfile) -> bool {
+    profile.backend.uses_tor() && profile.tor_bridges != crate::profile::TorBridges::Off
+}
+// <<< AETHER-APP-FIX pt-egress-not-blocked
 
 fn fw_add(args: &[&str], program: Option<&str>) -> bool {
     fw_add_named(FW_RULE, args, program)
@@ -432,7 +549,10 @@ fn delete_firewall_rules() {
 
 fn delete_kill_switch_rules() {
     let argv: Vec<String> = vec![
-        "advfirewall".into(), "firewall".into(), "delete".into(), "rule".into(),
+        "advfirewall".into(),
+        "firewall".into(),
+        "delete".into(),
+        "rule".into(),
         format!("name={KILL_RULE}"),
     ];
     let _ = netsh(&argv);
@@ -444,6 +564,41 @@ fn netsh(args: &[String]) -> bool {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// همهٔ سیاست‌ها را با هم برمی‌گرداند.
+///
+/// هر ویرایش، مقدارِ خودش را در کلیدِ خودش دست می‌زند، پس ترتیبشان بی‌اثر
+/// است — ولی هر `reg.exe` یک فرآیندِ تازه است و سریالی‌بودنشان در لاگِ
+/// ۱۶ سپتامبر ۱٫۹۶ ثانیه از قطعِ اتصال خورد (فاصلهٔ بازگردانیِ پراکسی تا
+/// توقفِ پل، جایی که تنها همین کار در آن است). حالا همه با هم شروع می‌شوند و
+/// بعد منتظرشان می‌مانیم: وقتی این تابع برمی‌گردد، رجیستری واقعاً برگشته
+/// است — همان تضمینی که نسخهٔ سریالی می‌داد.
+fn restore_policies(edits: Vec<PolicyEdit>) {
+    let mut kids = Vec::with_capacity(edits.len() * 2);
+    for edit in &edits {
+        match &edit.previous {
+            Some(v) => kids.extend(reg_spawn(&[
+                "add", &edit.key, "/v", &edit.name, "/t", edit.kind, "/d", v, "/f",
+            ])),
+            None => kids.extend(reg_spawn(&["delete", &edit.key, "/v", &edit.name, "/f"])),
+        }
+        kids.extend(reg_spawn(&["delete", &edit.key, "/v", SENTINEL_NAME, "/f"]));
+    }
+    for mut kid in kids {
+        let _ = kid.wait();
+    }
+}
+
+/// مثل `reg`، ولی منتظر نمی‌ماند.
+fn reg_spawn(args: &[&str]) -> Option<std::process::Child> {
+    let mut cmd = Command::new("reg");
+    cmd.args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.spawn().ok()
 }
 
 fn reg_write(key: &str, name: &str, kind: &str, data: &str) -> bool {
@@ -473,7 +628,11 @@ fn parse_reg_value(output: &str, name: &str) -> Option<String> {
         let _ = it.next()?;
         let typed = it.next()?;
         // typed = "SZ    disable_non_proxied_udp" یا "DWORD    0x1"
-        let value = typed.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+        let value = typed
+            .split_whitespace()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join(" ");
         return Some(value);
     }
     None
@@ -530,7 +689,11 @@ fn parse_default_value(output: &str) -> Option<String> {
             let mut it = trimmed.splitn(2, "REG_");
             let _ = it.next()?;
             let typed = it.next()?;
-            let value = typed.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+            let value = typed
+                .split_whitespace()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(" ");
             if !value.is_empty() {
                 return Some(value);
             }
@@ -555,12 +718,17 @@ mod tests {
     #[test]
     fn parses_a_dword_registry_value() {
         let out = "    media.peerconnection.ice.proxy_only    REG_DWORD    0x1\r\n";
-        assert_eq!(parse_reg_value(out, FIREFOX_PREF_NAME).as_deref(), Some("0x1"));
+        assert_eq!(
+            parse_reg_value(out, FIREFOX_PREF_NAME).as_deref(),
+            Some("0x1")
+        );
     }
 
     #[test]
     fn missing_value_is_none() {
-        assert!(parse_reg_value("ERROR: The system was unable to find", CHROMIUM_POLICY_NAME).is_none());
+        assert!(
+            parse_reg_value("ERROR: The system was unable to find", CHROMIUM_POLICY_NAME).is_none()
+        );
     }
 
     #[test]
@@ -590,4 +758,52 @@ mod tests {
         assert_eq!(g.policies, 0);
         assert!(g.edits.is_empty());
     }
+
+    // >>> AETHER-APP-FIX pt-egress-not-blocked
+    /// این تست همان چیزی را می‌بندد که لاگ ۲۰۲۶-۰۹-۱۶ نشان داد: تور روی ۰–۱۵٪
+    /// می‌ماند و `lyrebird.exe` با WSAEACCES رد می‌شود، چون قاعده‌های
+    /// سیستم‌گستردهٔ خودِ ما پورت STUN و مسیر IPv6 را برای **هر** برنامه‌ای
+    /// بسته بودند — و پل‌های snowflake هسته همه `ice=stun:…:3478` هستند.
+    #[test]
+    fn a_tor_pipeline_does_not_get_a_system_wide_block() {
+        let mut p = ConnectionProfile::default();
+
+        // WARP: هیچ ترانسپورت افزودنی‌ای در کار نیست، پس قاعده سیستم‌گسترده
+        // می‌ماند و پوشش امنیتی دست‌نخورده است.
+        p.backend = crate::profile::TransportBackend::Aether;
+        assert!(!needs_pluggable_transport_egress(&p));
+
+        // تور با پل: قاعده باید به مرورگرها محدود شود.
+        for backend in [
+            crate::profile::TransportBackend::Tor,
+            crate::profile::TransportBackend::AetherTor,
+            crate::profile::TransportBackend::TorPsiphon,
+            crate::profile::TransportBackend::TorAether,
+        ] {
+            p.backend = backend;
+            p.tor_bridges = crate::profile::TorBridges::Auto;
+            assert!(
+                needs_pluggable_transport_egress(&p),
+                "{backend:?} needs its pluggable transport to be able to dial"
+            );
+        }
+
+        // تورِ بدون پل هیچ lyrebird‌ای اجرا نمی‌کند، پس دلیلی برای باریک‌کردن
+        // قاعده نیست.
+        p.backend = crate::profile::TransportBackend::Tor;
+        p.tor_bridges = crate::profile::TorBridges::Off;
+        assert!(!needs_pluggable_transport_egress(&p));
+    }
+
+    /// پورت ICE پل‌های داخلیِ هسته باید داخل فهرست مسدودی باشد — این همان
+    /// همپوشانی‌ای است که باگ را می‌ساخت. اگر روزی یکی از دو طرف عوض شد، این
+    /// تست می‌گوید که تصمیمِ باریک‌کردن قاعده هنوز لازم است یا نه.
+    #[test]
+    fn the_snowflake_ice_port_really_is_in_the_blocked_list() {
+        assert!(
+            STUN_TURN_PORTS.contains("3478"),
+            "the built-in snowflake bridges use ice=stun:…:3478"
+        );
+    }
+    // <<< AETHER-APP-FIX pt-egress-not-blocked
 }

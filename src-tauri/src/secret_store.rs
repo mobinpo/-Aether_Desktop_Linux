@@ -38,7 +38,9 @@ pub struct SecretStore {
 
 impl SecretStore {
     pub fn new(data_dir: &Path) -> Self {
-        Self { path: data_dir.join("secrets.bin") }
+        Self {
+            path: data_dir.join("secrets.bin"),
+        }
     }
 
     /// راز را می‌خواند، یا رشتهٔ خالی اگر نبود/باز نشد.
@@ -74,7 +76,9 @@ impl SecretStore {
                 // با *محتوا* لاگ نمی‌شود، فقط با علت. این لاگ صادراتی است.
                 DiagnosticsLog::w(
                     "ai",
-                    &format!("The sealed secret store could not be opened ({e}); treating it as empty."),
+                    &format!(
+                        "The sealed secret store could not be opened ({e}); treating it as empty."
+                    ),
                 );
                 BTreeMap::new()
             }
@@ -104,7 +108,7 @@ impl SecretStore {
 fn protect(plain: &[u8]) -> Result<Vec<u8>> {
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     unsafe {
@@ -123,8 +127,7 @@ fn protect(plain: &[u8]) -> Result<Vec<u8>> {
             &mut output,
         )
         .map_err(|e| anyhow!("CryptProtectData failed: {e}"))?;
-        let sealed =
-            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let sealed = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         LocalFree(windows::Win32::Foundation::HLOCAL(output.pbData as *mut _));
         Ok(sealed)
     }
@@ -134,7 +137,7 @@ fn protect(plain: &[u8]) -> Result<Vec<u8>> {
 fn unprotect(sealed: &[u8]) -> Result<Vec<u8>> {
     use windows::Win32::Foundation::LocalFree;
     use windows::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     unsafe {
@@ -168,7 +171,10 @@ fn unprotect(sealed: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(not(windows))]
 fn protect(plain: &[u8]) -> Result<Vec<u8>> {
-    DiagnosticsLog::w("ai", "This is not a Windows build: the secret store is NOT sealed.");
+    DiagnosticsLog::w(
+        "ai",
+        "This is not a Windows build: the secret store is NOT sealed.",
+    );
     Ok(plain.to_vec())
 }
 

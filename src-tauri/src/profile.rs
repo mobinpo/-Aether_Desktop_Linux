@@ -34,27 +34,54 @@ pub enum Protocol {
     Masque,
     Wireguard,
     Gool,
+    /// Core 2.0.0: MASQUE inside MASQUE (two hops).
+    Mim,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum ScanMode { Turbo, Balanced, Thorough, Stealth, Ironclad }
+pub enum ScanMode {
+    Turbo,
+    Balanced,
+    Thorough,
+    Stealth,
+    Ironclad,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum IpVersion { V4, V6, Both }
+pub enum IpVersion {
+    V4,
+    V6,
+    Both,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum Noize { Off, Light, Firewall, Balanced, Gfw, Aggressive }
+pub enum Noize {
+    Off,
+    Light,
+    Firewall,
+    Balanced,
+    Gfw,
+    Aggressive,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EndpointMode { Auto, ManualPeer, ManualRange }
+pub enum EndpointMode {
+    Auto,
+    ManualPeer,
+    ManualRange,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum SplitMode { Off, Include, Exclude }
+pub enum SplitMode {
+    Off,
+    Include,
+    Exclude,
+}
 
 /// v12 (۱.۲.۳) — پورت ۱:۱ از `model/TransportBackend.kt`.
 ///
@@ -77,6 +104,64 @@ pub enum TransportBackend {
     #[default]
     Aether,
     AetherPsiphon,
+    /// ۱.۲.۵ — سه حالت تازه، معادل دقیق نسخهٔ موبایل. عمداً به **ته** فهرست
+    /// اضافه شده‌اند: `profile.json` نام را ذخیره می‌کند، نه ترتیب را، ولی
+    /// درج در میانهٔ فهرست ترتیب نمایش رابط کاربری را هم جابه‌جا می‌کرد.
+    Tor,
+    AetherTor,
+    TorPsiphon,
+    TorAether,
+}
+
+/// ۱.۲.۵ (هستهٔ ۲.۰.۰) — پورت ۱:۱ از `TransportBackend.kt::TorMode`.
+///
+/// نگاشت مستقیم روی فلگ‌های خود هسته: [TorMode::Chain] همان `--tor`،
+/// [TorMode::Only] همان `--tor-only`، [TorMode::Reverse] همان `--tor-reverse`.
+///
+/// تفاوت سه‌تا در یک پرسش است — **اول چه چیزی به شبکه می‌رسد** — و هر تفاوت
+/// دیگری از همان درمی‌آید:
+///
+/// ```text
+///   Chain    اول تونل، تور داخلش      شبکهٔ محلی می‌بیند: اِتِر
+///   Only     تور، بی هیچ تونلی        شبکهٔ محلی می‌بیند: تور (یا یک پل)
+///   Reverse  اول تور، تونل داخلش      شبکهٔ محلی می‌بیند: تور (یا یک پل)
+/// ```
+///
+/// پس پل‌ها فقط در [TorMode::Only] و [TorMode::Reverse] معنا دارند — همان دو
+/// حالتی که تور خودش روبروی شبکهٔ محلی است — و در حالت زنجیره‌ای، که تور از
+/// داخل تونل dial می‌شود، هیچ کاری نمی‌کنند.
+///
+/// [TorMode::Reverse] یک محدودیت اضافه هم دارد و انتخاب این برنامه نیست: تور
+/// فقط TCP حمل می‌کند و لبه‌های WireGuard وارپ فقط روی UDP جواب می‌دهند، پس
+/// هسته در این حالت MASQUE روی HTTP/2 را اجرا می‌کند و **`--wg` و `--gool` را
+/// رد می‌کند**. برنامه هم به جای فرستادن ترکیبی که هسته ردش می‌کند، خودش
+/// پروتکل را بازنویسی می‌کند — [ConnectionProfile::effective_protocol].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TorMode {
+    Chain,
+    Only,
+    Reverse,
+}
+
+/// آیا تور از راه پل به شبکه برسد؟ (هستهٔ ۲.۰.۰ — پورت `TorBridges`).
+///
+/// [TorBridges::Auto] رفتار خود هسته است: کمی مستقیم تلاش کن و اگر به جایی
+/// نرسید، پل‌هایی که از bridgedb گرفته را بیازما. [TorBridges::Always] تلاش
+/// مستقیم را رد می‌کند (`--tor-bridges`) — انتخاب درست روی شبکه‌ای که
+/// می‌دانیم تور را می‌بندد. [TorBridges::Off] هرگز پل برنمی‌دارد
+/// (`--no-tor-bridges`).
+///
+/// در حالت `Aether → Tor` بی‌اثر است و رابط کاربری همین را می‌گوید: تور آنجا
+/// از داخل تونل dial می‌شود، پس شبکهٔ محلی هرگز تور را نمی‌بیند و پل چیزی
+/// برای پنهان کردن ندارد.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TorBridges {
+    #[default]
+    Auto,
+    Always,
+    Off,
 }
 
 impl TransportBackend {
@@ -84,8 +169,75 @@ impl TransportBackend {
     ///
     /// تنها دروازهٔ تصمیم در `state.rs`: اگر true باشد، نشست پیش از هر چیز
     /// وجود استیج ۲ را بررسی می‌کند و استیج ۱ بدون مسیر داده بالا می‌آید.
+    /// تور داخل خود موتور اجرا می‌شود، پس یک حالت تور به این معنا زنجیره‌ای
+    /// نیست مگر Psiphon هم در آن باشد.
     pub fn is_chained(self) -> bool {
-        matches!(self, TransportBackend::AetherPsiphon)
+        matches!(
+            self,
+            TransportBackend::AetherPsiphon | TransportBackend::TorPsiphon
+        )
+    }
+
+    /// موتور چگونه تور را با تونل ترکیب کند، یا `None` وقتی تور در کار نیست.
+    pub fn tor_mode(self) -> Option<TorMode> {
+        match self {
+            TransportBackend::Aether | TransportBackend::AetherPsiphon => None,
+            TransportBackend::AetherTor => Some(TorMode::Chain),
+            TransportBackend::Tor | TransportBackend::TorPsiphon => Some(TorMode::Only),
+            TransportBackend::TorAether => Some(TorMode::Reverse),
+        }
+    }
+
+    /// آیا تور به هر شکلی در کار است؟
+    pub fn uses_tor(self) -> bool {
+        self.tor_mode().is_some()
+    }
+
+    /// آیا این حالت اصلاً یک تونل WARP بالا می‌آورد؟
+    ///
+    /// برای دو حالت `--tor-only` نه — و همین است که هر تنظیم WARP‌شکل را در
+    /// آن دو بی‌معنا می‌کند: نه لبه‌ای برای اسکن، نه پروتکلی برای انتخاب، نه
+    /// هویتی برای ثبت. رابط کاربری آن سطرها را بر مبنای همین خاموش می‌کند، نه
+    /// بر مبنای نام بک‌اند.
+    pub fn uses_warp(self) -> bool {
+        self.tor_mode() != Some(TorMode::Only)
+    }
+
+    /// پورت SOCKS5 محلی‌ای که **خروجیِ خط لولهٔ تمام‌شده** است.
+    ///
+    /// # چرا لایهٔ `TorSocksFront` نسخهٔ موبایل در ویندوز لازم نیست
+    ///
+    /// در اندروید tun2socks هر جریان UDP — و پس هر پرس‌وجوی DNS دستگاه — را با
+    /// `UDP ASSOCIATE` می‌فرستد و تور فقط TCP حمل می‌کند؛ پس آنجا یک front لازم
+    /// است که خودش به `UDP ASSOCIATE` جواب بدهد، DNS را روی TCP داخل تور حل کند
+    /// و باقی را بیندازد. مسیر دادهٔ ویندوز پروکسی سیستمی WinINET است — از بنیاد
+    /// TCP-only و فقط `CONNECT` — و UDP مستقیم را `leakguard.rs` می‌بندد. پس
+    /// هیچ UDP‌ای به موتور سپرده نمی‌شود و مسیر داده مستقیم به لیسنر خودِ موتور
+    /// می‌چسبد.
+    pub fn exposed_socks_port(self) -> u16 {
+        if self.is_chained() {
+            crate::engine::CHAIN_SOCKS_PORT
+        } else if self.tor_mode() == Some(TorMode::Chain) {
+            // در `--tor` لیسنر اصلی خروجی WARP را نگه می‌دارد و تور لیسنر دومِ
+            // خودش را دارد؛ مسیر دستگاه باید به دومی برود، وگرنه کاربری که
+            // «Aether → Tor» را انتخاب کرده از خروجی WARP بیرون می‌رفت.
+            crate::engine::TOR_SOCKS_PORT
+        } else {
+            crate::engine::LOCAL_SOCKS_PORT
+        }
+    }
+
+    /// لیسنر تورِ خودِ موتور در این حالت، یا `None` وقتی تور خاموش است.
+    ///
+    /// با `--tor-only` تنها پروکسی موتور خودش تور است، پس روی پورت همیشگی
+    /// می‌نشیند. با `--tor` پورت همیشگی خروجی WARP را نگه می‌دارد و تور لیسنر
+    /// جداگانه می‌گیرد.
+    pub fn tor_socks_port(self) -> Option<u16> {
+        match self.tor_mode() {
+            None => None,
+            Some(TorMode::Only) => Some(crate::engine::LOCAL_SOCKS_PORT),
+            Some(TorMode::Chain) | Some(TorMode::Reverse) => Some(crate::engine::TOR_SOCKS_PORT),
+        }
     }
 
     /// برچسب خط لوله برای لاگ تشخیصی — عمداً می‌گوید خروجی **کدام** هاپ است.
@@ -93,6 +245,16 @@ impl TransportBackend {
         match self {
             TransportBackend::Aether => "Aether only (exit = Cloudflare WARP edge)",
             TransportBackend::AetherPsiphon => "Aether → Psiphon (chained; exit = Psiphon server)",
+            TransportBackend::Tor => "Tor alone, no tunnel under it (exit = Tor)",
+            TransportBackend::AetherTor => {
+                "Aether → Tor (tor is dialled through the tunnel; exit = Tor)"
+            }
+            TransportBackend::TorPsiphon => {
+                "Tor → Psiphon (chained through tor; exit = Psiphon server)"
+            }
+            TransportBackend::TorAether => {
+                "Tor → Aether (the tunnel goes out through tor; exit = WARP edge)"
+            }
         }
     }
 
@@ -110,6 +272,10 @@ impl TransportBackend {
         match self {
             TransportBackend::Aether => None,
             TransportBackend::AetherPsiphon => Some("Aether \u{2192} Psiphon"),
+            TransportBackend::Tor => Some("Tor"),
+            TransportBackend::AetherTor => Some("Aether \u{2192} Tor"),
+            TransportBackend::TorPsiphon => Some("Tor \u{2192} Psiphon"),
+            TransportBackend::TorAether => Some("Tor \u{2192} Aether"),
         }
     }
 }
@@ -122,7 +288,12 @@ impl TransportBackend {
 ///   Token        → یک JWT از پیش‌گرفته‌شده (`--access-token`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum AccessMode { Off, Email, ServiceToken, Token }
+pub enum AccessMode {
+    Off,
+    Email,
+    ServiceToken,
+    Token,
+}
 
 /// قابلیت‌های هسته‌ی همراه — تعیین می‌کند کدام فلگ‌ها امن‌اند که فرستاده شوند.
 ///
@@ -140,6 +311,16 @@ pub struct CoreCaps {
     /// v11 — تشخیص نام میزبان از بایت‌های اول برای قواعد دامنه‌ای و
     /// جایگزینی خودکار هویتی که Cloudflare قبولش ندارد. هر دو از 1.7.0.
     pub route_sniff: bool,
+    /// ۱.۲.۵ — تور داخل موتور (arti، پشت فیچر `tor`)، از هستهٔ 2.0.0.
+    ///
+    /// چهار حالت تور فقط وقتی به موتور می‌روند که هستهٔ همراهِ نصب واقعاً
+    /// آن‌ها را بشناسد. روی هستهٔ پین‌شدهٔ قدیمی‌تر — یا هسته‌ای که CI بدون
+    /// فیچر `tor` ساخته و به آن برگشته — `--tor-only` یک آرگومان ناشناخته است
+    /// و موتور همان‌جا می‌مُرد؛ با این گیت، بک‌اند تور بی‌صدا نادیده گرفته
+    /// می‌شود و نشست به جای مُردن، ساده وصل می‌شود.
+    pub tor: bool,
+    /// Core 2.0.0: `--mim` / MASQUE inside MASQUE.
+    pub mim: bool,
 }
 
 impl CoreCaps {
@@ -151,6 +332,8 @@ impl CoreCaps {
             custom_dns: false,
             upstream: false,
             route_sniff: false,
+            tor: false,
+            mim: false,
         }
     }
 
@@ -162,6 +345,8 @@ impl CoreCaps {
             custom_dns: true,
             upstream: true,
             route_sniff: true,
+            tor: true,
+            mim: true,
         }
     }
 
@@ -170,12 +355,17 @@ impl CoreCaps {
     pub fn for_version(major: u32, minor: u32) -> Self {
         let v15 = (major, minor) >= (1, 5);
         let v17 = (major, minor) >= (1, 7);
+        // تور از 2.0.0. مقایسه روی (major, minor) است، پس هستهٔ 2.1 هم پاس
+        // می‌شود و هستهٔ 1.9 نه — دقیقاً همان قاعدهٔ دو ردیف بالاتر.
+        let v20 = (major, minor) >= (2, 0);
         Self {
             zero_trust: v15,
             routing: v15,
             custom_dns: v15,
             upstream: v17,
             route_sniff: v17,
+            tor: v20,
+            mim: v20,
         }
     }
 }
@@ -350,6 +540,48 @@ pub struct ConnectionProfile {
     // `skip_serializing` یعنی UI می‌تواند مقدار را بفرستد (deserialize مجاز)
     // ولی هیچ‌وقت در profile.json یا پاسخ get_profile برنمی‌گردد — نه هنگام
     // ذخیرهٔ معمول، نه هنگام Reset، نه در خروجی لاگ.
+    // ====================================================================
+    //  ۱.۲.۵ — تور (هستهٔ ۲.۰.۰)
+    // ====================================================================
+    /// آیا تور از راه پل به شبکه برسد. فقط وقتی خوانده می‌شود که خودِ تور
+    /// روبروی شبکهٔ محلی باشد، یعنی در دو حالت `--tor-only`.
+    #[serde(default)]
+    pub tor_bridges: TorBridges,
+    /// سطرهای پلی که کاربر دستی چسبانده، یکی در هر خط، به جای پل‌هایی که
+    /// موتور از bridgedb می‌گیرد.
+    ///
+    /// یک سطر چنین شکلی دارد:
+    /// `obfs4 192.0.2.55:38114 <FINGERPRINT> cert=... iat-mode=0`. هر چیزی که
+    /// با نام یک ترانسپورت شناخته‌شده شروع نشود، [Self::sanitized_bridges] آن را
+    /// می‌اندازد و نمی‌فرستد — وگرنه یک سطر بدشکل به آرگومان دومِ موتور تبدیل
+    /// می‌شد.
+    #[serde(default)]
+    pub tor_bridge_lines: String,
+    /// کد دوحرفی کشور برای bridgedb، یا خالی تا موتور خودش تشخیص دهد.
+    ///
+    /// ارزش دستی‌گذاشتن دارد: تشخیص خود موتور (`detect_country` در
+    /// `bridges.rs`) از endpoint‌ِ trace کلادفلر می‌پرسد کجاست — و درست روی
+    /// شبکه‌هایی که پل بیشترین اهمیت را دارد، همان درخواست شکست می‌خورد یا
+    /// مکان اشتباه می‌دهد.
+    ///
+    /// موتور دقیقاً دو حرف می‌خواهد و خودش کوچکشان می‌کند؛ هر چیز دیگری را
+    /// [Self::sanitized_tor_country] می‌اندازد و نمی‌فرستد، چون مقدارِ ردشده
+    /// بی‌صدا به تشخیص خودکار برمی‌گشت و شبیه این می‌شد که تنظیم کاری نکرد.
+    #[serde(default)]
+    pub tor_country: String,
+    /// چند ثانیه تور اجازه دارد مستقیم تلاش کند پیش از آنکه پل بیاید.
+    /// `0` = همان ۷۵ ثانیهٔ خودِ موتور.
+    #[serde(default)]
+    pub tor_direct_secs: u32,
+    /// `host:port` که تور باید بتواند به آن برسد تا موتور bootstrap را
+    /// موفق بداند. خالی = همان `check.torproject.org:443` موتور.
+    ///
+    /// پیش‌فرض خودش هدف سانسور است: شبکه‌ای که check.torproject.org را
+    /// می‌بندد، یک مدار تورِ کاملاً سالم را در این اثبات ناموفق نشان می‌دهد و
+    /// برنامه برای توری که مشکلی نداشت شکست bootstrap گزارش می‌کند.
+    #[serde(default)]
+    pub tor_check: String,
+
     /// راز توکن سرویس Access (فقط AccessMode::ServiceToken).
     #[serde(skip_serializing, default)]
     pub access_secret: String,
@@ -365,7 +597,10 @@ fn default_backend() -> TransportBackend {
 
 /// Current settings-defaults revision. Bump this whenever a default changes in
 /// a way that must also reach profiles already saved on disk.
-pub const SETTINGS_REV: u32 = 2;
+// rev 4: کاربر در آزمونِ ۱۶ سپتامبر «تور تنها» را انتخاب کرده بود و همان
+// ماند، چون مهاجرت یک‌بار در rev 3 اجرا شده بود. این نسخه یک‌بارِ دیگر
+// بک‌اند را به Aether برمی‌گرداند — نسخهٔ برنامه (۱.۲.۵) دست نمی‌خورد.
+pub const SETTINGS_REV: u32 = 4;
 
 /// A profile file with no `settingsRev` key predates the mechanism.
 fn settings_rev_legacy() -> u32 {
@@ -378,17 +613,25 @@ impl Default for ConnectionProfile {
             backend: TransportBackend::Aether,
             exit_region: String::new(),
             protocol: Protocol::Smart,
-            // 1.2.3: Turbo, matching the mobile ladder, where every rung scans
-            // in Turbo because the ladder's speed comes from trying the NEXT
-            // strategy quickly rather than from one long exhaustive scan.
-            scan_mode: ScanMode::Turbo,
+            // 1.2.5: BALANCED, byte for byte the mobile 1.3.0 default.
+            //
+            // Turbo used to sit here to imitate the mobile ladder, which scans
+            // every rung in Turbo. That imitation was in the wrong place: on
+            // mobile the ladder sets TURBO per attempt (SmartAuto.kt) while the
+            // stored profile stays BALANCED, so a user on a MANUAL protocol --
+            // who has no ladder -- gets the full 150 s scan budget there and got
+            // only 60 s here. `auto_plan` now sets Turbo per rung, which is
+            // where it belongs, and this value is the mobile one.
+            scan_mode: ScanMode::Balanced,
             ip_version: IpVersion::V4,
             quick_reconnect: true,
             masque_http2: false,
             lan_share: false,
             kill_switch: true,
             ipv6_protection: true,
-            reconnect_attempts: 3,
+            // مثل موبایل ۱.۳.۰ (`reconnectRetryLimit = 5`). سقف پایینِ ۳ در
+            // `sanitize` سرِ جایش می‌ماند.
+            reconnect_attempts: 5,
             leak_guard: true,
             noize: Noize::Off,
             endpoint_mode: EndpointMode::Auto,
@@ -412,6 +655,13 @@ impl Default for ConnectionProfile {
             route_sniff: true,
             reprovision: true,
             settings_rev: SETTINGS_REV,
+            // ۱.۲.۵ — هر پنج تنظیم تور روی «همان کاری که موتور خودش می‌کند»
+            // است، پس یک پروفایل پیش‌فرض هیچ متغیر توری نمی‌فرستد.
+            tor_bridges: TorBridges::Auto,
+            tor_bridge_lines: String::new(),
+            tor_country: String::new(),
+            tor_direct_secs: 0,
+            tor_check: String::new(),
             access_secret: String::new(),
             access_token: String::new(),
         }
@@ -427,6 +677,100 @@ impl ConnectionProfile {
         // تنها دروازهٔ اعتبارسنجی کشور خروج. مقدار مستقیم داخل JSON کانفیگ
         // Psiphon می‌نشیند، پس هر کد ناشناخته‌ای به «خودکار» تبدیل می‌شود.
         self.exit_region = crate::exit_regions::normalize(&self.exit_region);
+        // ۱.۲.۵ — کرانِ ثانیه‌های تلاش مستقیم تور. `0` معنای خودش را دارد
+        // («پیش‌فرض موتور») و باید از کران پایین رد شود، پس فقط مقدارهای
+        // ناصفر بسته می‌شوند.
+        if self.tor_direct_secs > 0 {
+            self.tor_direct_secs = self.tor_direct_secs.clamp(5, 600);
+        }
+    }
+
+    /// آیا از تور خواسته شده که از راه پل به شبکه برسد؟
+    pub fn has_custom_bridges(&self) -> bool {
+        !self.tor_bridge_lines.trim().is_empty() && !self.sanitized_bridges().is_empty()
+    }
+
+    /// پروتکلی که واقعاً از موتور خواسته می‌شود.
+    ///
+    /// دقیقاً در یک حالت با [Self::protocol] تفاوت دارد: زنجیرهٔ برعکس. تور
+    /// فقط TCP حمل می‌کند و لبه‌های WireGuardِ وارپ تنها روی UDP جواب می‌دهند،
+    /// پس هستهٔ ۲.۰.۰ حالت `--tor-reverse` را روی MASQUE/HTTP-2 اجرا می‌کند و
+    /// **`--wg` و `--gool` را رد می‌کند**. فرستادن انتخابِ WireGuardِ کاربر در
+    /// این حالت باعث می‌شد موتور بی‌درنگ خارج شود — که از دید برنامه از یک
+    /// شبکهٔ بسته قابل تفکیک نیست و همان‌طور هم تشخیص داده می‌شد. پس بازنویسی
+    /// همین‌جا، یک‌جا، انجام می‌شود؛ جایی که هر argv ساخته می‌شود، نه در هر
+    /// فراخواننده. رابط کاربری هم کنار انتخابگرِ غیرفعالِ پروتکل همین را
+    /// می‌گوید.
+    pub fn effective_protocol(&self) -> Protocol {
+        if self.backend.tor_mode() == Some(TorMode::Reverse) {
+            Protocol::Masque
+        } else {
+            self.protocol
+        }
+    }
+
+    /// کد کشور به شکلی که موتور می‌پذیرد، یا `None`.
+    ///
+    /// دو حرف ASCII، کوچک‌شده. هر چیز دیگری `None` است و چیزی فرستاده
+    /// نمی‌شود: موتور خودش هم نادیده‌اش می‌گرفت، و متغیری که هست ولی نادیده
+    /// گرفته می‌شود سخت‌تر از متغیری است که هرگز ست نشده.
+    pub fn sanitized_tor_country(&self) -> Option<String> {
+        let code = self.tor_country.trim().to_ascii_lowercase();
+        (code.len() == 2 && code.bytes().all(|b| b.is_ascii_lowercase())).then_some(code)
+    }
+
+    /// هدفِ دسترسی‌پذیری به شکل `host:port`، یا `None` وقتی قابل استفاده نیست.
+    ///
+    /// عمداً سخت‌گیر است. موتور این را با `rsplit_once(':')` می‌خواند و روی
+    /// پورت بد بی‌صدا به ۴۴۳ برمی‌گردد، پس یک غلط تایپی به هدفی **دیگر**
+    /// تبدیل می‌شد نه به خطا — و این تنها کاری است که این تنظیم نباید بکند،
+    /// چون کل وظیفه‌اش تشخیص تورِ سالم از تورِ خراب است.
+    pub fn sanitized_tor_check(&self) -> Option<String> {
+        let raw = self.tor_check.trim();
+        if raw.is_empty() || raw.chars().any(char::is_whitespace) {
+            return None;
+        }
+        let (host, port) = match raw.rsplit_once(':') {
+            // دنبالهٔ عددی = پورت. غیرعددی یعنی این کولون مالِ یک آدرس IPv6
+            // است و پورتی در کار نیست — که تنها وقتی پذیرفته می‌شود که واقعاً
+            // چند کولون داشته باشد.
+            Some((head, tail)) => match tail.parse::<u32>() {
+                Ok(p) if (1..=65_535).contains(&p) => (head, Some(p)),
+                Ok(_) => return None,
+                Err(_) if raw.matches(':').count() > 1 => (raw, None),
+                Err(_) => return None,
+            },
+            None => (raw, None),
+        };
+        if host.is_empty() || host.len() > 253 {
+            return None;
+        }
+        if !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
+        {
+            return None;
+        }
+        Some(match port {
+            Some(p) => format!("{host}:{p}"),
+            None => host.to_string(),
+        })
+    }
+
+    /// سطرهای پلِ اعتبارسنجی‌شده برای `--tor-bridge`، هر ورودی یک آرگومان.
+    pub fn sanitized_bridges(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for line in self.tor_bridge_lines.split(['\n', ';']) {
+            let line = line.trim();
+            if line.is_empty() || !is_bridge_line(line) || out.iter().any(|k| k == line) {
+                continue;
+            }
+            out.push(line.to_string());
+            if out.len() == MAX_BRIDGE_LINES {
+                break;
+            }
+        }
+        out
     }
 
     /// آیا این نشست استیج ۲ را لازم دارد؟
@@ -444,7 +788,15 @@ impl ConnectionProfile {
     /// همان‌جا بماند، ولی `lan_share` نباید روی استیج ۱ چیزی باز کند.
     pub fn chained_stage(&self) -> Self {
         let mut stage = self.clone();
-        stage.backend = TransportBackend::Aether;
+        // ۱.۲.۵ — در `Tor → Psiphon` استیج ۱ **خود تور** است، نه اِتِر. اگر
+        // این‌جا مثل قبل روی `Aether` می‌افتاد، Psiphon از یک تونل WARP بیرون
+        // می‌رفت و کاربری که تور را انتخاب کرده بود اصلاً از تور رد نمی‌شد —
+        // یک نشستِ به‌ظاهر موفق با خروجیِ کاملاً اشتباه.
+        stage.backend = if self.backend.tor_mode() == Some(TorMode::Only) {
+            TransportBackend::Tor
+        } else {
+            TransportBackend::Aether
+        };
         stage.lan_share = false;
         stage
     }
@@ -486,32 +838,109 @@ impl ConnectionProfile {
     pub fn to_args_with_caps(&self, caps: CoreCaps) -> Vec<String> {
         let mut args: Vec<String> = Vec::new();
 
-        match self.protocol {
+        // ----- تور (هستهٔ ۲.۰.۰) ----------------------------------------
+        //
+        // **اول** فرستاده می‌شود، چون در حالت‌های `--tor-only` تعیین می‌کند که
+        // بیشترِ آنچه بعد می‌آید نباید فرستاده شود: تونلی نیست، پس لبه‌ای برای
+        // اسکن، ترانسپورتی برای مبهم‌سازی و هویت WARPی برای گرفتن هم نیست.
+        // فرستادنشان یعنی از موتور کاری بخواهیم که نتیجه‌اش را چیزی نمی‌خواند.
+        //
+        // گِیتِ `caps.tor`: روی هستهٔ قدیمی‌تر — یا هسته‌ای که بدون فیچر `tor`
+        // ساخته شده — این فلگ‌ها آرگومان ناشناخته‌اند و موتور همان‌جا خارج
+        // می‌شود. آن‌وقت بک‌اند تور بی‌صدا به نشست ساده تبدیل می‌شود، که رفتار
+        // درست است: مسیر rollback هرگز نباید انتشار را بکشد.
+        let tor_mode = if caps.tor {
+            self.backend.tor_mode()
+        } else {
+            None
+        };
+        match tor_mode {
+            None => {}
+            Some(TorMode::Chain) => {
+                args.push("--tor".into());
+                args.push("--tor-bind".into());
+                args.push(format!("127.0.0.1:{}", crate::engine::TOR_SOCKS_PORT));
+            }
+            Some(TorMode::Only) => args.push("--tor-only".into()),
+            Some(TorMode::Reverse) => {
+                args.push("--tor-reverse".into());
+                args.push("--tor-bind".into());
+                args.push(format!("127.0.0.1:{}", crate::engine::TOR_SOCKS_PORT));
+            }
+        }
+        if tor_mode.is_some() {
+            // پل فقط وقتی معنا دارد که تور خودش باید به شبکه برسد، یعنی هر دو
+            // حالتی که تور روبروی شبکهٔ محلی است. در حالت زنجیره‌ای تور از
+            // داخل تونل dial می‌شود، پس چیزی برای پنهان کردن از شبکه نیست.
+            if tor_mode != Some(TorMode::Chain) {
+                match self.tor_bridges {
+                    TorBridges::Auto => {}
+                    TorBridges::Always => args.push("--tor-bridges".into()),
+                    TorBridges::Off => args.push("--no-tor-bridges".into()),
+                }
+                for line in self.sanitized_bridges() {
+                    args.push("--tor-bridge".into());
+                    args.push(line);
+                }
+            }
+        }
+        if !self.backend.uses_warp() && tor_mode.is_some() {
+            // تورِ تنها: resolverها هنوز اثر دارند (همان چیزی‌اند که SOCKS
+            // خودِ موتور تحویل می‌دهد)، ولی هیچ‌چیز دیگری از این تابع نه.
+            if caps.custom_dns {
+                let dns = clean_list(&self.dns);
+                if !dns.is_empty() {
+                    args.push("--dns".into());
+                    args.push(dns.join(","));
+                }
+            }
+            return args;
+        }
+
+        match self.effective_protocol() {
             // AUTO هرگز به موتور نمی‌رسد: SmartAuto قبل از اجرا آن را به یک
             // پروتکل مشخص تبدیل می‌کند (دقیقاً مثل اندروید).
             Protocol::Smart => {}
             Protocol::Masque => args.push("--masque".into()),
             Protocol::Wireguard => args.push("--wg".into()),
             Protocol::Gool => args.push("--gool".into()),
+            Protocol::Mim => {
+                if caps.mim {
+                    args.push("--mim".into())
+                }
+            }
         }
 
         if !self.has_manual_peer() {
-            args.push(match self.scan_mode {
-                ScanMode::Turbo => "--turbo",
-                ScanMode::Balanced => "--balanced",
-                ScanMode::Thorough => "--thorough",
-                ScanMode::Stealth => "--stealth",
-                ScanMode::Ironclad => "--ironclad",
-            }.into());
+            args.push(
+                match self.scan_mode {
+                    ScanMode::Turbo => "--turbo",
+                    ScanMode::Balanced => "--balanced",
+                    ScanMode::Thorough => "--thorough",
+                    ScanMode::Stealth => "--stealth",
+                    ScanMode::Ironclad => "--ironclad",
+                }
+                .into(),
+            );
         }
 
-        args.push(match self.ip_version {
-            IpVersion::V4 => "-4",
-            IpVersion::V6 => "-6",
-            IpVersion::Both => "--dual",
-        }.into());
+        args.push(
+            match self.ip_version {
+                IpVersion::V4 => "-4",
+                IpVersion::V6 => "-6",
+                IpVersion::Both => "--dual",
+            }
+            .into(),
+        );
 
-        args.push(if self.quick_reconnect { "--quick-reconnect" } else { "--no-quick-reconnect" }.into());
+        args.push(
+            if self.quick_reconnect {
+                "--quick-reconnect"
+            } else {
+                "--no-quick-reconnect"
+            }
+            .into(),
+        );
 
         // 1.2.3: `Off` has to be SENT, not omitted.
         //
@@ -530,9 +959,17 @@ impl ConnectionProfile {
             args.push(self.manual_peer.trim().to_string());
         }
 
-        if self.fragment { args.push("--fragment".into()); }
-        if self.ech { args.push("--ech".into()); args.push("auto".into()); }
-        if self.keepalive > 0 { args.push("--keepalive".into()); args.push(self.keepalive.to_string()); }
+        if self.fragment {
+            args.push("--fragment".into());
+        }
+        if self.ech {
+            args.push("--ech".into());
+            args.push("auto".into());
+        }
+        if self.keepalive > 0 {
+            args.push("--keepalive".into());
+            args.push(self.keepalive.to_string());
+        }
 
         // ----- Zero Trust / WARP سازمانی (هسته‌ی 1.5.0) -----------------
         if caps.zero_trust && self.uses_zero_trust() {
@@ -544,7 +981,8 @@ impl ConnectionProfile {
                     args.push(self.access_email.trim().to_string());
                 }
                 AccessMode::ServiceToken
-                    if !self.access_id.trim().is_empty() && !self.access_secret.trim().is_empty() =>
+                    if !self.access_id.trim().is_empty()
+                        && !self.access_secret.trim().is_empty() =>
                 {
                     args.push("--access-id".into());
                     args.push(self.access_id.trim().to_string());
@@ -613,10 +1051,17 @@ impl ConnectionProfile {
         // مسیر کارآمد MASQUE روی HTTP/2 است. پس همان چیزی که هسته با
         // `--h2` می‌فهمد را خودمان روشن می‌کنیم تا کاربر با یک تونلِ خاموش
         // تنها نماند.
-        let force_h2 = caps.upstream && self.upstream_is_tcp_only();
+        // زنجیرهٔ برعکس هم چاره‌ای ندارد: تور فقط TCP حمل می‌کند، پس MASQUE
+        // باید روی HTTP/2 برود — همان دلیلی که `effective_protocol` را دارد.
+        let force_h2 = (caps.upstream && self.upstream_is_tcp_only())
+            || (caps.tor && self.backend.tor_mode() == Some(TorMode::Reverse));
         env.insert(
             "AETHER_MASQUE_HTTP2".into(),
-            if self.masque_http2 || force_h2 { "1".into() } else { "0".into() },
+            if self.masque_http2 || force_h2 {
+                "1".into()
+            } else {
+                "0".into()
+            },
         );
 
         // بازه‌هایی که اسکنر موتور اجازه دارد در نظر بگیرد.
@@ -637,6 +1082,68 @@ impl ConnectionProfile {
             env.insert("AETHER_WG_CIDRS".into(), range.to_string());
         }
 
+        // ----- تور (هستهٔ ۲.۰.۰) ----------------------------------------
+        //
+        // فقط وقتی فرستاده می‌شود که بک‌اند واقعاً تور را اجرا کند، و فقط وقتی
+        // کاربر از پیش‌فرض موتور فاصله گرفته باشد. فرستادنِ همیشگی یعنی برنامه
+        // مالکِ مقدارهایی شود که باید مالِ موتور بمانند.
+        if caps.tor && self.backend.uses_tor() {
+            if let Some(check) = self.sanitized_tor_check() {
+                env.insert("AETHER_TOR_CHECK".into(), check);
+            }
+            if self.backend.tor_mode() != Some(TorMode::Chain) {
+                // هر دو فقط تا وقتی معنا دارند که تور خودش روبروی شبکه است:
+                // در حالت زنجیره‌ای bridgedb پرسیده نمی‌شود و پروبِ مستقیم
+                // داخل تونل اجرا می‌شود، جایی که آن چیزی نیست که گیر می‌کند.
+                if let Some(country) = self.sanitized_tor_country() {
+                    env.insert("AETHER_TOR_COUNTRY".into(), country);
+                }
+                if self.tor_direct_secs > 0 {
+                    env.insert(
+                        "AETHER_TOR_DIRECT_SECS".into(),
+                        self.tor_direct_secs.clamp(5, 600).to_string(),
+                    );
+                }
+                // ۱.۲.۶ — تا پلِ دومی هم نوبت بگیرد، پیش از آنکه کاربر تسلیم شود.
+                //
+                // این عدد از حساب کردنِ خودِ لاگ میدانی آمد، نه از حدس. موتور
+                // ترانسپورت‌ها را به ترتیبِ `obfs4 → snowflake → meek_lite`
+                // می‌آزماید و هر کدام `WAVE_TRIES = 2` دور دارد، هر دور با
+                // `AETHER_TOR_STALL_SECS` (پیش‌فرض ۷۵ ثانیه) رها می‌شود. یعنی با
+                // پیش‌فرض، snowflake پیش از ثانیهٔ ۱۵۰ حتی شروع نمی‌شود:
+                //
+                // ```text
+                //   obfs4: go 1 of 2, dropped after 75s without headway
+                //   Could not connect to guard … via obfs4 … (هر شش‌تا)
+                //   No usable guards. Rejected 6/6 as down
+                // ```
+                //
+                // در آن لاگ کاربر ۵۸ ثانیه بعد قطع کرد، پس نه snowflake و نه
+                // meek_lite هرگز آزموده نشدند — درست همان دو ترانسپورتی که
+                // domain-fronted هستند و روی شبکه‌ای که obfs4ِ عمومیِ توکار را
+                // شمارش و بسته است، تنها شانسِ باقی‌مانده‌اند. با ۴۰ ثانیه،
+                // obfs4 در ~۸۰ ثانیه تمام می‌شود و کل نردبان (۳ ترانسپورت × ۲
+                // دور × ۴۰) ۲۴۰ ثانیه می‌گیرد؛ هم زیر `AETHER_TOR_BRIDGE_SECS`
+                // (۳۶۰) می‌ماند و هم زیر بودجهٔ خودِ برنامه
+                // ([crate::diagnostics::TOR_BRIDGE_BUDGET_MS] = ۶۰۰ ثانیه).
+                //
+                // شکستِ obfs4 در همان ثانیه‌های اول رخ می‌دهد (لاگ: ۰.۱ تا ۳.۵
+                // ثانیه)، پس ۴۰ ثانیه هیچ تلاشِ *در حال پیشرفتی* را قطع نمی‌کند:
+                // معیارِ موتور «بی‌پیشرفت بودن» است، نه سپری‌شدنِ زمان.
+                //
+                // این تضمین نمی‌کند تور وصل شود — اگر هر سه ترابر روی این شبکه
+                // بسته باشند، هیچ ترتیبی نجاتش نمی‌دهد. کاری که می‌کند این است
+                // که فرصتِ آزمودنشان را داخل زمانی می‌آورد که کاربر واقعاً صبر
+                // می‌کند.
+                if self.tor_bridges != TorBridges::Off {
+                    env.insert(
+                        "AETHER_TOR_STALL_SECS".into(),
+                        TOR_BRIDGE_STALL_SECS.to_string(),
+                    );
+                }
+            }
+        }
+
         // ----- هسته‌ی 1.7.0 ---------------------------------------------
         if caps.route_sniff {
             if !self.route_sniff {
@@ -652,7 +1159,9 @@ impl ConnectionProfile {
 
     /// معادل دقیق `Profile.kt::connectTimeoutMs()`
     pub fn connect_timeout_ms(&self) -> u64 {
-        if self.has_manual_peer() { return 45_000; }
+        if self.has_manual_peer() {
+            return 45_000;
+        }
         match self.scan_mode {
             ScanMode::Turbo => 60_000,
             ScanMode::Balanced => 150_000,
@@ -661,6 +1170,64 @@ impl ConnectionProfile {
             ScanMode::Ironclad => 360_000,
         }
     }
+}
+
+/// ۱.۲.۶ — سقفِ «بی‌پیشرفتی» هر دورِ پل، که به موتور فرستاده می‌شود
+/// (`AETHER_TOR_STALL_SECS`). پیش‌فرضِ موتور ۷۵ ثانیه است و با آن، دومین
+/// ترانسپورت پیش از ثانیهٔ ۱۵۰ نوبت نمی‌گیرد. مفصل در
+/// [ConnectionProfile::to_env_with_caps].
+pub const TOR_BRIDGE_STALL_SECS: u32 = 40;
+
+/// بیشترین تعداد سطر پلی که به موتور می‌رود — همان عددِ نسخهٔ موبایل.
+pub const MAX_BRIDGE_LINES: usize = 12;
+
+/// یک سطر پلِ تور: نام ترانسپورتی شناخته‌شده، یک آدرس، اثر انگشت، و هر تعداد
+/// پارامتر `key=value`.
+///
+/// عمداً روی **نخستین توکن** سخت‌گیر است. هر سطر پل به‌عنوان یک ورودی argv به
+/// موتور می‌رود، پس هیچ‌چیز این‌جا نمی‌تواند آرگومان دومی تزریق کند — ولی سطری
+/// که ترانسپورتی را نام می‌برد که برنامه هیچ باینری‌اش را همراه ندارد، هنگام
+/// اتصال با پیامی دربارهٔ ترانسپورت شکست می‌خورد نه دربارهٔ سطر، و آن نوع
+/// خطایی است که کسی نمی‌تواند کاری با آن بکند.
+///
+/// چرا با دست نوشته شده و نه با regex: کلِ برنامه هیچ وابستگی regex ندارد و
+/// افزودنش برای یک الگو، یک crate تازه در مسیر اعتماد است.
+fn is_bridge_line(line: &str) -> bool {
+    const TRANSPORTS: [&str; 6] = [
+        "obfs4",
+        "meek_lite",
+        "webtunnel",
+        "snowflake",
+        "scramblesuit",
+        "obfs3",
+    ];
+    let mut parts = line.split_whitespace();
+    let Some(transport) = parts.next() else {
+        return false;
+    };
+    if !TRANSPORTS.contains(&transport) {
+        return false;
+    }
+    // آدرس: بدون فاصله، ۳ تا ۱۲۰ نویسه.
+    let Some(addr) = parts.next() else {
+        return false;
+    };
+    if !(3..=120).contains(&addr.chars().count()) {
+        return false;
+    }
+    // بقیهٔ توکن‌ها: اثر انگشت هگزِ ۴۰ نویسه‌ای و/یا پارامترها. مجموعهٔ نویسه
+    // همان چیزی است که نسخهٔ موبایل می‌پذیرد.
+    for token in parts {
+        if token.chars().count() > 400
+            || !token.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '_' | '.' | '=' | '/' | '+' | ':' | ',' | '-')
+            })
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// حذف فاصله‌های اضافی و ورودی‌های خالی از یک فهرست (route/dns).
@@ -676,6 +1243,24 @@ fn clean_list(items: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn mim_uses_core_2_0_flag_and_is_gated_before_it() {
+        let p = ConnectionProfile {
+            protocol: Protocol::Mim,
+            ..Default::default()
+        };
+        assert!(p
+            .to_args_with_caps(CoreCaps::for_version(2, 0))
+            .iter()
+            .any(|a| a == "--mim"));
+        assert!(!p
+            .to_args_with_caps(CoreCaps::for_version(1, 9))
+            .iter()
+            .any(|a| a == "--mim"));
+        assert!(CoreCaps::for_version(2, 0).mim);
+        assert!(!CoreCaps::for_version(1, 9).mim);
+    }
+
     /// این تست همان «قرارداد» بین اندروید و ویندوز است. اگر روزی خروجی فرق
     /// کند، CI باید قرمز شود.
     #[test]
@@ -683,7 +1268,7 @@ mod tests {
         let p = ConnectionProfile::default();
         assert_eq!(
             p.to_args(),
-            vec!["--turbo", "-4", "--quick-reconnect", "--noize", "off"]
+            vec!["--balanced", "-4", "--quick-reconnect", "--noize", "off"]
         );
         // v11: پروفایل پیش‌فرض هیچ متغیر جدیدی هم اضافه نمی‌کند.
         assert_eq!(
@@ -701,7 +1286,8 @@ mod tests {
         assert_eq!(p.backend, TransportBackend::Aether);
         assert_eq!(p.exit_region, "");
         assert_eq!(p.protocol, Protocol::Smart);
-        assert_eq!(p.scan_mode, ScanMode::Turbo);
+        // همان مقدارِ موبایل ۱.۳.۰ — نردبان خودش Turbo را می‌گذارد.
+        assert_eq!(p.scan_mode, ScanMode::Balanced);
         assert_eq!(p.ip_version, IpVersion::V4);
         assert_eq!(p.noize, Noize::Off);
         assert_eq!(p.endpoint_mode, EndpointMode::Auto);
@@ -717,7 +1303,7 @@ mod tests {
         let mut p = ConnectionProfile::default();
         assert!(p.kill_switch);
         assert!(p.ipv6_protection);
-        assert_eq!(p.reconnect_attempts, 3);
+        assert_eq!(p.reconnect_attempts, 5);
         p.reconnect_attempts = 99;
         p.normalize();
         assert_eq!(p.reconnect_attempts, 20);
@@ -768,8 +1354,19 @@ mod tests {
         };
         assert_eq!(
             p.to_args(),
-            vec!["--wg", "--turbo", "-4", "--quick-reconnect", "--noize", "gfw",
-                 "--fragment", "--ech", "auto", "--keepalive", "25"]
+            vec![
+                "--wg",
+                "--balanced",
+                "-4",
+                "--quick-reconnect",
+                "--noize",
+                "gfw",
+                "--fragment",
+                "--ech",
+                "auto",
+                "--keepalive",
+                "25"
+            ]
         );
     }
 
@@ -786,7 +1383,9 @@ mod tests {
         };
         let args = p.to_args_with_caps(CoreCaps::all());
         assert!(args.windows(2).any(|w| w == ["--team", "acme"]));
-        assert!(args.windows(2).any(|w| w == ["--access-email", "user@acme.com"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--access-email", "user@acme.com"]));
         assert!(args.contains(&"--gateway".to_string()));
     }
 
@@ -801,7 +1400,9 @@ mod tests {
         };
         let args = p.to_args_with_caps(CoreCaps::all());
         assert!(args.windows(2).any(|w| w == ["--access-id", "id-123"]));
-        assert!(args.windows(2).any(|w| w == ["--access-secret", "shh-secret"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--access-secret", "shh-secret"]));
     }
 
     #[test]
@@ -813,8 +1414,12 @@ mod tests {
             ..Default::default()
         };
         let args = p.to_args_with_caps(CoreCaps::all());
-        assert!(args.windows(2).any(|w| w == ["--route-block", "ads.example"]));
-        assert!(args.windows(2).any(|w| w == ["--route-direct", "bank.ir,192.168.0.0/16"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--route-block", "ads.example"]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--route-direct", "bank.ir,192.168.0.0/16"]));
         assert!(args.windows(2).any(|w| w == ["--dns", "1.1.1.1,8.8.8.8"]));
     }
 
@@ -836,7 +1441,7 @@ mod tests {
         assert!(!args.iter().any(|a| a.starts_with("--route")));
         assert!(!args.iter().any(|a| a == "--dns"));
         // ولی فلگ‌های پایه باید باشند.
-        assert!(args.contains(&"--turbo".to_string()));
+        assert!(args.contains(&"--balanced".to_string()));
     }
 
     #[test]
@@ -897,7 +1502,10 @@ mod tests {
             .iter()
             .any(|a| a == "--upstream"));
         // مقدار بی‌معنا هرگز فرستاده نمی‌شود.
-        let bad = ConnectionProfile { upstream: "not a proxy".into(), ..Default::default() };
+        let bad = ConnectionProfile {
+            upstream: "not a proxy".into(),
+            ..Default::default()
+        };
         assert!(!bad.to_args().iter().any(|a| a == "--upstream"));
     }
 
@@ -908,14 +1516,20 @@ mod tests {
             ..Default::default()
         };
         assert!(p.upstream_is_tcp_only());
-        assert_eq!(p.to_env().get("AETHER_MASQUE_HTTP2").map(String::as_str), Some("1"));
+        assert_eq!(
+            p.to_env().get("AETHER_MASQUE_HTTP2").map(String::as_str),
+            Some("1")
+        );
         // با پروکسی SOCKS5 انتخاب کاربر دست‌نخورده می‌ماند (UDP عبور می‌کند).
         let s = ConnectionProfile {
             upstream: "socks5://127.0.0.1:1080".into(),
             ..Default::default()
         };
         assert!(!s.upstream_is_tcp_only());
-        assert_eq!(s.to_env().get("AETHER_MASQUE_HTTP2").map(String::as_str), Some("0"));
+        assert_eq!(
+            s.to_env().get("AETHER_MASQUE_HTTP2").map(String::as_str),
+            Some("0")
+        );
         // روی هستهٔ 1.6.0 اجباری در کار نیست چون --upstream هم فرستاده نمی‌شود.
         assert_eq!(
             p.to_env_with_caps(CoreCaps::for_version(1, 6))
@@ -934,7 +1548,11 @@ mod tests {
         assert!(!env.contains_key("AETHER_ROUTE_SNIFF"));
         assert!(!env.contains_key("AETHER_REPROVISION"));
 
-        let off = ConnectionProfile { route_sniff: false, reprovision: false, ..Default::default() };
+        let off = ConnectionProfile {
+            route_sniff: false,
+            reprovision: false,
+            ..Default::default()
+        };
         let env = off.to_env();
         assert_eq!(env.get("AETHER_ROUTE_SNIFF").map(String::as_str), Some("0"));
         assert_eq!(env.get("AETHER_REPROVISION").map(String::as_str), Some("0"));
@@ -966,8 +1584,7 @@ mod tests {
             serde_json::to_string(&TransportBackend::AetherPsiphon).unwrap(),
             "\"AETHER_PSIPHON\""
         );
-        let p: ConnectionProfile =
-            serde_json::from_str(r#"{"backend":"AETHER_PSIPHON"}"#).unwrap();
+        let p: ConnectionProfile = serde_json::from_str(r#"{"backend":"AETHER_PSIPHON"}"#).unwrap();
         assert!(p.is_chained());
     }
 
@@ -1050,5 +1667,305 @@ mod tests {
         assert!(!json.contains("jwt-token"));
         assert!(!json.contains("accessSecret"));
         assert!(!json.contains("accessToken"));
+    }
+
+    // ====================================================================
+    //  ۱.۲.۵ — تور (هستهٔ ۲.۰.۰)
+    // ====================================================================
+
+    /// حالت زنجیره‌ای: تور از داخل تونل dial می‌شود و روی لیسنر دوم می‌نشیند.
+    #[test]
+    fn chain_mode_binds_tor_to_its_own_listener() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::AetherTor,
+            ..Default::default()
+        };
+        let args = p.to_args();
+        assert_eq!(args[0], "--tor");
+        assert_eq!(args[1], "--tor-bind");
+        assert_eq!(
+            args[2],
+            format!("127.0.0.1:{}", crate::engine::TOR_SOCKS_PORT)
+        );
+        // تونل هنوز ساخته می‌شود، پس اسکن و پروتکل هم باید بیایند.
+        assert!(args.contains(&"--balanced".to_string()));
+        // مسیر داده باید به لیسنر تور برود، نه به خروجی WARP.
+        assert_eq!(
+            TransportBackend::AetherTor.exposed_socks_port(),
+            crate::engine::TOR_SOCKS_PORT
+        );
+    }
+
+    /// `--tor-only` هیچ تونلی ندارد، پس هیچ فلگ WARPی هم نباید بفرستد.
+    #[test]
+    fn tor_only_sends_no_tunnel_flags() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::Tor,
+            dns: vec!["1.1.1.1".into()],
+            ..Default::default()
+        };
+        let args = p.to_args();
+        assert_eq!(args[0], "--tor-only");
+        // resolverها هنوز اثر دارند؛ SOCKS خود موتور آن‌ها را تحویل می‌دهد.
+        assert!(args.windows(2).any(|w| w == ["--dns", "1.1.1.1"]));
+        for flag in [
+            "--masque",
+            "--wg",
+            "--gool",
+            "--turbo",
+            "-4",
+            "--noize",
+            "--quick-reconnect",
+            "--tor-bind",
+        ] {
+            assert!(
+                !args.contains(&flag.to_string()),
+                "{flag} به یک نشستِ بدون تونل رفت: {args:?}"
+            );
+        }
+        assert!(!TransportBackend::Tor.uses_warp());
+        // تنها پروکسیِ موتور خودِ تور است، پس روی پورت همیشگی می‌نشیند.
+        assert_eq!(
+            TransportBackend::Tor.tor_socks_port(),
+            Some(crate::engine::LOCAL_SOCKS_PORT)
+        );
+    }
+
+    /// زنجیرهٔ برعکس: انتخاب WireGuardِ کاربر بازنویسی می‌شود، نه فرستاده.
+    ///
+    /// هستهٔ ۲.۰.۰ ترکیب `--tor-reverse --wg` را رد می‌کند و بی‌درنگ خارج
+    /// می‌شود؛ از دید برنامه این از یک شبکهٔ بسته قابل تفکیک نبود.
+    #[test]
+    fn reverse_chain_rewrites_wireguard_to_masque_over_h2() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::TorAether,
+            protocol: Protocol::Wireguard,
+            ..Default::default()
+        };
+        assert_eq!(p.effective_protocol(), Protocol::Masque);
+        let args = p.to_args();
+        assert_eq!(args[0], "--tor-reverse");
+        assert!(args.contains(&"--masque".to_string()));
+        assert!(!args.contains(&"--wg".to_string()));
+        assert!(!args.contains(&"--gool".to_string()));
+        // MASQUE باید روی HTTP/2 برود، حتی وقتی کاربر آن کلید را نزده.
+        assert_eq!(p.to_env().get("AETHER_MASQUE_HTTP2").unwrap(), "1");
+    }
+
+    /// پل فقط در دو حالتی معنا دارد که تور روبروی شبکهٔ محلی است.
+    #[test]
+    fn bridges_are_only_sent_when_tor_faces_the_network() {
+        let base = ConnectionProfile {
+            tor_bridges: TorBridges::Always,
+            tor_bridge_lines: "obfs4 192.0.2.55:38114 \
+                0123456789ABCDEF0123456789ABCDEF01234567 cert=abc iat-mode=0"
+                .into(),
+            tor_country: "IR".into(),
+            tor_direct_secs: 30,
+            ..Default::default()
+        };
+
+        // حالت زنجیره‌ای: تور از داخل تونل می‌رود، پس هیچ پلی و هیچ تنظیم
+        // bridgedb‌ای فرستاده نمی‌شود.
+        let chain = ConnectionProfile {
+            backend: TransportBackend::AetherTor,
+            ..base.clone()
+        };
+        let args = chain.to_args();
+        assert!(!args.contains(&"--tor-bridges".to_string()));
+        assert!(!args.contains(&"--tor-bridge".to_string()));
+        let env = chain.to_env();
+        assert!(!env.contains_key("AETHER_TOR_COUNTRY"));
+        assert!(!env.contains_key("AETHER_TOR_DIRECT_SECS"));
+
+        // تورِ تنها: هر دو می‌روند.
+        let only = ConnectionProfile {
+            backend: TransportBackend::Tor,
+            ..base
+        };
+        let args = only.to_args();
+        assert!(args.contains(&"--tor-bridges".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--tor-bridge" && w[1].starts_with("obfs4 192.0.2.55:38114")));
+        let env = only.to_env();
+        assert_eq!(env.get("AETHER_TOR_COUNTRY").unwrap(), "ir");
+        assert_eq!(env.get("AETHER_TOR_DIRECT_SECS").unwrap(), "30");
+    }
+
+    /// سطر پلِ بدشکل انداخته می‌شود، نه اینکه به argv برود.
+    #[test]
+    fn malformed_bridge_lines_are_dropped() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::Tor,
+            tor_bridge_lines: [
+                "notatransport 192.0.2.1:443",    // ترانسپورت ناشناخته
+                "obfs4",                          // بدون آدرس
+                "obfs4 1.2.3.4:1 cert=$(whoami)", // نویسهٔ غیرمجاز
+                "obfs4 192.0.2.9:9001 cert=ok",   // درست
+                "obfs4 192.0.2.9:9001 cert=ok",   // تکراری
+            ]
+            .join("\n"),
+            ..Default::default()
+        };
+        assert_eq!(p.sanitized_bridges(), vec!["obfs4 192.0.2.9:9001 cert=ok"]);
+        assert!(p.has_custom_bridges());
+    }
+
+    /// هدفِ دسترسی‌پذیری باید سخت‌گیرانه بررسی شود.
+    ///
+    /// موتور با `rsplit_once(':')` می‌خواند و روی پورت بد به ۴۴۳ برمی‌گردد، پس
+    /// یک غلط تایپی به هدفی دیگر تبدیل می‌شد نه به خطا.
+    #[test]
+    fn tor_check_target_is_validated_strictly() {
+        let mk = |v: &str| ConnectionProfile {
+            tor_check: v.into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            mk("example.com").sanitized_tor_check().unwrap(),
+            "example.com"
+        );
+        assert_eq!(
+            mk(" example.com:8443 ").sanitized_tor_check().unwrap(),
+            "example.com:8443"
+        );
+        assert_eq!(mk("").sanitized_tor_check(), None);
+        assert_eq!(mk("example.com:70000").sanitized_tor_check(), None);
+        assert_eq!(mk("example.com:0").sanitized_tor_check(), None);
+        assert_eq!(mk("example.com:https").sanitized_tor_check(), None);
+        assert_eq!(mk("exam ple.com").sanitized_tor_check(), None);
+        assert_eq!(mk("a;b.com").sanitized_tor_check(), None);
+        // آدرس IPv6 کولون‌های خودش را دارد و پورتی در کار نیست.
+        assert_eq!(
+            mk("2606:4700:4700::1111").sanitized_tor_check().unwrap(),
+            "2606:4700:4700::1111"
+        );
+    }
+
+    /// کد کشور: دقیقاً دو حرف، وگرنه چیزی فرستاده نمی‌شود.
+    #[test]
+    fn tor_country_needs_exactly_two_letters() {
+        let mk = |v: &str| ConnectionProfile {
+            tor_country: v.into(),
+            ..Default::default()
+        };
+        assert_eq!(mk("IR").sanitized_tor_country().unwrap(), "ir");
+        assert_eq!(mk(" de ").sanitized_tor_country().unwrap(), "de");
+        assert_eq!(mk("irn").sanitized_tor_country(), None);
+        assert_eq!(mk("i").sanitized_tor_country(), None);
+        assert_eq!(mk("i1").sanitized_tor_country(), None);
+        assert_eq!(mk("").sanitized_tor_country(), None);
+    }
+
+    /// نردبانِ پل باید داخلِ زمانی که کاربر صبر می‌کند به ترانسپورتِ دوم برسد.
+    ///
+    /// سه حالت سنجیده می‌شود، چون هر سه در لاگ معنا داشتند: تورِ روبروی شبکه با
+    /// پلِ مجاز (باید فرستاده شود)، پلِ خاموش (چیزی برای زمان‌بندی نیست) و حالتِ
+    /// زنجیره‌ای (تور از داخل تونل dial می‌شود، پس پل بی‌اثر است).
+    #[test]
+    fn the_bridge_ladder_gets_a_stall_budget_only_where_bridges_can_act() {
+        let caps = CoreCaps::for_version(2, 0);
+
+        let facing = ConnectionProfile {
+            backend: TransportBackend::Tor,
+            tor_bridges: TorBridges::Auto,
+            ..Default::default()
+        };
+        assert_eq!(
+            facing
+                .to_env_with_caps(caps)
+                .get("AETHER_TOR_STALL_SECS")
+                .map(String::as_str),
+            Some("40"),
+        );
+
+        let no_bridges = ConnectionProfile {
+            tor_bridges: TorBridges::Off,
+            ..facing.clone()
+        };
+        assert!(!no_bridges
+            .to_env_with_caps(caps)
+            .contains_key("AETHER_TOR_STALL_SECS"));
+
+        let chained = ConnectionProfile {
+            backend: TransportBackend::AetherTor,
+            ..facing.clone()
+        };
+        assert!(!chained
+            .to_env_with_caps(caps)
+            .contains_key("AETHER_TOR_STALL_SECS"));
+
+        // و روی هستهٔ پیش از ۲.۰.۰ هیچ متغیرِ توری فرستاده نمی‌شود.
+        assert!(!facing
+            .to_env_with_caps(CoreCaps::for_version(1, 9))
+            .contains_key("AETHER_TOR_STALL_SECS"));
+    }
+
+    #[test]
+    fn tor_direct_secs_is_clamped_but_zero_stays_zero() {
+        let mut p = ConnectionProfile {
+            tor_direct_secs: 0,
+            ..Default::default()
+        };
+        p.normalize();
+        assert_eq!(p.tor_direct_secs, 0, "صفر یعنی پیش‌فرض موتور");
+
+        p.tor_direct_secs = 1;
+        p.normalize();
+        assert_eq!(p.tor_direct_secs, 5);
+
+        p.tor_direct_secs = 9_999;
+        p.normalize();
+        assert_eq!(p.tor_direct_secs, 600);
+    }
+
+    /// روی هسته‌ای که تور را نمی‌شناسد، نشست ساده می‌شود — نه اینکه بمیرد.
+    #[test]
+    fn tor_flags_are_withheld_from_an_older_core() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::Tor,
+            tor_check: "example.com".into(),
+            ..Default::default()
+        };
+        let caps = CoreCaps::for_version(1, 9);
+        assert!(!caps.tor);
+        let args = p.to_args_with_caps(caps);
+        assert!(!args.iter().any(|a| a.starts_with("--tor")));
+        // و به جای یک argv نصفه‌کاره، یک نشست کاملِ اِتِر ساخته می‌شود.
+        assert!(args.contains(&"--balanced".to_string()));
+        assert!(!p.to_env_with_caps(caps).contains_key("AETHER_TOR_CHECK"));
+
+        assert!(CoreCaps::for_version(2, 0).tor);
+        assert!(CoreCaps::for_version(2, 1).tor);
+    }
+
+    /// در `Tor → Psiphon` استیج ۱ خودِ تور است، نه اِتِر.
+    #[test]
+    fn tor_psiphon_stage_one_is_tor() {
+        let p = ConnectionProfile {
+            backend: TransportBackend::TorPsiphon,
+            ..Default::default()
+        };
+        assert!(p.is_chained());
+        let stage = p.chained_stage();
+        assert_eq!(stage.backend, TransportBackend::Tor);
+        assert!(!stage.lan_share);
+        assert_eq!(stage.to_args()[0], "--tor-only");
+        // و خروجیِ زنجیره همان لیسنر Psiphon است.
+        assert_eq!(
+            TransportBackend::TorPsiphon.exposed_socks_port(),
+            crate::engine::CHAIN_SOCKS_PORT
+        );
+    }
+
+    /// یک پروفایل پیش‌فرض هیچ متغیر یا فلگ توری نمی‌فرستد.
+    #[test]
+    fn a_default_profile_is_unchanged_by_the_tor_work() {
+        let p = ConnectionProfile::default();
+        assert!(!p.backend.uses_tor());
+        assert!(p.to_args().iter().all(|a| !a.starts_with("--tor")));
+        assert!(p.to_env().keys().all(|k| !k.starts_with("AETHER_TOR")));
+        assert_eq!(p.effective_protocol(), p.protocol);
     }
 }

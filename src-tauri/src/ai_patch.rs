@@ -78,7 +78,7 @@ enum Kind {
 // `profile.rs` واگرا شوند.
 
 const BACKENDS: &[&str] = &["AETHER", "AETHER_PSIPHON"];
-const PROTOCOLS: &[&str] = &["SMART", "MASQUE", "WIREGUARD", "GOOL"];
+const PROTOCOLS: &[&str] = &["SMART", "MASQUE", "WIREGUARD", "GOOL", "MIM"];
 const SCAN_MODES: &[&str] = &["TURBO", "BALANCED", "THOROUGH", "STEALTH", "IRONCLAD"];
 const IP_VERSIONS: &[&str] = &["V4", "V6", "BOTH"];
 const NOIZE_MODES: &[&str] = &["OFF", "LIGHT", "FIREWALL", "BALANCED", "GFW", "AGGRESSIVE"];
@@ -184,7 +184,9 @@ fn chat_writable() -> BTreeMap<&'static str, Kind> {
         // `expect` عمدی: یک کلید در این فهرست که در `writable` نباشد یک خطای
         // برنامه‌نویسی است و نه یک حالتِ زمانِ اجرا. `chat_keys_are_a_subset`
         // پایینِ همین فایل هم پیش از هر بیلد می‌گیردش.
-        let kind = *all.get(key).expect("a chat key must also be advisor-writable");
+        let kind = *all
+            .get(key)
+            .expect("a chat key must also be advisor-writable");
         m.insert(key, kind);
     }
     m
@@ -195,8 +197,13 @@ fn chat_writable() -> BTreeMap<&'static str, Kind> {
 /// جدا از «ناشناخته» نگه داشته می‌شوند تا لاگ بتواند تفاوت را بگوید: یک مدل که
 /// `leakGuard: false` پیشنهاد می‌کند اشتباه نمی‌کند، دارد سعی می‌کند یک گارد
 /// امنیتی را خاموش کند، و آن رخداد ارزش دیده‌شدن دارد.
-const FORBIDDEN: [&str; 5] =
-    ["leakGuard", "accessSecret", "accessToken", "settingsRev", "reprovision"];
+const FORBIDDEN: [&str; 5] = [
+    "leakGuard",
+    "accessSecret",
+    "accessToken",
+    "settingsRev",
+    "reprovision",
+];
 
 /// نتیجهٔ اعمالِ یک پچ.
 #[derive(Debug, Default)]
@@ -238,7 +245,9 @@ fn apply_with(
 ) -> PatchOutcome {
     let mut outcome = PatchOutcome::default();
     let Some(object) = patch.as_object() else {
-        outcome.rejected.push(("<patch>".into(), "not a JSON object".into()));
+        outcome
+            .rejected
+            .push(("<patch>".into(), "not a JSON object".into()));
         return outcome;
     };
 
@@ -247,19 +256,31 @@ fn apply_with(
     // می‌شد که باید دستی هم‌گام می‌ماند، و روزی که کسی یک فیلد را تغییر نام
     // می‌داد، بی‌صدا از هم می‌پاشید. اینجا `serde` تنها مرجعِ نام‌هاست.
     let Ok(mut current) = serde_json::to_value(&*profile) else {
-        outcome.rejected.push(("<profile>".into(), "profile could not be read".into()));
+        outcome
+            .rejected
+            .push(("<profile>".into(), "profile could not be read".into()));
         return outcome;
     };
 
     for (key, proposed) in object {
         if FORBIDDEN.contains(&key.as_str()) {
-            DiagnosticsLog::w("ai", &format!("advisor tried to write the protected key \"{key}\" — refused"));
-            outcome.rejected.push((key.clone(), "protected setting".into()));
+            DiagnosticsLog::w(
+                "ai",
+                &format!("advisor tried to write the protected key \"{key}\" — refused"),
+            );
+            outcome
+                .rejected
+                .push((key.clone(), "protected setting".into()));
             continue;
         }
         let Some(kind) = allowed.get(key.as_str()) else {
-            DiagnosticsLog::w("ai", &format!("advisor proposed the unknown key \"{key}\" — ignored"));
-            outcome.rejected.push((key.clone(), "unknown setting".into()));
+            DiagnosticsLog::w(
+                "ai",
+                &format!("advisor proposed the unknown key \"{key}\" — ignored"),
+            );
+            outcome
+                .rejected
+                .push((key.clone(), "unknown setting".into()));
             continue;
         };
         match coerce(*kind, proposed) {
@@ -275,7 +296,10 @@ fn apply_with(
                 current[key.as_str()] = value;
             }
             Err(reason) => {
-                DiagnosticsLog::w("ai", &format!("advisor sent an invalid value for \"{key}\": {reason}"));
+                DiagnosticsLog::w(
+                    "ai",
+                    &format!("advisor sent an invalid value for \"{key}\": {reason}"),
+                );
                 outcome.rejected.push((key.clone(), reason));
             }
         }
@@ -313,7 +337,9 @@ fn apply_with(
                             rebuilt = trial;
                             outcome.applied.push((key, shown));
                         }
-                        Err(e) => outcome.rejected.push((key, format!("the app rejected this value: {e}"))),
+                        Err(e) => outcome
+                            .rejected
+                            .push((key, format!("the app rejected this value: {e}"))),
                     }
                 }
                 if let Ok(mut patched) = serde_json::from_value::<ConnectionProfile>(rebuilt) {
@@ -345,7 +371,10 @@ fn coerce(kind: Kind, proposed: &Value) -> Result<Value, String> {
         Kind::Int(min, max) => {
             let number = match proposed {
                 Value::Number(n) => n.as_f64().ok_or("not a number")?,
-                Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("\"{s}\" is not a number"))?,
+                Value::String(s) => s
+                    .trim()
+                    .parse::<f64>()
+                    .map_err(|_| format!("\"{s}\" is not a number"))?,
                 _ => return Err("expected a number".into()),
             };
             if !number.is_finite() || number < 0.0 {
@@ -353,12 +382,19 @@ fn coerce(kind: Kind, proposed: &Value) -> Result<Value, String> {
             }
             let rounded = number.round() as u64;
             if rounded < min as u64 || rounded > max as u64 {
-                return Err(format!("{rounded} is outside the allowed range {min}–{max}"));
+                return Err(format!(
+                    "{rounded} is outside the allowed range {min}–{max}"
+                ));
             }
             Ok(Value::from(rounded as u32))
         }
         Kind::Enum(options) => {
-            let raw = proposed.as_str().ok_or("expected a name")?.trim().to_uppercase().replace([' ', '-'], "_");
+            let raw = proposed
+                .as_str()
+                .ok_or("expected a name")?
+                .trim()
+                .to_uppercase()
+                .replace([' ', '-'], "_");
             options
                 .iter()
                 .find(|o| **o == raw)
@@ -368,7 +404,9 @@ fn coerce(kind: Kind, proposed: &Value) -> Result<Value, String> {
         Kind::Text(max) => {
             let raw = proposed.as_str().ok_or("expected text")?.trim();
             if raw.chars().count() > max {
-                return Err(format!("longer than the {max} characters this field accepts"));
+                return Err(format!(
+                    "longer than the {max} characters this field accepts"
+                ));
             }
             if raw.contains(['\n', '\r', '\0']) {
                 // یک مقدار چندخطی در یک فیلد تک‌خطی، در بهترین حالت یک رابط
@@ -404,7 +442,9 @@ fn coerce(kind: Kind, proposed: &Value) -> Result<Value, String> {
                     .collect()
             };
             if raw_items.len() > max_items {
-                return Err(format!("more than the {max_items} entries this list accepts"));
+                return Err(format!(
+                    "more than the {max_items} entries this list accepts"
+                ));
             }
             for item in raw_items {
                 if item.chars().count() > max_len || item.contains(['\n', '\r', '\0', ' ']) {
@@ -515,7 +555,10 @@ mod tests {
     #[test]
     fn a_sensible_patch_is_applied() {
         let mut p = profile();
-        let out = apply(&mut p, &json!({ "mtu": 1380, "fragment": true, "noize": "BALANCED" }));
+        let out = apply(
+            &mut p,
+            &json!({ "mtu": 1380, "fragment": true, "noize": "BALANCED" }),
+        );
         assert_eq!(p.mtu, 1380);
         assert!(p.fragment);
         assert!(out.rejected.is_empty(), "{:?}", out.rejected);
@@ -535,7 +578,10 @@ mod tests {
     #[test]
     fn credentials_are_not_writable_at_all() {
         let mut p = profile();
-        let out = apply(&mut p, &json!({ "accessSecret": "abc", "accessToken": "def" }));
+        let out = apply(
+            &mut p,
+            &json!({ "accessSecret": "abc", "accessToken": "def" }),
+        );
         assert_eq!(out.rejected.len(), 2);
         assert!(!out.changed());
         assert!(p.access_secret.is_empty() && p.access_token.is_empty());
@@ -544,7 +590,10 @@ mod tests {
     #[test]
     fn one_bad_key_does_not_void_the_good_ones() {
         let mut p = profile();
-        let out = apply(&mut p, &json!({ "mtu": 99999, "fragment": true, "banana": 1 }));
+        let out = apply(
+            &mut p,
+            &json!({ "mtu": 99999, "fragment": true, "banana": 1 }),
+        );
         assert!(p.fragment);
         assert_eq!(p.mtu, DEFAULT_MTU, "an out-of-range MTU must not land");
         assert_eq!(out.applied.len(), 1);
@@ -554,7 +603,10 @@ mod tests {
     #[test]
     fn loose_types_from_a_model_are_understood() {
         let mut p = profile();
-        apply(&mut p, &json!({ "mtu": "1420", "fragment": "true", "keepalive": 25.0, "noize": "balanced" }));
+        apply(
+            &mut p,
+            &json!({ "mtu": "1420", "fragment": "true", "keepalive": 25.0, "noize": "balanced" }),
+        );
         assert_eq!(p.mtu, 1420);
         assert!(p.fragment);
         assert_eq!(p.keepalive, 25);
@@ -573,7 +625,10 @@ mod tests {
     #[test]
     fn a_list_is_cleaned_deduplicated_and_bounded() {
         let mut p = profile();
-        apply(&mut p, &json!({ "dns": ["1.1.1.1", " 9.9.9.9 ", "1.1.1.1"] }));
+        apply(
+            &mut p,
+            &json!({ "dns": ["1.1.1.1", " 9.9.9.9 ", "1.1.1.1"] }),
+        );
         assert_eq!(p.dns, ["1.1.1.1", "9.9.9.9"]);
         // شکل کاماشده هم — که مدل‌ها نصف وقت‌ها برمی‌گردانند.
         apply(&mut p, &json!({ "dns": "8.8.8.8, 8.8.4.4" }));
@@ -620,10 +675,17 @@ mod tests {
         // پیش از این، یک مقدار نامیِ نامعتبر کلِ پچ را می‌انداخت — بدون اینکه
         // بگوید کدام کلید مقصر بود.
         let mut p = profile();
-        let out = apply(&mut p, &json!({ "mtu": 1380, "fragment": true, "noize": "MEDIUM" }));
+        let out = apply(
+            &mut p,
+            &json!({ "mtu": 1380, "fragment": true, "noize": "MEDIUM" }),
+        );
         assert_eq!(p.mtu, 1380, "a good change must survive a bad sibling");
         assert!(p.fragment);
-        assert!(out.rejected.iter().any(|(k, _)| k == "noize"), "{:?}", out.rejected);
+        assert!(
+            out.rejected.iter().any(|(k, _)| k == "noize"),
+            "{:?}",
+            out.rejected
+        );
         assert_eq!(out.applied.len(), 2, "{:?}", out.applied);
     }
 
@@ -641,11 +703,23 @@ mod tests {
         // این تست، بدترین شکل شکستِ یک پورت کلمه‌به‌کلمه را می‌گیرد: کلید
         // اندرویدی باید رد شود و کلید دسکتاپی باید بنشیند.
         let mut p = profile();
-        let out = apply(&mut p, &json!({ "dnsServers": ["1.1.1.1"], "reconnectRetryLimit": 5 }));
+        let out = apply(
+            &mut p,
+            &json!({ "dnsServers": ["1.1.1.1"], "reconnectRetryLimit": 7 }),
+        );
         assert_eq!(out.rejected.len(), 2, "{:?}", out.rejected);
-        let out2 = apply(&mut p, &json!({ "dns": ["1.1.1.1"], "reconnectAttempts": 5 }));
+        // مقدار باید *غیرِ* مقدارِ فعلی باشد، وگرنه `apply` آن را «خبری نیست»
+        // می‌شمارد و تست به‌جای نامِ کلید، پیش‌فرضِ پروفایل را می‌سنجد. با
+        // پاریتیِ پیش‌فرض‌ها با موبایل ۱.۳.۰ همین اتفاق افتاد: پیش‌فرض ۵ شد و
+        // `"reconnectAttempts": 5` بی‌صدا به no-op تبدیل شد.
+        let target = if p.reconnect_attempts == 7 { 8 } else { 7 };
+        assert_ne!(target, p.reconnect_attempts);
+        let out2 = apply(
+            &mut p,
+            &json!({ "dns": ["1.1.1.1"], "reconnectAttempts": target }),
+        );
         assert_eq!(out2.applied.len(), 2, "{:?}", out2);
-        assert_eq!(p.reconnect_attempts, 5);
+        assert_eq!(p.reconnect_attempts, target);
     }
 
     // ---- مرزِ باریک‌ترِ چت -------------------------------------------------
@@ -659,7 +733,11 @@ mod tests {
         let all = writable();
         assert!(!chat.is_empty());
         for (key, kind) in &chat {
-            assert_eq!(all.get(key), Some(kind), "{key} must match the advisor list");
+            assert_eq!(
+                all.get(key),
+                Some(kind),
+                "{key} must match the advisor list"
+            );
         }
     }
 
@@ -681,7 +759,11 @@ mod tests {
 
         let mut chat_profile = profile();
         let refused = apply_chat(&mut chat_profile, &dangerous);
-        assert!(refused.applied.is_empty(), "chat applied {:?}", refused.applied);
+        assert!(
+            refused.applied.is_empty(),
+            "chat applied {:?}",
+            refused.applied
+        );
         assert_eq!(refused.rejected.len(), 8, "{:?}", refused.rejected);
         assert_eq!(chat_profile, profile(), "the profile must be untouched");
 
@@ -695,7 +777,10 @@ mod tests {
     #[test]
     fn a_tuning_change_still_goes_through_the_chat() {
         let mut p = profile();
-        let out = apply_chat(&mut p, &json!({ "mtu": "1380", "noize": "GFW", "fragment": "on" }));
+        let out = apply_chat(
+            &mut p,
+            &json!({ "mtu": "1380", "noize": "GFW", "fragment": "on" }),
+        );
         assert!(out.rejected.is_empty(), "{:?}", out.rejected);
         assert_eq!(p.mtu, 1380);
         assert!(p.fragment);
@@ -705,14 +790,29 @@ mod tests {
     #[test]
     fn the_chat_prompt_list_and_snapshot_agree_with_the_allow_list() {
         let listed = chat_keys_for_prompt();
-        assert!(listed.contains("mtu: a number from 1280 to 9000"), "{listed}");
+        assert!(
+            listed.contains("mtu: a number from 1280 to 9000"),
+            "{listed}"
+        );
         assert!(listed.contains("noize: OFF | LIGHT"), "{listed}");
         // هیچ‌کدام از کلیدهای حذف‌شده به مدل حتی *پیشنهاد* نمی‌شوند.
-        for banned in ["upstream", "routeDirect", "manualPeer", "backend", "accessMode"] {
-            assert!(!listed.contains(banned), "{banned} must not be offered to the model");
+        for banned in [
+            "upstream",
+            "routeDirect",
+            "manualPeer",
+            "backend",
+            "accessMode",
+        ] {
+            assert!(
+                !listed.contains(banned),
+                "{banned} must not be offered to the model"
+            );
         }
         let snapshot = chat_snapshot(&profile());
-        assert!(snapshot.contains(&format!("mtu = {DEFAULT_MTU}")), "{snapshot}");
+        assert!(
+            snapshot.contains(&format!("mtu = {DEFAULT_MTU}")),
+            "{snapshot}"
+        );
         assert!(!snapshot.contains("accessSecret"));
     }
 

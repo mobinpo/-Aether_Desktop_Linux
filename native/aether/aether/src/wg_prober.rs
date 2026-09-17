@@ -157,7 +157,10 @@ pub struct WgProbe {
 pub const DEFAULT_GOOD_RTT_MS: u64 = 300;
 
 pub fn good_rtt_budget() -> Option<Duration> {
-    for name in ["AETHER_SCAN_GOOD_RTT_MS", "AETHER_QUICK_RECONNECT_MAX_RTT_MS"] {
+    for name in [
+        "AETHER_SCAN_GOOD_RTT_MS",
+        "AETHER_QUICK_RECONNECT_MAX_RTT_MS",
+    ] {
         if let Ok(raw) = std::env::var(name) {
             return raw
                 .trim()
@@ -283,8 +286,7 @@ pub async fn hunt_wg_endpoints(
     st.concurrency = crate::sysprofile::cap_concurrency(st.concurrency);
     // Same reconciliation as the MASQUE prober: the launcher's attempt window is
     // the real deadline, so never plan a scan that cannot finish inside it.
-    st.overall_deadline =
-        crate::prober::apply_scan_budget(st.overall_deadline, "WireGuard");
+    st.overall_deadline = crate::prober::apply_scan_budget(st.overall_deadline, "WireGuard");
     let timeout = st.per_probe_timeout;
     let mut effective_ip = probe.ip;
     if probe.ip.want_v6() && !crate::prober::host_has_ipv6().await {
@@ -442,10 +444,7 @@ fn distinct_by_ip(found: &[WgProbeResult]) -> Vec<WgProbeResult> {
     sorted.sort_by_key(|pr| pr.rtt);
 
     let mut seen = std::collections::HashSet::new();
-    sorted
-        .into_iter()
-        .filter(|pr| seen.insert(pr.ip))
-        .collect()
+    sorted.into_iter().filter(|pr| seen.insert(pr.ip)).collect()
 }
 
 async fn verify_one_wg(
@@ -485,13 +484,19 @@ async fn verify_one_wg(
         local_ipv6: "::1".parse().unwrap(),
         aethernoize: probe.aethernoize.clone(),
     };
-    match crate::tunnelping::wg_http_ping_established(session, &params, WG_IRONCLAD_TCPING_TIMEOUT).await {
+    match crate::tunnelping::wg_http_ping_established(session, &params, WG_IRONCLAD_TCPING_TIMEOUT)
+        .await
+    {
         Ok(http_rtt) => {
             log::info!(
                 "[+] ironclad verified wg {ip}:{port} real http round trip rtt={:?}",
                 http_rtt
             );
-            Some(WgProbeResult { ip, port, rtt: http_rtt })
+            Some(WgProbeResult {
+                ip,
+                port,
+                rtt: http_rtt,
+            })
         }
         Err(e) => {
             log::trace!("[-] ironclad wg {ip}:{port} failed real http check: {e}");
@@ -508,7 +513,11 @@ fn build_wg_candidates(
 ) -> Vec<(IpAddr, u16)> {
     let ports: Vec<u16> = {
         let mut seen_port: HashSet<u16> = HashSet::new();
-        let deduped: Vec<u16> = ports.iter().copied().filter(|p| seen_port.insert(*p)).collect();
+        let deduped: Vec<u16> = ports
+            .iter()
+            .copied()
+            .filter(|p| seen_port.insert(*p))
+            .collect();
         if deduped.is_empty() {
             vec![2408]
         } else {
@@ -554,7 +563,11 @@ fn build_wg_candidates(
                 anchors.push(IpAddr::V6(a));
             }
         }
-        let per = if st.sample_per_cidr == 0 { 80 } else { st.sample_per_cidr };
+        let per = if st.sample_per_cidr == 0 {
+            80
+        } else {
+            st.sample_per_cidr
+        };
         // >>> AETHER-APP-PATCH scan-cidrs — v4 جاسازی‌شده در آدرس v6 هم از بازهٔ کاربر
         let embed_v4: Vec<&'static str> = crate::prober::pinned_cidrs_v4("AETHER_WG_CIDRS")
             .unwrap_or_else(|| wireguard::WG_PREFIXES_V4.to_vec());
@@ -583,9 +596,13 @@ fn build_wg_candidates(
         }
     };
 
-    let mut ips: Vec<IpAddr> = Vec::with_capacity(anchors.len() + pool.len());
-    ips.extend(anchors.iter().copied());
-    ips.extend(pool.iter().copied());
+    let mut seen_ip: HashSet<IpAddr> = HashSet::new();
+    let ips: Vec<IpAddr> = anchors
+        .iter()
+        .chain(pool.iter())
+        .copied()
+        .filter(|ip| seen_ip.insert(*ip))
+        .collect();
 
     for wave in 0..st.pool_port_waves.max(1) {
         for (idx, candidate_ip) in ips.iter().enumerate() {
@@ -598,7 +615,10 @@ fn build_wg_candidates(
 
 fn parse_cidr_v4(cidr: &str) -> Option<(u32, u8)> {
     let (ip, prefix) = cidr.split_once('/')?;
-    Some((u32::from(ip.parse::<Ipv4Addr>().ok()?), prefix.parse().ok()?))
+    Some((
+        u32::from(ip.parse::<Ipv4Addr>().ok()?),
+        prefix.parse().ok()?,
+    ))
 }
 
 fn enumerate_cidr_v4(cidr: &str) -> Vec<Ipv4Addr> {
@@ -625,7 +645,11 @@ fn sample_cidr_v4(cidr: &str, n: usize) -> Vec<Ipv4Addr> {
         None => return Vec::new(),
     };
     let host_bits = 32u32.saturating_sub(prefix as u32);
-    let size = if host_bits >= 32 { u32::MAX } else { 1u32 << host_bits };
+    let size = if host_bits >= 32 {
+        u32::MAX
+    } else {
+        1u32 << host_bits
+    };
     if size <= 2 {
         return vec![Ipv4Addr::from(base)];
     }
@@ -648,7 +672,10 @@ fn sample_cidr_v4(cidr: &str, n: usize) -> Vec<Ipv4Addr> {
 
 fn parse_cidr_v6(cidr: &str) -> Option<(u128, u8)> {
     let (ip, prefix) = cidr.split_once('/')?;
-    Some((u128::from(ip.parse::<Ipv6Addr>().ok()?), prefix.parse().ok()?))
+    Some((
+        u128::from(ip.parse::<Ipv6Addr>().ok()?),
+        prefix.parse().ok()?,
+    ))
 }
 
 fn sample_cidr_v6(cidr: &str, n: usize, v4_cidrs: &[&str]) -> Vec<Ipv6Addr> {
@@ -715,8 +742,15 @@ mod tests {
             "the first candidates must spread across ports, not stack on 2408"
         );
 
-        let on_2408 = candidates.iter().take(20).filter(|(_, p)| *p == 2408).count();
-        assert!(on_2408 <= 4, "port 2408 took {on_2408} of the first twenty slots");
+        let on_2408 = candidates
+            .iter()
+            .take(20)
+            .filter(|(_, p)| *p == 2408)
+            .count();
+        assert!(
+            on_2408 <= 4,
+            "port 2408 took {on_2408} of the first twenty slots"
+        );
     }
 
     #[test]
@@ -725,8 +759,7 @@ mod tests {
         let ports = [2408, 500, 1701, 4500, 854];
         let candidates = build_wg_candidates(&strategy, &ports, IpScan::V4, &HashSet::new());
 
-        let mut per_ip: std::collections::HashMap<IpAddr, usize> =
-            std::collections::HashMap::new();
+        let mut per_ip: std::collections::HashMap<IpAddr, usize> = std::collections::HashMap::new();
         for (ip, _) in &candidates {
             *per_ip.entry(*ip).or_default() += 1;
         }
@@ -819,14 +852,9 @@ mod tests {
         let strategy = WgScanMode::Turbo.strategy();
         let peer: SocketAddr = "162.159.192.1:2408".parse().unwrap();
         let excluded = HashSet::from([peer]);
-        let candidates = build_wg_candidates(
-            &strategy,
-            &[2408, 500, 1701, 4500],
-            IpScan::V4,
-            &excluded,
-        );
+        let candidates =
+            build_wg_candidates(&strategy, &[2408, 500, 1701, 4500], IpScan::V4, &excluded);
 
         assert!(!candidates.contains(&(peer.ip(), peer.port())));
     }
 }
-

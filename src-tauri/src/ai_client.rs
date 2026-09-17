@@ -76,7 +76,10 @@ impl AiErrorKind {
     /// کاربر را هدر می‌دهد تا به همان پاسخ برسد. یک ۵xx، یک محدودیت نرخ و یک
     /// سوکتِ افتاده نه.
     fn worth_retrying(self) -> bool {
-        matches!(self, AiErrorKind::ServerError | AiErrorKind::RateLimit | AiErrorKind::Transport)
+        matches!(
+            self,
+            AiErrorKind::ServerError | AiErrorKind::RateLimit | AiErrorKind::Transport
+        )
     }
 }
 
@@ -96,7 +99,11 @@ pub struct AiError {
 
 impl AiError {
     fn new(message: impl Into<String>, kind: AiErrorKind) -> Self {
-        Self { message: message.into(), kind, retry_after_seconds: None }
+        Self {
+            message: message.into(),
+            kind,
+            retry_after_seconds: None,
+        }
     }
 }
 
@@ -125,9 +132,16 @@ pub fn list_models(api_key: &str, socks_port: u16) -> AiResult<Vec<GeminiModel>>
             Some(t) if !t.is_empty() => format!("&pageToken={t}"),
             _ => String::new(),
         };
-        let body = call("GET", &format!("{API}/models?pageSize=200{suffix}"), socks_port, api_key, None)?;
-        let json: Value = serde_json::from_str(&body)
-            .map_err(|_| AiError::new("Google's reply was not valid JSON.", AiErrorKind::Protocol))?;
+        let body = call(
+            "GET",
+            &format!("{API}/models?pageSize=200{suffix}"),
+            socks_port,
+            api_key,
+            None,
+        )?;
+        let json: Value = serde_json::from_str(&body).map_err(|_| {
+            AiError::new("Google's reply was not valid JSON.", AiErrorKind::Protocol)
+        })?;
         if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
             for item in models {
                 collected.push(to_model(item));
@@ -148,8 +162,11 @@ pub fn list_models(api_key: &str, socks_port: u16) -> AiResult<Vec<GeminiModel>>
 
     // فهرست مجاز **اینجا** اعمال می‌شود و نه در انتخابگر: شناسه‌ای که هرگز وارد
     // برنامه نشود، نمی‌تواند انتخاب، کَش یا فرستاده شود.
-    let chat_capable: Vec<GeminiModel> =
-        collected.iter().filter(|m| m.chat_capable).cloned().collect();
+    let chat_capable: Vec<GeminiModel> = collected
+        .iter()
+        .filter(|m| m.chat_capable)
+        .cloned()
+        .collect();
     let offered = policy::filter(&chat_capable);
     DiagnosticsLog::i(
         "ai",
@@ -186,7 +203,10 @@ pub fn generate(
     json_output: bool,
 ) -> AiResult<String> {
     if model.trim().is_empty() {
-        return Err(AiError::new("No Gemini model selected.", AiErrorKind::NoSuchModel));
+        return Err(AiError::new(
+            "No Gemini model selected.",
+            AiErrorKind::NoSuchModel,
+        ));
     }
     if !policy::is_allowed(model) {
         // کمربند و بند شلوار روی فهرست مجاز: یک شناسهٔ مدل می‌تواند از فایل
@@ -243,7 +263,13 @@ pub fn generate(
     });
 
     let path = format!("{API}/models/{}:generateContent", policy::normalise(model));
-    let body = call("POST", &path, socks_port, api_key, Some(&payload.to_string()))?;
+    let body = call(
+        "POST",
+        &path,
+        socks_port,
+        api_key,
+        Some(&payload.to_string()),
+    )?;
     let json: Value = serde_json::from_str(&body)
         .map_err(|_| AiError::new("Google's reply was not valid JSON.", AiErrorKind::Protocol))?;
 
@@ -260,18 +286,29 @@ pub fn generate(
 
     let candidates = json.get("candidates").and_then(|c| c.as_array());
     let Some(candidate) = candidates.and_then(|c| c.first()) else {
-        return Err(AiError::new("The model returned no answer.", AiErrorKind::Blocked));
+        return Err(AiError::new(
+            "The model returned no answer.",
+            AiErrorKind::Blocked,
+        ));
     };
 
     let mut text = String::new();
-    if let Some(parts) = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
+    if let Some(parts) = candidate
+        .get("content")
+        .and_then(|c| c.get("parts"))
+        .and_then(|p| p.as_array())
+    {
         for part in parts {
             // بخش‌های استدلال با `thought: true` علامت‌گذاری می‌شوند و پاسخ
             // **نیستند**. به‌هم‌چسباندنشان پاسخ‌هایی می‌ساخت که با حرف‌زدنِ مدل با
             // خودش شروع می‌شدند، و JSONی که نثر جلویش بود. thinkingBudget=0
             // باید یعنی هیچ‌کدام وجود ندارند؛ این گاردِ مدل‌هایی است که نادیده‌اش
             // می‌گیرند.
-            if part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false) {
+            if part
+                .get("thought")
+                .and_then(|t| t.as_bool())
+                .unwrap_or(false)
+            {
                 continue;
             }
             if let Some(chunk) = part.get("text").and_then(|t| t.as_str()) {
@@ -280,14 +317,21 @@ pub fn generate(
         }
     }
 
-    let finish = candidate.get("finishReason").and_then(|f| f.as_str()).unwrap_or("");
+    let finish = candidate
+        .get("finishReason")
+        .and_then(|f| f.as_str())
+        .unwrap_or("");
     if text.trim().is_empty() {
         let kind = match finish {
             "SAFETY" | "PROHIBITED_CONTENT" => AiErrorKind::Blocked,
             "MAX_TOKENS" => AiErrorKind::Truncated,
             _ => AiErrorKind::Protocol,
         };
-        let message = if finish.is_empty() { "The model returned an empty answer." } else { finish };
+        let message = if finish.is_empty() {
+            "The model returned an empty answer."
+        } else {
+            finish
+        };
         return Err(AiError::new(message, kind));
     }
     // پاسخ داد، ولی بریده شد. به‌عنوان خطا گزارش می‌شود و نه موفقیت: نیم‌جمله در
@@ -295,7 +339,10 @@ pub fn generate(
     // بودجهٔ بزرگ‌تر تلاش کند چون حالا می‌داند این کدام شکست است. متن نیمه هم
     // سوار پیام می‌شود تا اگر خواست همان را نشان دهد.
     if finish == "MAX_TOKENS" {
-        DiagnosticsLog::w("ai", &format!("answer hit MAX_TOKENS after {} chars", text.len()));
+        DiagnosticsLog::w(
+            "ai",
+            &format!("answer hit MAX_TOKENS after {} chars", text.len()),
+        );
         return Err(AiError::new(text, AiErrorKind::Truncated));
     }
     Ok(text)
@@ -333,7 +380,10 @@ fn call(
                 }
                 DiagnosticsLog::i(
                     "ai",
-                    &format!("{:?} on attempt {attempt}/{MAX_ATTEMPTS}; retrying in {wait}ms", last.kind),
+                    &format!(
+                        "{:?} on attempt {attempt}/{MAX_ATTEMPTS}; retrying in {wait}ms",
+                        last.kind
+                    ),
                 );
                 // خوابِ بلوکه‌کننده اینجا درست است: هر فراخوانِ این تابع روی
                 // رشتهٔ کارگرِ ai_session است و خواندن‌های سوکت در دو طرفش خیلی
@@ -354,20 +404,36 @@ fn attempt_call(
     api_key: &str,
     json_body: Option<&str>,
 ) -> AiResult<String> {
-    let response = match ai_http::request(method, path, socks_port, api_key, json_body, REQUEST_TIMEOUT) {
+    let response = match ai_http::request(
+        method,
+        path,
+        socks_port,
+        api_key,
+        json_body,
+        REQUEST_TIMEOUT,
+    ) {
         Ok(r) => r,
         Err(failure) => {
-            DiagnosticsLog::w("ai", &format!("request failed via 127.0.0.1:{socks_port}: {failure}"));
+            DiagnosticsLog::w(
+                "ai",
+                &format!("request failed via 127.0.0.1:{socks_port}: {failure}"),
+            );
             return Err(AiError::new(failure.to_string(), AiErrorKind::Transport));
         }
     };
     let logged_path = path.split('?').next().unwrap_or(path);
-    DiagnosticsLog::i("ai", &format!("{method} {logged_path} -> {}", response.code));
+    DiagnosticsLog::i(
+        "ai",
+        &format!("{method} {logged_path} -> {}", response.code),
+    );
     if response.ok() {
         return Ok(response.body);
     }
     if response.code == 0 {
-        return Err(AiError::new("No response through the tunnel.", AiErrorKind::Transport));
+        return Err(AiError::new(
+            "No response through the tunnel.",
+            AiErrorKind::Transport,
+        ));
     }
 
     let parsed: Option<Value> = serde_json::from_str(&response.body).ok();
@@ -400,7 +466,9 @@ fn attempt_call(
     Err(AiError {
         message: api_message.unwrap_or_else(|| format!("HTTP {}", response.code)),
         kind,
-        retry_after_seconds: response.retry_after_seconds.or_else(|| retry_delay_from_error(error_obj)),
+        retry_after_seconds: response
+            .retry_after_seconds
+            .or_else(|| retry_delay_from_error(error_obj)),
     })
 }
 
@@ -413,7 +481,11 @@ fn attempt_call(
 fn retry_delay_from_error(error: Option<&Value>) -> Option<f64> {
     let details = error?.get("details")?.as_array()?;
     for item in details {
-        let raw = item.get("retryDelay").and_then(|d| d.as_str()).unwrap_or("").trim();
+        let raw = item
+            .get("retryDelay")
+            .and_then(|d| d.as_str())
+            .unwrap_or("")
+            .trim();
         if raw.is_empty() {
             continue;
         }
@@ -432,9 +504,13 @@ fn retry_delay_from_error(error: Option<&Value>) -> Option<f64> {
 /// شکل منحنی مهم‌تر است: این کد وقتی اجرا می‌شود که کاربر به یک اسپینر نگاه
 /// می‌کند، پس سیاستی که اجازه دارد یک دقیقه صبر کند، سیاستی است که شبیه هنگ است.
 fn backoff_millis(attempt: u32, retry_after_seconds: Option<f64>) -> u64 {
-    let suggested = retry_after_seconds.map(|s| (s * 1000.0) as u64).unwrap_or(0);
+    let suggested = retry_after_seconds
+        .map(|s| (s * 1000.0) as u64)
+        .unwrap_or(0);
     let exponential = BASE_BACKOFF_MS << (attempt - 1);
-    suggested.max(exponential).clamp(BASE_BACKOFF_MS, MAX_BACKOFF_MS)
+    suggested
+        .max(exponential)
+        .clamp(BASE_BACKOFF_MS, MAX_BACKOFF_MS)
 }
 
 fn to_model(item: &Value) -> GeminiModel {
@@ -454,9 +530,19 @@ fn to_model(item: &Value) -> GeminiModel {
     GeminiModel {
         id,
         display_name: display,
-        description: item.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-        input_token_limit: item.get("inputTokenLimit").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        output_token_limit: item.get("outputTokenLimit").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        description: item
+            .get("description")
+            .and_then(|d| d.as_str())
+            .unwrap_or("")
+            .to_string(),
+        input_token_limit: item
+            .get("inputTokenLimit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
+        output_token_limit: item
+            .get("outputTokenLimit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
         chat_capable: supports_generate,
     }
 }
@@ -507,9 +593,10 @@ mod tests {
         assert_eq!(model.id, "gemini-3.8-flash");
         assert!(model.chat_capable);
 
-        let embed: Value =
-            serde_json::from_str(r#"{"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]}"#)
-                .unwrap();
+        let embed: Value = serde_json::from_str(
+            r#"{"name":"models/text-embedding-004","supportedGenerationMethods":["embedContent"]}"#,
+        )
+        .unwrap();
         assert!(!to_model(&embed).chat_capable);
     }
 }

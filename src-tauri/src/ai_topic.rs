@@ -54,31 +54,163 @@ pub struct Topic {
 /// همهٔ موضوع‌ها، به ترتیبی که در رابط کاربری ظاهر می‌شوند.
 pub const TOPICS: &[Topic] = &[
     // --- Tunnel
-    Topic { id: "backend", key: "backend", title: "Connection", subtitle: "Network backend, exit country, protocol and scanning", group: Group::Tunnel },
-    Topic { id: "exitRegion", key: "exitRegion", title: "Exit country", subtitle: "Which country the Psiphon stage leaves from", group: Group::Tunnel },
-    Topic { id: "protocol", key: "protocol", title: "Protocol", subtitle: "WireGuard or MASQUE, or let the app choose", group: Group::Tunnel },
-    Topic { id: "scanMode", key: "scanMode", title: "Endpoint scanning", subtitle: "How hard the app looks for a reachable endpoint", group: Group::Tunnel },
-    Topic { id: "transport", key: "noize", title: "Transport & anti-DPI", subtitle: "Obfuscation, endpoint, MTU and anti-DPI", group: Group::Tunnel },
-    Topic { id: "endpointMode", key: "endpointMode", title: "Endpoint", subtitle: "Automatic, scanned, or an address you type yourself", group: Group::Tunnel },
-    Topic { id: "mtu", key: "mtu", title: "MTU", subtitle: "Largest packet the tunnel will send", group: Group::Tunnel },
-    Topic { id: "keepalive", key: "keepalive", title: "Keepalive", subtitle: "How often a heartbeat keeps the path open", group: Group::Tunnel },
-    Topic { id: "fragment", key: "fragment", title: "Fragmentation", subtitle: "Splits the first packets so DPI cannot read them whole", group: Group::Tunnel },
-    Topic { id: "ech", key: "ech", title: "Encrypted Client Hello", subtitle: "Hides the server name during the TLS handshake", group: Group::Tunnel },
-    Topic { id: "dns", key: "dns", title: "DNS & routing rules", subtitle: "Resolvers inside the tunnel, block and bypass lists", group: Group::Tunnel },
-    Topic { id: "upstream", key: "upstream", title: "Upstream proxy (chaining)", subtitle: "Dial out through a proxy already running on this PC", group: Group::Tunnel },
+    Topic {
+        id: "backend",
+        key: "backend",
+        title: "Connection",
+        subtitle: "Network backend, exit country, protocol and scanning",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "exitRegion",
+        key: "exitRegion",
+        title: "Exit country",
+        subtitle: "Which country the Psiphon stage leaves from",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "protocol",
+        key: "protocol",
+        title: "Protocol",
+        subtitle: "WireGuard or MASQUE, or let the app choose",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "scanMode",
+        key: "scanMode",
+        title: "Endpoint scanning",
+        subtitle: "How hard the app looks for a reachable endpoint",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "transport",
+        key: "noize",
+        title: "Transport & anti-DPI",
+        subtitle: "Obfuscation, endpoint, MTU and anti-DPI",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "endpointMode",
+        key: "endpointMode",
+        title: "Endpoint",
+        subtitle: "Automatic, scanned, or an address you type yourself",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "mtu",
+        key: "mtu",
+        title: "MTU",
+        subtitle: "Largest packet the tunnel will send",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "keepalive",
+        key: "keepalive",
+        title: "Keepalive",
+        subtitle: "How often a heartbeat keeps the path open",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "fragment",
+        key: "fragment",
+        title: "Fragmentation",
+        subtitle: "Splits the first packets so DPI cannot read them whole",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "ech",
+        key: "ech",
+        title: "Encrypted Client Hello",
+        subtitle: "Hides the server name during the TLS handshake",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "dns",
+        key: "dns",
+        title: "DNS & routing rules",
+        subtitle: "Resolvers inside the tunnel, block and bypass lists",
+        group: Group::Tunnel,
+    },
+    Topic {
+        id: "upstream",
+        key: "upstream",
+        title: "Upstream proxy (chaining)",
+        subtitle: "Dial out through a proxy already running on this PC",
+        group: Group::Tunnel,
+    },
     // --- Security
-    Topic { id: "killSwitch", key: "killSwitch", title: "Kill switch", subtitle: "Cuts direct traffic the moment the tunnel drops", group: Group::Security },
-    Topic { id: "leakGuard", key: "leakGuard", title: "WebRTC leak guard", subtitle: "Stops raw UDP from revealing your real address", group: Group::Security },
-    Topic { id: "ipv6Protection", key: "ipv6Protection", title: "IPv6 protection", subtitle: "Keeps public IPv6 off the unprotected path", group: Group::Security },
-    Topic { id: "zeroTrust", key: "team", title: "Zero Trust", subtitle: "Join a Cloudflare organisation instead of plain WARP", group: Group::Security },
-    Topic { id: "reconnectAttempts", key: "reconnectAttempts", title: "Reconnect attempts", subtitle: "How many times the app retries by itself", group: Group::Security },
+    Topic {
+        id: "killSwitch",
+        key: "killSwitch",
+        title: "Kill switch",
+        subtitle: "Cuts direct traffic the moment the tunnel drops",
+        group: Group::Security,
+    },
+    Topic {
+        id: "leakGuard",
+        key: "leakGuard",
+        title: "WebRTC leak guard",
+        subtitle: "Stops raw UDP from revealing your real address",
+        group: Group::Security,
+    },
+    Topic {
+        id: "ipv6Protection",
+        key: "ipv6Protection",
+        title: "IPv6 protection",
+        subtitle: "Keeps public IPv6 off the unprotected path",
+        group: Group::Security,
+    },
+    Topic {
+        id: "zeroTrust",
+        key: "team",
+        title: "Zero Trust",
+        subtitle: "Join a Cloudflare organisation instead of plain WARP",
+        group: Group::Security,
+    },
+    Topic {
+        id: "reconnectAttempts",
+        key: "reconnectAttempts",
+        title: "Reconnect attempts",
+        subtitle: "How many times the app retries by itself",
+        group: Group::Security,
+    },
     // --- Application
-    Topic { id: "lanShare", key: "lanShare", title: "Share on the local network", subtitle: "Lets other devices on this network use the tunnel", group: Group::Application },
-    Topic { id: "splitMode", key: "splitMode", title: "Split tunnelling", subtitle: "Choose which programs use the tunnel", group: Group::Application },
-    Topic { id: "language", key: "", title: "Language", subtitle: "Interface language", group: Group::Application },
+    Topic {
+        id: "lanShare",
+        key: "lanShare",
+        title: "Share on the local network",
+        subtitle: "Lets other devices on this network use the tunnel",
+        group: Group::Application,
+    },
+    Topic {
+        id: "splitMode",
+        key: "splitMode",
+        title: "Split tunnelling",
+        subtitle: "Choose which programs use the tunnel",
+        group: Group::Application,
+    },
+    Topic {
+        id: "language",
+        key: "",
+        title: "Language",
+        subtitle: "Interface language",
+        group: Group::Application,
+    },
     // --- Diagnostics
-    Topic { id: "logs", key: "", title: "Connection log", subtitle: "What the engine reported, newest last", group: Group::Diagnostics },
-    Topic { id: "selfTest", key: "", title: "Self-test", subtitle: "Checks the parts the tunnel needs before it starts", group: Group::Diagnostics },
+    Topic {
+        id: "logs",
+        key: "",
+        title: "Connection log",
+        subtitle: "What the engine reported, newest last",
+        group: Group::Diagnostics,
+    },
+    Topic {
+        id: "selfTest",
+        key: "",
+        title: "Self-test",
+        subtitle: "Checks the parts the tunnel needs before it starts",
+        group: Group::Diagnostics,
+    },
 ];
 
 /// یک موضوع را با شناسه‌اش پیدا می‌کند.
@@ -99,7 +231,11 @@ mod tests {
     fn ids_are_unique() {
         let mut seen: Vec<&str> = Vec::new();
         for topic in TOPICS {
-            assert!(!seen.contains(&topic.id), "duplicate topic id: {}", topic.id);
+            assert!(
+                !seen.contains(&topic.id),
+                "duplicate topic id: {}",
+                topic.id
+            );
             seen.push(topic.id);
         }
     }
@@ -115,13 +251,23 @@ mod tests {
             if topic.key.is_empty() {
                 continue;
             }
-            assert!(object.contains_key(topic.key), "unknown profile key \"{}\" on topic \"{}\"", topic.key, topic.id);
+            assert!(
+                object.contains_key(topic.key),
+                "unknown profile key \"{}\" on topic \"{}\"",
+                topic.key,
+                topic.id
+            );
         }
     }
 
     #[test]
     fn the_groups_are_all_populated() {
-        for group in [Group::Tunnel, Group::Security, Group::Application, Group::Diagnostics] {
+        for group in [
+            Group::Tunnel,
+            Group::Security,
+            Group::Application,
+            Group::Diagnostics,
+        ] {
             assert!(in_group(group).count() > 0, "empty group: {group:?}");
         }
     }

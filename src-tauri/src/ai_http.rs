@@ -82,8 +82,12 @@ pub fn request(
     json_body: Option<&str>,
     timeout: Duration,
 ) -> Result<Response> {
-    let stream = probe::socks5_stream_on(socks_port, HOST, PORT, CONNECT_TIMEOUT)
-        .ok_or_else(|| anyhow!("the local SOCKS5 proxy on 127.0.0.1:{socks_port} did not open a path to {HOST}"))?;
+    let stream =
+        probe::socks5_stream_on(socks_port, HOST, PORT, CONNECT_TIMEOUT).ok_or_else(|| {
+            anyhow!(
+                "the local SOCKS5 proxy on 127.0.0.1:{socks_port} did not open a path to {HOST}"
+            )
+        })?;
     // Nagle خاموش: درخواست یک نوشتن کوچک است و بعدش یک خواندن، پس صبرکردن
     // برای ادغام‌کردنش فقط به هر پاسخ تأخیر اضافه می‌کند.
     let _ = stream.set_nodelay(true);
@@ -95,7 +99,10 @@ pub fn request(
     // نام میزبان همین‌جا بررسی می‌شود؛ خطای برگشتی از یک عدم‌تطابق گواهی، همان
     // چیزی است که در موبایل به‌صورت `SSLPeerUnverifiedException` بالا می‌آمد.
     let mut tls = connector.connect(HOST, stream).map_err(|e| {
-        DiagnosticsLog::e("ai", &format!("TLS to {HOST} failed (certificate or handshake): {e}"));
+        DiagnosticsLog::e(
+            "ai",
+            &format!("TLS to {HOST} failed (certificate or handshake): {e}"),
+        );
         anyhow!("TLS handshake with {HOST} failed: {e}")
     })?;
 
@@ -111,7 +118,11 @@ pub fn request(
     head.push_str("x-goog-api-key: ");
     head.push_str(api_key);
     head.push_str("\r\n");
-    head.push_str(concat!("User-Agent: Aether-Windows/", env!("CARGO_PKG_VERSION"), "\r\n"));
+    head.push_str(concat!(
+        "User-Agent: Aether-Windows/",
+        env!("CARGO_PKG_VERSION"),
+        "\r\n"
+    ));
     head.push_str("Accept: application/json\r\n");
     // identity: هرگز بدنهٔ فشرده نمی‌خواهیم، چون این کلاینت gzip پیاده نکرده و
     // یک پاسخِ بی‌صدا gzip‌شده شبیه خطای پارس به نظر می‌رسید.
@@ -157,7 +168,11 @@ pub fn request(
 
 fn parse(raw: &[u8]) -> Response {
     let Some(split) = index_of_header_end(raw) else {
-        return Response { code: 0, body: String::new(), retry_after_seconds: None };
+        return Response {
+            code: 0,
+            body: String::new(),
+            retry_after_seconds: None,
+        };
     };
     // بایت‌های هدر بنا به تعریف latin-1 هستند.
     let head_text: String = raw[..split].iter().map(|&b| b as char).collect();
@@ -174,7 +189,11 @@ fn parse(raw: &[u8]) -> Response {
         let lower = l.to_ascii_lowercase();
         lower.starts_with("transfer-encoding") && lower.contains("chunked")
     });
-    let body = if chunked { dechunk(body_bytes) } else { body_bytes.to_vec() };
+    let body = if chunked {
+        dechunk(body_bytes)
+    } else {
+        body_bytes.to_vec()
+    };
 
     let retry_after = head_text
         .lines()
@@ -218,7 +237,9 @@ fn dechunk(src: &[u8]) -> Vec<u8> {
         }
         let size_text: String = src[i..end].iter().map(|&b| b as char).collect();
         let size_text = size_text.trim().split(';').next().unwrap_or("").to_string();
-        let Ok(size) = usize::from_str_radix(&size_text, 16) else { break };
+        let Ok(size) = usize::from_str_radix(&size_text, 16) else {
+            break;
+        };
         i = end + 2;
         if size == 0 {
             break;

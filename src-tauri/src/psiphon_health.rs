@@ -188,11 +188,7 @@ impl Health {
             self.window_started_at = 0;
             self.window_base_failures = None;
         }
-        self.active_region = self
-            .server_regions
-            .get(server)
-            .cloned()
-            .unwrap_or_default();
+        self.active_region = self.server_regions.get(server).cloned().unwrap_or_default();
     }
 
     /// پنجره را باز می‌کند، یا اگر منقضی شده رول می‌کند.
@@ -260,12 +256,7 @@ impl Health {
     }
 
     /// تصمیم چرخش. خودِ فراخوانی **بیرون** از قفل انجام می‌شود (مقدار برگشتی).
-    fn decide_rotation(
-        &mut self,
-        now: u64,
-        why: &str,
-        repeat: bool,
-    ) -> Option<(Rotation, Target)> {
+    fn decide_rotation(&mut self, now: u64, why: &str, repeat: bool) -> Option<(Rotation, Target)> {
         if self.action.is_none() {
             return None;
         }
@@ -277,10 +268,12 @@ impl Health {
             // باز هم وضعش از کسی بهتر است که تونلش هر دقیقه پایین می‌آید.
             return None;
         }
-        let cooldown = if repeat { REPEAT_COOLDOWN_MS } else { COOLDOWN_MS };
-        if self.last_rotation_at != 0
-            && now.saturating_sub(self.last_rotation_at) < cooldown
-        {
+        let cooldown = if repeat {
+            REPEAT_COOLDOWN_MS
+        } else {
+            COOLDOWN_MS
+        };
+        if self.last_rotation_at != 0 && now.saturating_sub(self.last_rotation_at) < cooldown {
             return None;
         }
 
@@ -526,8 +519,7 @@ fn on_port_forward_failures(server: &str, count: u64) {
             }
             return;
         }
-        let why =
-            format!("{delta} refused port forwards across {distinct} distinct destinations");
+        let why = format!("{delta} refused port forwards across {distinct} distinct destinations");
         h.convict(&why);
         h.decide_rotation(now, &why, false)
     };
@@ -569,10 +561,7 @@ pub fn notice_type(line: &str) -> Option<String> {
         return Some(v);
     }
     let head = line.split_once(':')?.0.trim();
-    if head.is_empty()
-        || head.len() > 48
-        || !head.chars().all(|c| c.is_ascii_alphanumeric())
-    {
+    if head.is_empty() || head.len() > 48 || !head.chars().all(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
     Some(head.to_string())
@@ -671,8 +660,12 @@ mod tests {
 
     #[test]
     fn reads_notice_type_from_console_json() {
-        let line = r#"{"data":{"port":1825},"noticeType":"ListeningSocksProxyPort","timestamp":"x"}"#;
-        assert_eq!(notice_type(line).as_deref(), Some("ListeningSocksProxyPort"));
+        let line =
+            r#"{"data":{"port":1825},"noticeType":"ListeningSocksProxyPort","timestamp":"x"}"#;
+        assert_eq!(
+            notice_type(line).as_deref(),
+            Some("ListeningSocksProxyPort")
+        );
         assert_eq!(json_u64(line, "port"), Some(1825));
     }
 
@@ -686,13 +679,15 @@ mod tests {
 
     #[test]
     fn reads_connected_server_region() {
-        let line = r#"{"data":{"diagnosticID":"OsBTQokd","region":"DE"},"noticeType":"ConnectedServer"}"#;
+        let line =
+            r#"{"data":{"diagnosticID":"OsBTQokd","region":"DE"},"noticeType":"ConnectedServer"}"#;
         assert_eq!(json_str(line, "region").as_deref(), Some("DE"));
     }
 
     #[test]
     fn parses_port_forward_failures() {
-        let line = r#"{"data":{"message":"port forward failures for 99Fh7IiB: 115"},"noticeType":"Info"}"#;
+        let line =
+            r#"{"data":{"message":"port forward failures for 99Fh7IiB: 115"},"noticeType":"Info"}"#;
         assert_eq!(
             parse_port_forward_failures(line),
             Some(("99Fh7IiB".to_string(), 115))

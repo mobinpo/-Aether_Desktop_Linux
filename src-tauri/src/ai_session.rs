@@ -207,34 +207,54 @@ pub struct AiProbe {
 
 impl Default for AiProbe {
     fn default() -> Self {
-        Self { state: "IDLE", model_count: 0, via: String::new(), message: String::new() }
+        Self {
+            state: "IDLE",
+            model_count: 0,
+            via: String::new(),
+            message: String::new(),
+        }
     }
 }
 
 impl AiProbe {
     fn running() -> Self {
-        Self { state: "RUNNING", ..Default::default() }
+        Self {
+            state: "RUNNING",
+            ..Default::default()
+        }
     }
 
     fn ok(model_count: usize, via: String) -> Self {
-        Self { state: "OK", model_count, via, message: String::new() }
+        Self {
+            state: "OK",
+            model_count,
+            via,
+            message: String::new(),
+        }
     }
 
     fn failed(message: String) -> Self {
-        Self { state: "FAILED", model_count: 0, via: String::new(), message }
+        Self {
+            state: "FAILED",
+            model_count: 0,
+            via: String::new(),
+            message,
+        }
     }
 }
 
 /// نامِ خوانای مسیر، برای نشان‌دادن در نتیجهٔ تست.
 ///
-/// همان دو رشته‌ای که رابط کاربری در انتخابگرِ بک‌اند نشان می‌دهد. اینجا تکرار
-/// می‌شود چون Rust نامِ نمایشی ندارد و فرستادنِ `AETHER_PSIPHON` به کاربر، یک
-/// نامِ داخلی است و نه یک جواب.
+/// همان رشته‌ای که رابط کاربری در انتخابگرِ بک‌اند نشان می‌دهد؛ فرستادنِ
+/// `AETHER_PSIPHON` به کاربر یک نامِ داخلی است و نه یک جواب.
+///
+/// ۱.۲.۵: این تابع پیش‌تر جدولِ نام‌ها را **تکرار** می‌کرد، و افزودن چهار
+/// بک‌اند تور همان‌جا به خطای کامپایل خورد — که در این مورد بهترین اتفاق بود:
+/// یک `_ =>` به‌جایش، بی‌صدا «Aether» را برای یک نشستِ تور می‌نوشت. حالا تنها
+/// منبعِ حقیقت [`TransportBackend::protocol_label`] است، که `None` اش دقیقاً
+/// یعنی «همان اِتِرِ ساده».
 fn backend_label(backend: TransportBackend) -> &'static str {
-    match backend {
-        TransportBackend::Aether => "Aether",
-        TransportBackend::AetherPsiphon => "Aether \u{2192} Psiphon",
-    }
+    backend.protocol_label().unwrap_or("Aether")
 }
 
 /// حالتِ درونی، پشت یک قفل.
@@ -318,7 +338,11 @@ impl AiSession {
             allowed_ids.first().cloned().unwrap_or_default()
         };
         Self {
-            inner: Mutex::new(Inner { models, selected_model: selected, ..Default::default() }),
+            inner: Mutex::new(Inner {
+                models,
+                selected_model: selected,
+                ..Default::default()
+            }),
             secrets: SecretStore::new(data_dir),
             settings,
         }
@@ -326,15 +350,31 @@ impl AiSession {
 
     // ---- خواندن‌ها -------------------------------------------------------
 
-    pub fn snapshot(&self, state: crate::state::ConnectionState, profile: &ConnectionProfile) -> AiSnapshot {
+    pub fn snapshot(
+        &self,
+        state: crate::state::ConnectionState,
+        profile: &ConnectionProfile,
+    ) -> AiSnapshot {
         let inner = self.inner.lock().unwrap();
         let key = self.secrets.read(GEMINI_KEY);
-        let gate = ai_gate::evaluate(state, profile.backend, !key.is_empty(), !inner.selected_model.is_empty());
+        let gate = ai_gate::evaluate(
+            state,
+            profile.backend,
+            !key.is_empty(),
+            !inner.selected_model.is_empty(),
+        );
         AiSnapshot {
             gate,
             gate_code: gate.code().to_string(),
             has_key: !key.is_empty(),
-            key_hint: key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect(),
+            key_hint: key
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect(),
             models: inner.models.clone(),
             selected_model: inner.selected_model.clone(),
             model_number: policy::display_number(&inner.selected_model),
@@ -355,7 +395,9 @@ impl AiSession {
     /// **همان** کلید است، و نگه‌داشتنشان بعد از عوض‌شدن کلید یعنی انتخابگر
     /// مدل‌هایی را نشان دهد که کلید تازه با ۴۰۴ ردشان می‌کند.
     pub fn set_api_key(&self, key: &str) -> Result<(), String> {
-        self.secrets.write(GEMINI_KEY, key).map_err(|e| e.to_string())?;
+        self.secrets
+            .write(GEMINI_KEY, key)
+            .map_err(|e| e.to_string())?;
         let mut inner = self.inner.lock().unwrap();
         // نتیجهٔ تستِ کلیدِ قبلی دربارهٔ کلیدِ تازه هیچ چیزی نمی‌گوید. نگه‌داشتنش
         // یعنی «سالم» نشان دادنِ کلیدی که هرگز آزمایش نشده.
@@ -366,14 +408,23 @@ impl AiSession {
         inner.error_kind = None;
         let _ = self.settings.set_string("aiModelCache", "[]");
         let _ = self.settings.set_string("aiModel", "");
-        DiagnosticsLog::i("ai", if key.trim().is_empty() { "API key cleared." } else { "API key stored (sealed)." });
+        DiagnosticsLog::i(
+            "ai",
+            if key.trim().is_empty() {
+                "API key cleared."
+            } else {
+                "API key stored (sealed)."
+            },
+        );
         Ok(())
     }
 
     /// مدل را انتخاب می‌کند. فقط شناسه‌های مجاز پذیرفته می‌شوند.
     pub fn select_model(&self, id: &str) -> Result<(), String> {
         if !policy::is_allowed(id) {
-            return Err(format!("Model \"{id}\" is not one of the models this app supports."));
+            return Err(format!(
+                "Model \"{id}\" is not one of the models this app supports."
+            ));
         }
         let normalised = policy::normalise(id);
         self.inner.lock().unwrap().selected_model = normalised.clone();
@@ -445,9 +496,10 @@ impl AiSession {
         match result {
             Ok(models) => {
                 let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
-                let _ = self
-                    .settings
-                    .set_string("aiModelCache", &serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()));
+                let _ = self.settings.set_string(
+                    "aiModelCache",
+                    &serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()),
+                );
                 let mut inner = self.inner.lock().unwrap();
                 // انتخابِ فعلی اگر دیگر پیشنهاد نمی‌شود، به تازه‌ترین مدل
                 // برمی‌گردد؛ یک انتخابِ ناموجود یعنی هر پرسشِ بعدی ۴۰۴ بگیرد.
@@ -510,7 +562,10 @@ impl AiSession {
         }
         let (key, model) = self.begin()?;
         let port = ai_gate::socks_port_for(profile);
-        let turns = [GeminiTurn { from_user: true, text: ai_prompts::explain_user(title, subtitle, value) }];
+        let turns = [GeminiTurn {
+            from_user: true,
+            text: ai_prompts::explain_user(title, subtitle, value),
+        }];
         let result = ai_client::generate(
             &key,
             port,
@@ -565,14 +620,24 @@ impl AiSession {
     /// روی رشتهٔ کارگر صدا زده می‌شود. `main.rs` حبابِ کاربر را پیش‌تر و همگام با
     /// [`append_user_message`](Self::append_user_message) نشانده است؛ این تابع فقط
     /// برای مسیرهایی مانده که کلِ کار را یک‌جا می‌خواهند.
-    pub fn send_chat(&self, profile: &ConnectionProfile, lang_code: &str, text: &str) -> Result<(), String> {
+    pub fn send_chat(
+        &self,
+        profile: &ConnectionProfile,
+        lang_code: &str,
+        text: &str,
+    ) -> Result<(), String> {
         let text = self.append_user_message(text)?;
         self.dispatch(profile, lang_code, &text)
     }
 
     /// همان پرسش را **بدون** افزودنِ حبابِ تازه برای آن می‌فرستد — رجوع به
     /// [`AiSession::dispatch`].
-    pub fn ask_existing(&self, profile: &ConnectionProfile, lang_code: &str, prompt: &str) -> Result<(), String> {
+    pub fn ask_existing(
+        &self,
+        profile: &ConnectionProfile,
+        lang_code: &str,
+        prompt: &str,
+    ) -> Result<(), String> {
         self.dispatch(profile, lang_code, prompt)
     }
 
@@ -582,7 +647,12 @@ impl AiSession {
     /// کاربرِ موجود بپرسند: تلاش مجدد نباید پرسش را دو بار روی صفحه بگذارد و
     /// ویرایش همین حالا خودش آن را بازنویسی کرده است. همان تفکیکِ `dispatch` در
     /// `ai/AiSession.kt`.
-    fn dispatch(&self, profile: &ConnectionProfile, lang_code: &str, prompt: &str) -> Result<(), String> {
+    fn dispatch(
+        &self,
+        profile: &ConnectionProfile,
+        lang_code: &str,
+        prompt: &str,
+    ) -> Result<(), String> {
         let (key, model) = match self.begin() {
             Ok(pair) => pair,
             Err(message) => {
@@ -590,7 +660,12 @@ impl AiSession {
                 // است، نه یک استثنا که در کنسول گم شود.
                 let mut inner = self.inner.lock().unwrap();
                 let id = inner.take_id();
-                inner.messages.push(ChatMessage::failure(id, message.clone(), AiErrorKind::Blocked, prompt));
+                inner.messages.push(ChatMessage::failure(
+                    id,
+                    message.clone(),
+                    AiErrorKind::Blocked,
+                    prompt,
+                ));
                 return Err(message);
             }
         };
@@ -600,7 +675,10 @@ impl AiSession {
             let history: Vec<GeminiTurn> = inner.messages[start..]
                 .iter()
                 .filter(|m| !m.failed) // نوبت‌های شکست‌خورده زمینه نیستند، سر و صدا هستند.
-                .map(|m| GeminiTurn { from_user: m.from_user, text: m.text.clone() })
+                .map(|m| GeminiTurn {
+                    from_user: m.from_user,
+                    text: m.text.clone(),
+                })
                 .collect();
             (inner.epoch, history)
         };
@@ -628,20 +706,29 @@ impl AiSession {
                     return Ok(());
                 }
                 let id = inner.take_id();
-                inner.messages.push(ChatMessage::model(id, visible, changes));
+                inner
+                    .messages
+                    .push(ChatMessage::model(id, visible, changes));
                 Ok(())
             }
             // یک پاسخِ بریده هنوز یک پاسخ است: متنِ نیمه نشان داده می‌شود و
             // علامت‌گذاری می‌شود، چون انداختنش کاربر را با سهمیهٔ سوخته و هیچ
             // چیزی روی صفحه رها می‌کرد.
-            Err(error) if error.kind == AiErrorKind::Truncated && !error.message.trim().is_empty() => {
+            Err(error)
+                if error.kind == AiErrorKind::Truncated && !error.message.trim().is_empty() =>
+            {
                 let mut inner = self.inner.lock().unwrap();
                 inner.busy = false;
                 if inner.epoch != epoch {
                     return Ok(());
                 }
                 let id = inner.take_id();
-                inner.messages.push(ChatMessage::failure(id, error.message, AiErrorKind::Truncated, prompt));
+                inner.messages.push(ChatMessage::failure(
+                    id,
+                    error.message,
+                    AiErrorKind::Truncated,
+                    prompt,
+                ));
                 inner.error_kind = Some(AiErrorKind::Truncated);
                 Ok(())
             }
@@ -653,7 +740,12 @@ impl AiSession {
                     return Ok(());
                 }
                 let id = inner.take_id();
-                inner.messages.push(ChatMessage::failure(id, message.clone(), error.kind, prompt));
+                inner.messages.push(ChatMessage::failure(
+                    id,
+                    message.clone(),
+                    error.kind,
+                    prompt,
+                ));
                 // `error` سراسری **نشانده نمی‌شود**: شکستِ چت مالِ همان حباب است و
                 // نشاندنش در نوار بالای صفحه یعنی یک خطا دو بار گفته شود.
                 inner.error_kind = Some(error.kind);
@@ -710,7 +802,12 @@ impl AiSession {
     ///
     /// `main.rs` دو نیمه را جدا صدا می‌زند تا بتواند بینشان منتشر کند؛ این تابع
     /// برای تست‌ها و هر فراخوانی مانده که کلِ کار را یک‌جا می‌خواهد.
-    pub fn retry(&self, profile: &ConnectionProfile, lang_code: &str, message_id: u64) -> Result<(), String> {
+    pub fn retry(
+        &self,
+        profile: &ConnectionProfile,
+        lang_code: &str,
+        message_id: u64,
+    ) -> Result<(), String> {
         let prompt = self.take_failed_prompt(message_id)?;
         self.dispatch(profile, lang_code, &prompt)
     }
@@ -790,7 +887,11 @@ impl AiSession {
     /// شود اصلاً به رابط کاربری نمی‌رسد، پس هرگز به شکل یک دکمهٔ بی‌اثر دیده
     /// نمی‌شود؛ و در همان حال در لاگ ثبت می‌شود، چون مدلی که چیزی خارج از فهرست
     /// می‌خواهد رخدادی است که ارزش دیده‌شدن دارد.
-    fn vet_changes(&self, profile: &ConnectionProfile, reply: &str) -> (String, Vec<ProposedChange>) {
+    fn vet_changes(
+        &self,
+        profile: &ConnectionProfile,
+        reply: &str,
+    ) -> (String, Vec<ProposedChange>) {
         let (visible, proposed) = ai_prompts::split_chat_reply(reply);
         if proposed.is_empty() {
             return (visible, Vec::new());
@@ -871,7 +972,10 @@ impl AiSession {
         if !outcome.rejected.is_empty() {
             DiagnosticsLog::w(
                 "ai",
-                &format!("applying chat changes: {} refused at the second gate", outcome.rejected.len()),
+                &format!(
+                    "applying chat changes: {} refused at the second gate",
+                    outcome.rejected.len()
+                ),
             );
         }
         if outcome.applied.is_empty() {
@@ -880,7 +984,10 @@ impl AiSession {
             // همان است: تنظیمات همان چیزی است که پیشنهاد شده بود.
             return Ok((patched, Vec::new()));
         }
-        DiagnosticsLog::i("ai", &format!("chat applied {} setting(s)", outcome.applied.len()));
+        DiagnosticsLog::i(
+            "ai",
+            &format!("chat applied {} setting(s)", outcome.applied.len()),
+        );
         Ok((patched, outcome.applied))
     }
 
@@ -916,7 +1023,10 @@ impl AiSession {
         // `accessSecret`/`accessToken` است و مدل هرگز نباید یک اعتبارنامه ببیند.
         let settings_json = redacted_settings(profile);
 
-        let turns = [GeminiTurn { from_user: true, text: ai_prompts::advisor_user(&settings_json, &digest) }];
+        let turns = [GeminiTurn {
+            from_user: true,
+            text: ai_prompts::advisor_user(&settings_json, &digest),
+        }];
         let reply = match ai_client::generate(
             &key,
             port,
@@ -955,17 +1065,30 @@ impl AiSession {
             }
         };
 
-        let reason = parsed.get("reason").and_then(|r| r.as_str()).unwrap_or("").trim().to_string();
+        let reason = parsed
+            .get("reason")
+            .and_then(|r| r.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let mut patched = profile.clone();
         let outcome: PatchOutcome = match parsed.get("patch") {
             Some(patch) => ai_patch::apply(&mut patched, patch),
             // پچِ خالی پاسخِ **درست** است وقتی لاگ یک اتصال سالم را نشان می‌دهد.
             None => PatchOutcome::default(),
         };
-        let result = AdvisorResult { reason, applied: outcome.applied, rejected: outcome.rejected };
+        let result = AdvisorResult {
+            reason,
+            applied: outcome.applied,
+            rejected: outcome.rejected,
+        };
         DiagnosticsLog::i(
             "ai",
-            &format!("advisor: {} change(s) applied, {} refused", result.applied.len(), result.rejected.len()),
+            &format!(
+                "advisor: {} change(s) applied, {} refused",
+                result.applied.len(),
+                result.rejected.len()
+            ),
         );
         let mut inner = self.inner.lock().unwrap();
         inner.advisor = Some(result.clone());
@@ -1036,8 +1159,13 @@ mod tests {
         let ai = session();
         assert!(messages_of(&ai).is_empty());
 
-        let prompt = ai.append_user_message("  why is my connection slow?  ").unwrap();
-        assert_eq!(prompt, "why is my connection slow?", "the prompt must come back trimmed");
+        let prompt = ai
+            .append_user_message("  why is my connection slow?  ")
+            .unwrap();
+        assert_eq!(
+            prompt, "why is my connection slow?",
+            "the prompt must come back trimmed"
+        );
 
         let messages = messages_of(&ai);
         assert_eq!(messages.len(), 1, "the bubble must be there already");
@@ -1051,7 +1179,10 @@ mod tests {
     fn an_empty_message_seats_no_bubble() {
         let ai = session();
         assert!(ai.append_user_message("   ").is_err());
-        assert!(messages_of(&ai).is_empty(), "an empty send must leave no trace");
+        assert!(
+            messages_of(&ai).is_empty(),
+            "an empty send must leave no trace"
+        );
     }
 
     #[test]
@@ -1085,7 +1216,10 @@ mod tests {
         let ai = session();
         ai.append_user_message("hello").unwrap();
         let id = messages_of(&ai)[0].id;
-        assert!(ai.take_failed_prompt(id).is_err(), "a user turn is not a failure");
+        assert!(
+            ai.take_failed_prompt(id).is_err(),
+            "a user turn is not a failure"
+        );
     }
 
     // ---- اعتبارسنجیِ پیشنهادها پیش از رسیدن به رابط کاربری ----------------
@@ -1093,7 +1227,8 @@ mod tests {
     #[test]
     fn a_reply_without_a_block_proposes_nothing() {
         let ai = session();
-        let (visible, changes) = ai.vet_changes(&ConnectionProfile::default(), "MTU is packet size.");
+        let (visible, changes) =
+            ai.vet_changes(&ConnectionProfile::default(), "MTU is packet size.");
         assert_eq!(visible, "MTU is packet size.");
         assert!(changes.is_empty());
     }
@@ -1144,7 +1279,9 @@ mod tests {
         let id = {
             let mut inner = ai.inner.lock().unwrap();
             let id = inner.take_id();
-            inner.messages.push(ChatMessage::model(id, visible, changes));
+            inner
+                .messages
+                .push(ChatMessage::model(id, visible, changes));
             id
         };
 
@@ -1164,6 +1301,8 @@ mod tests {
         ai.append_user_message("hello").unwrap();
         let id = messages_of(&ai)[0].id;
         assert!(ai.changes_for(&ConnectionProfile::default(), id).is_err());
-        assert!(ai.changes_for(&ConnectionProfile::default(), 9_999).is_err());
+        assert!(ai
+            .changes_for(&ConnectionProfile::default(), 9_999)
+            .is_err());
     }
 }

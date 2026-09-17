@@ -32,7 +32,11 @@ static LOG: OnceLock<Mutex<Inner>> = OnceLock::new();
 
 fn inner() -> &'static Mutex<Inner> {
     LOG.get_or_init(|| {
-        Mutex::new(Inner { ring: VecDeque::with_capacity(MAX_LINES), pending: Vec::new(), file: None })
+        Mutex::new(Inner {
+            ring: VecDeque::with_capacity(MAX_LINES),
+            pending: Vec::new(),
+            file: None,
+        })
     })
 }
 
@@ -63,16 +67,29 @@ impl DiagnosticsLog {
         Self::spawn_flusher();
     }
 
-    pub fn d(tag: &str, msg: &str) { Self::push('D', tag, msg) }
-    pub fn i(tag: &str, msg: &str) { Self::push('I', tag, msg) }
-    pub fn w(tag: &str, msg: &str) { Self::push('W', tag, msg) }
-    pub fn e(tag: &str, msg: &str) { Self::push('E', tag, msg) }
+    pub fn d(tag: &str, msg: &str) {
+        Self::push('D', tag, msg)
+    }
+    pub fn i(tag: &str, msg: &str) {
+        Self::push('I', tag, msg)
+    }
+    pub fn w(tag: &str, msg: &str) {
+        Self::push('W', tag, msg)
+    }
+    pub fn e(tag: &str, msg: &str) {
+        Self::push('E', tag, msg)
+    }
 
     fn push(level: char, tag: &str, msg: &str) {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
         let line = format!("{ts} {level}/{tag}: {msg}");
         let mut g = inner().lock();
-        if g.ring.len() == MAX_LINES { g.ring.pop_front(); }
+        if g.ring.len() == MAX_LINES {
+            g.ring.pop_front();
+        }
         g.ring.push_back(line.clone());
         g.pending.push(line);
     }
@@ -133,17 +150,24 @@ impl DiagnosticsLog {
                 std::thread::sleep(UI_THROTTLE);
                 let (batch, path) = {
                     let mut g = inner().lock();
-                    if g.pending.is_empty() { continue; }
+                    if g.pending.is_empty() {
+                        continue;
+                    }
                     (std::mem::take(&mut g.pending), g.file.clone())
                 };
                 let Some(path) = path else { continue };
 
                 // چرخش فایل با سقف ۵۱۲ KiB.
-                if std::fs::metadata(&path).map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(false) {
+                if std::fs::metadata(&path)
+                    .map(|m| m.len() > MAX_FILE_BYTES)
+                    .unwrap_or(false)
+                {
                     let _ = std::fs::rename(&path, path.with_extension("log.1"));
                 }
                 if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-                    for line in batch { let _ = writeln!(f, "{line}"); }
+                    for line in batch {
+                        let _ = writeln!(f, "{line}");
+                    }
                 }
             })
             .ok();

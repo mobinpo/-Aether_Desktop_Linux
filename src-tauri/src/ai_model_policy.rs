@@ -48,7 +48,11 @@ pub const ALLOWED: [&str; 5] = [
 
 /// پیشوند `models/` که REST API استفاده می‌کند را می‌کند و فاصله‌ها را می‌برد.
 pub fn normalise(raw_id: &str) -> String {
-    raw_id.trim().trim_start_matches("models/").trim().to_string()
+    raw_id
+        .trim()
+        .trim_start_matches("models/")
+        .trim()
+        .to_string()
 }
 
 fn rank(raw_id: &str) -> Option<usize> {
@@ -139,7 +143,14 @@ mod tests {
             model("gemini-3.8-flash"),
         ];
         let ids: Vec<String> = filter(&models).into_iter().map(|m| m.id).collect();
-        assert_eq!(ids, ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]);
+        assert_eq!(
+            ids,
+            [
+                "gemini-3.8-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-flash-lite-latest"
+            ]
+        );
         assert_eq!(pick_default(&models).unwrap(), "gemini-3.8-flash");
     }
 

@@ -297,9 +297,18 @@ bdi { direction: ltr; unicode-bidi: isolate; }
   padding: 3px;
   gap: 3px;
 }
+/* >>> AETHER-APP-PATCH seg-labels-stay-on-one-line
+   `flex: 1` بدونِ مبنا هر شش قطعه را هم‌عرض می‌کرد، بی‌اعتنا به طولِ متن. پس
+   بلندترین برچسب — «Aether → Psiphon» — دو خطی می‌شد و واژهٔ دوم زیرِ فلش
+   می‌افتاد، درحالی‌که کوتاه‌ترها («Tor») نصفِ جایشان خالی بود. با مبنای
+   محتوایی، هر قطعه به‌اندازهٔ متنش شروع می‌کند و فضای اضافه بینشان پخش
+   می‌شود؛ nowrap هم تضمین می‌کند که فلش و واژهٔ بعدش هرگز از هم جدا نشوند.
+   عرضِ واقعیِ ردیف در tests/layout-desktop.mjs در هر دو زبان سنجیده می‌شود. */
 .seg__item {
-  flex: 1;
-  padding: 8px 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  padding: 8px 9px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -308,6 +317,7 @@ bdi { direction: ltr; unicode-bidi: isolate; }
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
 }
+/* <<< AETHER-APP-PATCH seg-labels-stay-on-one-line */
 .seg__item:hover { color: var(--on-dark); }
 .seg__item.is-active { background: var(--aether-blue); color: #fff; }
 

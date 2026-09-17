@@ -20,9 +20,9 @@
 //! نامِ مقصد را هم داخل تونل حل می‌کنند (بدون نشت DNS).
 
 use crate::log::DiagnosticsLog;
+use parking_lot::Mutex;
 use std::process::Command;
 use std::sync::OnceLock;
-use parking_lot::Mutex;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -45,7 +45,6 @@ fn saved_proxy() -> &'static Mutex<Option<SavedProxy>> {
     static CELL: OnceLock<Mutex<Option<SavedProxy>>> = OnceLock::new();
     CELL.get_or_init(|| Mutex::new(None))
 }
-
 
 /// فعال‌سازی پروکسی سیستمی روی پل محلی. `true` یعنی ثبت شد.
 pub fn enable(http_port: u16, socks_port: u16) -> bool {
@@ -70,9 +69,37 @@ pub fn enable(http_port: u16, socks_port: u16) -> bool {
     }
     drop(saved);
     let server = proxy_string(http_port, socks_port);
-    let ok = reg(&["add", KEY, "/v", "ProxyServer", "/t", "REG_SZ", "/d", &server, "/f"])
-        && reg(&["add", KEY, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", BYPASS, "/f"])
-        && reg(&["add", KEY, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "1", "/f"]);
+    let ok = reg(&[
+        "add",
+        KEY,
+        "/v",
+        "ProxyServer",
+        "/t",
+        "REG_SZ",
+        "/d",
+        &server,
+        "/f",
+    ]) && reg(&[
+        "add",
+        KEY,
+        "/v",
+        "ProxyOverride",
+        "/t",
+        "REG_SZ",
+        "/d",
+        BYPASS,
+        "/f",
+    ]) && reg(&[
+        "add",
+        KEY,
+        "/v",
+        "ProxyEnable",
+        "/t",
+        "REG_DWORD",
+        "/d",
+        "1",
+        "/f",
+    ]);
     if !ok {
         // Never leave a half-written proxy configuration behind.
         let _ = disable();
@@ -80,9 +107,15 @@ pub fn enable(http_port: u16, socks_port: u16) -> bool {
     }
     broadcast_change();
     if ok {
-        DiagnosticsLog::i("sysproxy", &format!("System proxy enabled -> {server} (bypass: {BYPASS})"));
+        DiagnosticsLog::i(
+            "sysproxy",
+            &format!("System proxy enabled -> {server} (bypass: {BYPASS})"),
+        );
     } else {
-        DiagnosticsLog::e("sysproxy", "Could not write the system proxy registry values.");
+        DiagnosticsLog::e(
+            "sysproxy",
+            "Could not write the system proxy registry values.",
+        );
     }
     ok
 }
@@ -91,8 +124,14 @@ pub fn enable(http_port: u16, socks_port: u16) -> bool {
 /// disable an unrelated user proxy, PAC, VPN, or enterprise configuration.
 pub fn recover_stale() -> bool {
     let has_backup = load_persistent_backup().is_some();
-    let points_to_aether = reg_read("ProxyServer").map(|v| v.contains("127.0.0.1:10811")).unwrap_or(false);
-    if has_backup || points_to_aether { disable() } else { true }
+    let points_to_aether = reg_read("ProxyServer")
+        .map(|v| v.contains("127.0.0.1:10811"))
+        .unwrap_or(false);
+    if has_backup || points_to_aether {
+        disable()
+    } else {
+        true
+    }
 }
 
 /// غیرفعال‌سازی پروکسی سیستمی — در قطع اتصال، خطا و خروج برنامه صدا زده می‌شود.
@@ -109,20 +148,41 @@ pub fn disable() -> bool {
         None => {
             // Crash recovery for builds that predate the persistent backup:
             // only touch a proxy that unmistakably points at Aether's bridge.
-            let stale = reg_read("ProxyServer").map(|v| v.contains("127.0.0.1:10811")).unwrap_or(false);
+            let stale = reg_read("ProxyServer")
+                .map(|v| v.contains("127.0.0.1:10811"))
+                .unwrap_or(false);
             if stale {
-                reg(&["add", KEY, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"])
-                    && reg_delete("ProxyServer")
+                reg(&[
+                    "add",
+                    KEY,
+                    "/v",
+                    "ProxyEnable",
+                    "/t",
+                    "REG_DWORD",
+                    "/d",
+                    "0",
+                    "/f",
+                ]) && reg_delete("ProxyServer")
                     && reg_delete("ProxyOverride")
-            } else { true }
+            } else {
+                true
+            }
         }
     };
-    if ok && had_snapshot { let _ = reg(&["delete", BACKUP_KEY, "/f"]); }
+    if ok && had_snapshot {
+        let _ = reg(&["delete", BACKUP_KEY, "/f"]);
+    }
     broadcast_change();
     if ok {
-        DiagnosticsLog::i("sysproxy", "System proxy settings restored to their pre-Aether state.");
+        DiagnosticsLog::i(
+            "sysproxy",
+            "System proxy settings restored to their pre-Aether state.",
+        );
     } else {
-        DiagnosticsLog::e("sysproxy", "Could not fully restore the pre-Aether system proxy settings.");
+        DiagnosticsLog::e(
+            "sysproxy",
+            "Could not fully restore the pre-Aether system proxy settings.",
+        );
     }
     ok
 }
@@ -134,11 +194,17 @@ fn proxy_string(http_port: u16, socks_port: u16) -> String {
 }
 
 fn backup_write(name: &str, value: Option<&str>) {
-    if let Some(value) = value { let _ = reg(&["add", BACKUP_KEY, "/v", name, "/t", "REG_SZ", "/d", value, "/f"]); }
+    if let Some(value) = value {
+        let _ = reg(&[
+            "add", BACKUP_KEY, "/v", name, "/t", "REG_SZ", "/d", value, "/f",
+        ]);
+    }
 }
 
 fn load_persistent_backup() -> Option<SavedProxy> {
-    if reg_read_backup("AetherActive").is_none() { return None; }
+    if reg_read_backup("AetherActive").is_none() {
+        return None;
+    }
     Some(SavedProxy {
         server: reg_read_backup("ProxyServer"),
         override_list: reg_read_backup("ProxyOverride"),
@@ -150,8 +216,12 @@ fn load_persistent_backup() -> Option<SavedProxy> {
 fn reg_read_backup(name: &str) -> Option<String> {
     let output = reg_output(&["query", BACKUP_KEY, "/v", name])?;
     output.lines().find_map(|line| {
-        let t=line.trim(); if !t.starts_with(name) { return None; }
-        let mut p=t[name.len()..].split_whitespace(); let kind=p.next()?;
+        let t = line.trim();
+        if !t.starts_with(name) {
+            return None;
+        }
+        let mut p = t[name.len()..].split_whitespace();
+        let kind = p.next()?;
         Some(format!("{}\t{}", kind, p.collect::<Vec<_>>().join(" ")))
     })
 }
@@ -160,7 +230,9 @@ fn reg_read(name: &str) -> Option<String> {
     let output = reg_output(&["query", KEY, "/v", name])?;
     output.lines().find_map(|line| {
         let t = line.trim();
-        if !t.starts_with(name) { return None; }
+        if !t.starts_with(name) {
+            return None;
+        }
         let mut parts = t[name.len()..].split_whitespace();
         let kind = parts.next()?;
         let value = parts.collect::<Vec<_>>().join(" ");
@@ -180,7 +252,9 @@ fn restore_value(name: &str, encoded: Option<String>) -> bool {
     }
 }
 
-fn reg_missing_ok() -> bool { true }
+fn reg_missing_ok() -> bool {
+    true
+}
 
 fn reg_delete(name: &str) -> bool {
     reg(&["delete", KEY, "/v", name, "/f"]) || reg_missing_ok()
@@ -192,7 +266,9 @@ fn reg_output(args: &[&str]) -> Option<String> {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let out = cmd.output().ok()?;
-    if !out.status.success() { return None; }
+    if !out.status.success() {
+        return None;
+    }
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -221,8 +297,18 @@ fn broadcast_change() {
         ) -> i32;
     }
     unsafe {
-        InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_SETTINGS_CHANGED, std::ptr::null_mut(), 0);
-        InternetSetOptionW(std::ptr::null_mut(), INTERNET_OPTION_REFRESH, std::ptr::null_mut(), 0);
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_SETTINGS_CHANGED,
+            std::ptr::null_mut(),
+            0,
+        );
+        InternetSetOptionW(
+            std::ptr::null_mut(),
+            INTERNET_OPTION_REFRESH,
+            std::ptr::null_mut(),
+            0,
+        );
     }
 }
 

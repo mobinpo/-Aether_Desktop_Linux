@@ -53,8 +53,22 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # یک push که فقط متن عوض می‌کند، نباید دو جابِ ویندوزی را روشن کند.
+    # دقیقهٔ ویندوز در مخزنِ خصوصی دو برابر حساب می‌شود، پس هر اجرای کامل
+    # حدودِ ۸۰ دقیقه از سهمیهٔ ۲۰۰۰ دقیقه‌ای ماه را می‌برد — یعنی ~۲۵ اجرا
+    # در ماه، و همین سهمیه بود که اجرای ۹۵۱۲۸۶۰۶۸۲۰ را نگه داشت.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
     inputs:
       core_target:
@@ -79,6 +93,9 @@ env:
   AETHER_REPO: CluvexStudio/Aether
   # همان نسخه‌ای که مخزن اندروید به‌شکل psiphontunnel-2.0.39.aar حمل می‌کند.
   PSIPHON_VERSION: 2.0.39
+  # همان تگی که `scripts/build-natives.sh` در مخزن اندروید پین می‌کند
+  # (LYREBIRD_REF)، تا ترابرِ هر دو سکو یکی باشد.
+  LYREBIRD_VERSION: lyrebird-0.6.1
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -90,6 +107,8 @@ jobs:
   preflight:
     name: Preflight - repository sanity check
     runs-on: ubuntu-latest
+    # سقفِ زمان: یک جابِ گیرکرده نباید سهمیهٔ ماه را ببلعد.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Every file the pipeline needs must exist
@@ -154,6 +173,7 @@ jobs:
             "scripts/sync-core.sh"
             "scripts/build-engine.ps1"
             "scripts/build-psiphon.ps1"
+            "scripts/build-pt.ps1"
             "assets/psiphon/server_entries.txt"
             "src-tauri/src/psiphon.rs"
             "src-tauri/src/psiphon_health.rs"
@@ -168,7 +188,7 @@ jobs:
             ".github/release-notes.md"
             "README.md"
             "README.fa.md"
-            "UPGRADE-1.2.4.md"
+            "UPGRADE-1.2.5.md"
             "SECURITY-AUDIT.md"
             "LICENSE"
           )
@@ -194,6 +214,89 @@ jobs:
             python3 -c "import json,sys; json.load(open('$f'))" || { echo "::error file=$f::JSON معتبر نیست"; exit 1; }
           done
           echo "✓ همهٔ فایل‌های JSON معتبرند."
+
+      # >>> AETHER-APP-FIX workflow-order-guard
+      # ران 94978476672: گام تست برای fail-fast جلو کشیده شد و هر دو جابِ
+      # بیلد با «resource path `..\dist-engine\server_entries.txt` doesn't exist»
+      # مردند. این گام همان تناقض را در چند ثانیه و پیش از روشن شدنِ
+      # رانرهای ویندوز می‌گیرد.
+      - name: Workflow step order must stay consistent
+        run: |
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet --disable-pip-version-check pyyaml
+          python3 scripts/check-workflow-order.py
+      # <<< AETHER-APP-FIX workflow-order-guard
+
+      # >>> AETHER-APP-PATCH embedded-bridge-lines-usable
+      # Kein arti-Build nötig: der Wächter liest bridges.rs als Text. Läuft
+      # deshalb hier vorne mit und nicht erst im Windows-Build.
+      - name: Built-in bridge lines must stay readable by arti
+        run: python3 scripts/check-bridge-lines.py
+
+      - name: Tor bootstrap stall watchdog must stay strict
+        run: python3 scripts/check-tor-watchdog.py
+
+      - name: An abandoned tor rung must go all the way down
+        run: python3 scripts/check-tor-runtime.py
+
+      # Tor allein muss über das offizielle tor.exe laufen, nicht über arti:
+      # der arti-Pfad blieb im Feldlog bei 15 %. Der Wächter liest nur Text,
+      # braucht also keinen Build und läuft hier vorne mit.
+      - name: Tor alone must run the official tor binary
+        run: python3 scripts/check-tor-native.py
+
+      # Run 95081207888: x64 lief durch, x86 starb am Publish-Gate, weil das
+      # Staging x86 übersprang. Beide müssen dieselbe Architekturliste kennen.
+      - name: Every built architecture must get the official tor bundle
+        run: python3 scripts/check-tor-staging.py
+
+      # Feldlog 2026-09-16 20:04: erster Versuch nach 200 ms tot, zweiter nach
+      # 100 % abgelehnt. Beide Ursachen waren Urteile im eigenen Code.
+      - name: Session verdicts from the 2026-09-16 log must stay fixed
+        run: python3 scripts/check-session-verdicts.py
+
+      - name: That guard must still catch each of the eight regressions
+        run: bash scripts/check-session-verdicts-negative.sh
+
+      - name: The native tor guard must still catch a broken wiring
+        run: bash scripts/check-tor-native-negative.sh
+      # <<< AETHER-APP-PATCH embedded-bridge-lines-usable
+
+      # >>> AETHER-APP-PATCH connection-card-and-tor-chains
+      # Feldlogs 2026-09-17: loge3 (vier Laufzeit-Paniken in den Tor-Ketten),
+      # loge4 (Kette wartet auf einen Port, den erst Stufe 2 öffnet), loge1
+      # (34 s bis Connected, davon 10,7 s allein der Leck-Test) und die
+      # Screenshots der Verbindungskarte (`SMART`, Globus, doppelter Endpoint,
+      # 397 ms als `Poor`).
+      - name: The connection card and the tor chains must stay fixed
+        run: python3 scripts/check-connection-card.py
+
+      - name: That guard must still catch each of the sixteen regressions
+        run: bash scripts/check-connection-card-negative.sh
+      # <<< AETHER-APP-PATCH connection-card-and-tor-chains
+
+      # >>> AETHER-APP-PATCH every-rs-file-must-parse
+      # 2026-09-17: beide Build-Jobs fielen beim ersten cargo-Schritt, weil ein
+      # Textpatch Doc-Kommentar und Funktionssignatur in eine Zeile geklebt
+      # hatte (`tor_native.rs`, unexpected closing delimiter). Der Preflight war
+      # grün — er arbeitet mit grep. Dieser Wächter läuft VOR cargo und braucht
+      # keine Toolchain, kostet also nichts und spart einen ganzen Build.
+      - name: Every .rs file must still parse
+        run: python3 scripts/check-rust-parses.py
+
+      - name: That guard must catch a glued line and not cry over sound code
+        run: bash scripts/check-rust-parses-negative.sh
+
+      # هر پچی که در هسته گذاشته‌ایم باید از یک ارتقای هسته جان سالم ببرد.
+      # sync-core.sh درختِ قدیم را حذف و درختِ آپ‌استریم را جایش می‌گذارد؛ هر
+      # فایلی که در PATCHED_FILES نباشد بی‌صدا عوض می‌شود — بی خطا، با بیلدِ
+      # سبز. در ۱۷ سپتامبر ۲۰۲۶ سه فایلِ تور (۴۹۰ سطر) و build.rs که مهرِ
+      # AETHER-BUILD-STAMP را می‌زند بیرونِ فهرست بودند.
+      - name: No core patch may vanish in the next core sync
+        run: python3 scripts/check-core-patches.py
+
+      - name: That guard must catch each of the five silent losses
+        run: bash scripts/check-core-patches-negative.sh
+      # <<< AETHER-APP-PATCH every-rs-file-must-parse
 
       - name: Windows manifest and installer launch checks
         shell: bash
@@ -249,6 +352,8 @@ jobs:
     name: Sync Aether core
     needs: preflight
     runs-on: ubuntu-latest
+    # سقفِ زمان: یک جابِ گیرکرده نباید سهمیهٔ ماه را ببلعد.
+    timeout-minutes: 20
     outputs:
       core_version: ${{ steps.sync.outputs.core_version }}
     steps:
@@ -268,6 +373,65 @@ jobs:
           CORE_SYNC: ${{ github.event.inputs.core_sync || 'on' }}
         run: bash scripts/sync-core.sh
 
+      # هیچ ادغامی نباید پچ‌های موتور را بی‌صدا بخورد.
+      #
+      # `sync-core.sh` یک ادغامِ سه‌طرفه است. اگر بالادست همان ناحیه را بازنویسی
+      # کند، ممکن است پچِ ما در نتیجه نباشد — و این پچ‌ها **مسیرِ داده** هستند،
+      # نه آراستگی. اندروید همین را با نشانگرها می‌پاید؛ این‌جا هم نشانگرها
+      # شمرده می‌شوند و هم دو رفتاری که بی‌نشانگر و درجا در کد نشسته‌اند.
+      - name: Engine patches must survive the core sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          core=native/aether/aether
+          fail=0
+
+          # ۱) ناحیه‌های نام‌دار — هر کدام باید باز و بسته باشد.
+          for region in build-provenance netstack-congestion-control \
+                        udp-socket-buffer-split packet-queue-depth scan-cidrs \
+                        tor-attempt-isolation bridgedb-budget \
+                        keep-the-working-cached-endpoint \
+                        no-retry-on-a-peer-that-just-failed \
+                        core-test-target-compiles; do
+            open=$(grep -rc ">>> AETHER-APP-PATCH $region" "$core" --include='*.rs' --include='*.toml' | awk -F: '{s+=$2} END{print s+0}')
+            close=$(grep -rc "<<< AETHER-APP-PATCH $region" "$core" --include='*.rs' --include='*.toml' | awk -F: '{s+=$2} END{print s+0}')
+            if [ "$open" -lt 1 ] || [ "$open" -ne "$close" ]; then
+              echo "::error::App engine patch '$region' did not survive the core sync (open=$open close=$close). The three-way merge dropped or truncated it. Rebase it onto the new core by hand before this build goes any further - see native/aether/.upstream-baseline/."
+              fail=1
+            else
+              echo "==> patch region OK: $region ($open block(s))"
+            fi
+          done
+
+          # ۲) رفتارهایی که نشانگر ندارند و درجا در کد هستند. اسمِ ناحیه معیارِ
+          #    معتبری نیست — این را در ۱.۲.۵ به‌سختی یاد گرفتیم: `try_send`+
+          #    `writable` در دسکتاپ **بود** ولی چون داخل نشانگر نبود، در
+          #    شمارشِ اسم‌ها «غایب» به نظر می‌رسید.
+          if ! grep -q "set_congestion_control(tcp::CongestionControl::Cubic)" "$core/src/netstack.rs"; then
+            echo "::error::netstack.rs no longer selects CUBIC explicitly. Without it smoltcp resolves AnyController to NoControl - a TCP sender with no congestion window at all. This is the 1.2.8-r4 root cause and it must never come back."
+            fail=1
+          else
+            echo "==> behaviour OK: netstack selects CUBIC explicitly"
+          fi
+          if ! grep -q "try_send" "$core/src/wireguard.rs" || ! grep -q "writable()" "$core/src/wireguard.rs"; then
+            echo "::error::the WireGuard writer no longer waits on a full uplink (try_send + writable). A plain send() on a datagram socket returns immediately, which cuts the only path backpressure has into the congestion controller: CUBIC is then told the link has infinite capacity while packets pile up in the kernel queue."
+            fail=1
+          else
+            echo "==> behaviour OK: the WireGuard writer waits on a full uplink"
+          fi
+
+          # ۳) شکافِ شناخته‌شده نسبت به اندروید ۱.۳.۰ — خطا نیست، ولی باید
+          #    دیده شود. سه پچِ نتستکِ اندروید (device backpressure، drain
+          #    liveness، uplink admission) در این هسته نیستند و پورت‌شان به یک
+          #    آزمونِ واقعیِ throughput روی ویندوز نیاز دارد.
+          for behaviour in MAX_DEVICE_TX admission liveness; do
+            if ! grep -q "$behaviour" "$core/src/netstack.rs"; then
+              echo "::notice::known gap vs the Android 1.3.0 engine: '$behaviour' is not in this core. The uplink backpressure chain reaches the WireGuard writer but not the device queue. Tracked for a later release - it is ~970 lines across two smoltcp generations and needs a real throughput test."
+            fi
+          done
+
+          [ "$fail" -eq 0 ] || exit 1
+
       - name: Upload synced core
         uses: actions/upload-artifact@v4
         with:
@@ -284,6 +448,8 @@ jobs:
     name: Build ${{ matrix.arch }}
     needs: sync-core
     runs-on: windows-latest
+    # سقفِ زمان: یک جابِ گیرکرده نباید سهمیهٔ ماه را ببلعد.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -349,9 +515,60 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --all
 
+      # >>> AETHER-APP-FIX fail-fast-before-the-expensive-builds
+      # این گام تا امروز بعد از بیلدِ موتور و Psiphon و lyrebird اجرا می‌شد.
+      # نتیجه‌اش در اجرای ۲۰۲۶-۰۹-۱۶ این بود: بیلد ۰۷:۱۱ شروع شد و یک تستِ
+      # واحدِ شکسته ۰۷:۴۵ گزارش شد — سی‌وچهار دقیقه برای خطایی که در سه دقیقه
+      # معلوم می‌شد. پس جایش همین‌جاست، پیش از هر کارِ گران.
+      #
+      # اما `cargo test` بی‌قید و شرط اینجا اجرا نمی‌شود، و دلیلش همان چیزی
+      # است که اولین تلاشِ این جابه‌جایی را در اجرای 94978476672 شکست:
+      #
+      #   resource path `..\dist-engine\server_entries.txt` doesn't exist
+      #
+      # هر دستور cargo در این کریت `build.rs` را اجرا می‌کند، و
+      # `tauri_build::build()` وجودِ تک‌تکِ مسیرهای `bundle.resources` را
+      # بررسی می‌کند. آن مسیرها زیر dist-engine هستند و تازه گام‌های موتور،
+      # Wintun و Psiphon می‌سازندشان — یعنی خودِ گام‌های گرانی که می‌خواهیم
+      # بعد از تست‌ها بیایند. کامنتِ قبلیِ همین فایل این را نوشته بود و من
+      # ندیدم.
+      #
+      # راهِ حل بدون ساختنِ فایلِ قلابی: به build.rs یک پچِ پیکربندی می‌دهیم
+      # که فهرست resource را برای همین یک گام خالی کند. تست‌ها هیچ‌یک از آن
+      # فایل‌ها را لازم ندارند (منابع فقط زمانِ bundle استفاده می‌شوند) و
+      # گامِ واقعیِ `tauri build` پایین‌تر بدون این پچ اجرا می‌شود، پس اعتبارِ
+      # منابع در نسخهٔ نهایی همان‌طور که بود بررسی می‌شود.
+      #
+      # نکته: آرایهٔ خالی لازم است، نه شیءِ خالی. ادغامِ پیکربندی برای شیء
+      # کلید‌به‌کلید است و `{}` هیچ‌چیز را حذف نمی‌کند؛ آرایه کلاً جایگزین
+      # می‌شود.
+      - name: Unit tests (engine contract parity with Android)
+        working-directory: src-tauri
+        env:
+          TAURI_CONFIG: '{"bundle":{"resources":[]}}'
+        run: cargo test --target ${{ matrix.rust_target }}
+      # <<< AETHER-APP-FIX fail-fast-before-the-expensive-builds
+
       # ---- بیلد هستهٔ aether ------------------------------------------
+      - name: Read the app patch level
+        id: patch
+        shell: bash
+        run: |
+          level=$(tr -d '\r\n' < PATCHLEVEL)
+          if [ -z "$level" ]; then
+            echo "::error::PATCHLEVEL at the repository root is empty. It is what stamps the engine and what every field log is identified by."
+            exit 1
+          fi
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "==> app patch level: $level"
+
       - name: Build engine (aether.exe)
         shell: pwsh
+        env:
+          # هستهٔ گیت‌شده خودش هم `PATCHLEVEL` را از ریشه پیدا می‌کند، ولی در CI
+          # مقدار را صریح می‌دهیم: بیلد از یک کپیِ دانلودشدهٔ هسته انجام می‌شود و
+          # عمقِ پوشه‌ها ثابت نیست.
+          APP_PATCHLEVEL: ${{ steps.patch.outputs.level }}
         run: |
           $ErrorActionPreference = 'Continue'
           ./scripts/build-engine.ps1 -Target '${{ matrix.rust_target }}'
@@ -361,6 +578,59 @@ jobs:
             $ErrorActionPreference = 'Stop'
             ./scripts/build-engine.ps1 -Target '${{ matrix.rust_target }}'
           }
+
+      # موتور باید مهرِ همین مخزن را داشته باشد.
+      #
+      # این گیت مخصوصاً مسیرِ **بازگشت** بالا را می‌پوشاند: اگر بیلد با هستهٔ
+      # تازه بشکند، CI به هستهٔ قبلی برمی‌گردد — هسته‌ای که ممکن است `build.rs`
+      # ما را نداشته باشد. آن‌وقت باینری `unstamped` می‌شود و هیچ لاگِ میدانی‌ای
+      # دیگر نمی‌تواند بگوید کدام بیلد را نشان می‌دهد. همان چیزی که روی اندروید
+      # یک دورِ کاملِ تحلیل را سوزاند.
+      - name: Engine must carry the app patch stamp
+        shell: pwsh
+        run: |
+          # همان چیدمانِ ثابت‌فرض‌نشده که build-engine.ps1 استفاده می‌کند: کریتِ
+          # هسته می‌تواند زیر native/aether/aether باشد (چیدمانِ واقعیِ مخزنِ
+          # بالادست Aether) یا مستقیماً زیر native/aether. مسیر ثابتِ قبلی
+          # (native/aether/target/...) فقط حالتِ دوم را می‌پوشاند و همینِ
+          # ناهماهنگی با build-engine.ps1 بود که این گیت را همیشه با
+          # «aether.exe was not found» می‌شکست، حتی وقتی بیلد واقعاً موفق شده
+          # بود (dist-engine/aether.exe درست ساخته می‌شد).
+          $candidates = @(
+            "native/aether/aether/target/${{ matrix.rust_target }}",
+            "native/aether/target/${{ matrix.rust_target }}"
+          )
+          $exe = $null
+          foreach ($c in $candidates) {
+            if (Test-Path $c) {
+              $exe = Get-ChildItem -Recurse -Filter aether.exe -Path $c | Select-Object -First 1
+              if ($exe) { break }
+            }
+          }
+          if (-not $exe) {
+            # آخرین تلاش: هر جای زیر native/aether که واقعاً aether.exe ساخته شده باشد.
+            $exe = Get-ChildItem -Recurse -Filter aether.exe -Path "native/aether" -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+          }
+          if (-not $exe) {
+            Write-Host "::error::aether.exe was not found after the engine build."
+            exit 1
+          }
+          # ریشهٔ خطای این نسخه: رانرهای گیت‌هاب اکشنز حالا pwsh 7 (Core) هستند
+          # و `Select-String -Encoding Byte` دیگر پشتیبانی نمی‌شود
+          # ("'Byte' is not a supported encoding name") - این هیچ ربطی به
+          # برنامه ندارد، فقط رانتایمِ CI عوض شده. جست‌وجو حالا با خواندنِ
+          # مستقیمِ بایت‌ها (Latin-1، بدون از دست دادن یا جایگزینیِ هیچ بایتی)
+          # انجام می‌شود - جزئیات در scripts/lib-binary-text.ps1.
+          . ./scripts/lib-binary-text.ps1
+          $want = "AETHER-BUILD-STAMP:${{ steps.patch.outputs.level }}"
+          if (-not (Test-BinaryContainsLiteral -Path $exe.FullName -Literal $want)) {
+            Write-Host "::error::$($exe.Name) does not carry '$want'. Either the core that was built has no build.rs (the rollback path took an older core) or APP_PATCHLEVEL never reached it. A build nobody can identify must not ship: this is exactly how a stale engine gets field-tested by accident."
+            $found = Find-BinaryMatches -Path $exe.FullName -Pattern 'AETHER-BUILD-STAMP:[0-9A-Za-z.\-]*'
+            if ($found) { Write-Host "  stamps actually present: $($found -join ', ')" } else { Write-Host "  (no stamp at all)" }
+            exit 1
+          }
+          Write-Host "==> engine stamp OK: $want"
 
       - name: Fetch Wintun driver
         shell: pwsh
@@ -376,18 +646,49 @@ jobs:
           go-version: '1.23'
           cache: false
 
+      # `cache: false` بالا سرِ جای خود می‌ماند (به go.sum در مخزن تکیه می‌کرد
+      # که وجود ندارد)؛ کش را مستقیم روی دو پوشهٔ خودِ Go می‌گذاریم. کلید به
+      # نسخه‌های پین‌شده بسته است، پس ارتقای نسخه خودش کش را باطل می‌کند و
+      # هیچ‌وقت باینریِ کهنه ساخته نمی‌شود.
+      - name: Cache the Go module + build cache (psiphon, lyrebird)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\go\pkg\mod
+            ~\AppData\Local\go-build
+          key: go1.23-${{ matrix.arch }}-psiphon${{ env.PSIPHON_VERSION }}-lyrebird${{ env.LYREBIRD_VERSION }}
+          restore-keys: |
+            go1.23-${{ matrix.arch }}-
+
       - name: Build Psiphon stage (psiphon-tunnel-core.exe)
         shell: pwsh
         run: ./scripts/build-psiphon.ps1 -Arch '${{ matrix.arch }}' -Version '${{ env.PSIPHON_VERSION }}'
 
-      # تست‌ها عمداً بعد از ساخت موتور اجرا می‌شوند؛ چون tauri.conf.json
-      # فایل‌های dist-engine را به‌عنوان resource لازم دارد.
-      # Fail fast here. The previous continue-on-error hid linker failures and
-      # wasted another full Tauri build before reporting the same problem.
-      - name: Unit tests (engine contract parity with Android)
-        working-directory: src-tauri
-        run: cargo test --target ${{ matrix.rust_target }}
+      # ---- ترابرِ افزودنیِ تور: lyrebird ---------------------------------
+      # بر خلاف استیج ۲ سایفون، این مرحله حق شکستن بیلد را ندارد و
+      # `continue-on-error` دارد — دقیقاً مثل مرحلهٔ متناظر در مخزن اندروید.
+      # دلیلش: تور بدون هیچ ترابری وصل می‌شود (مستقیم، و در حالتِ
+      # `Aether → Tor` از داخل تونل)، پس یک تغییرِ بالادست در Go نباید
+      # نصب‌کننده‌ای را که هر چیز دیگرش سالم است زمین بگذارد. خودِ اسکریپت هم
+      # با کد صفر و هشدارِ صریح بیرون می‌آید؛ `continue-on-error` فقط برای
+      # آن چیزی است که اسکریپت پیش‌بینی نکرده.
+      # تورِ رسمی: همان بسته‌ای که مرورگر تور از آن ساخته می‌شود، با دایجستِ
+      # منتشرشدهٔ خودِ Tor. مسیرِ arti در ایران روی ۱۵٪ می‌ماند (لاگِ
+      # ۱۶ سپتامبر ۲۰۲۶)؛ توضیحِ کامل در سرِ scripts/stage-tor.ps1.
+      - name: Stage the official Tor binaries
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/stage-tor.ps1 -Arch '${{ matrix.arch }}'
 
+      - name: Build pluggable transport (lyrebird, for Tor bridges)
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/build-pt.ps1 -Arch '${{ matrix.arch }}' -Version '${{ env.LYREBIRD_VERSION }}'
+
+      # گامِ تست‌ها اینجا بود («عمداً بعد از ساخت موتور، چون tauri.conf.json
+      # فایل‌های dist-engine را به‌عنوان resource لازم دارد»). حالا بالاتر و
+      # پیش از بیلدهای گران اجرا می‌شود، با پچِ خالی‌کردنِ resources — توضیح
+      # کامل در بلوکِ fail-fast-before-the-expensive-builds.
       # ---- بیلد اپ -------------------------------------------------------
       # پرچم درست رد کردن بسته‌بندی داخلی، `--no-bundle` است
       # (مقدار قدیمی `--bundles none` در CLI جدید حذف شده).
@@ -411,6 +712,74 @@ jobs:
       - name: Stage payload
         shell: pwsh
         run: ./scripts/stage-payload.ps1 -Target '${{ matrix.rust_target }}' -Arch '${{ matrix.arch }}'
+
+      # ---- گیتِ ترابر ---------------------------------------------------
+      # مرحلهٔ ساختِ lyrebird بالاتر `continue-on-error` دارد و همان‌جا هم
+      # می‌ماند: یک تغییرِ بالادست در Go نباید نصب‌کننده‌ای را که هر چیز دیگرش
+      # سالم است زمین بگذارد. ولی نیمهٔ دومش نبود — که چنین بیلدی **منتشر**
+      # هم نشود. همین شکاف بود که به کاربر رسید: نصبِ منتشرشده پوشهٔ
+      # `engine/pt` را داشت و داخلش هیچ ترابری نبود، و تور روی ۱۵٪ می‌ماند
+      # بی آن‌که برنامه بتواند بگوید چرا.
+      #
+      # پس: در هر بیلدی که منتشر می‌شود (هر چیزی جز PR) نبودِ ترابر خطاست.
+      # PRها همان‌طور بی ترابر رد می‌شوند، چون چیزی منتشر نمی‌کنند.
+      - name: A published build must carry the pluggable transport
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $pt = "dist/payload-${{ matrix.arch }}/engine/pt/lyrebird.exe"
+          if (-not (Test-Path $pt)) {
+            Write-Host "::error::No pluggable transport in the payload ($pt). The lyrebird step above failed and this build must not be published: Tor bridges would be dead in the installer, and on a filtered network that is exactly the path users need. Check the 'Build pluggable transport' step's log."
+            exit 1
+          }
+          $size = (Get-Item $pt).Length
+          if ($size -lt 1MB) {
+            Write-Host "::error::$pt is only $size bytes - that is not a linked lyrebird binary."
+            exit 1
+          }
+          Write-Host "==> pluggable transport present: $pt ($([math]::Round($size/1MB,1)) MB)"
+
+      # همان بررسی، این بار داخلِ payloadِ آماده — عیناً کاری که اندروید داخلِ
+      # APK بسته‌شده می‌کند. یک موتورِ کهنه نباید منتشر شود.
+      # همان منطقِ گیتِ ترابر: مرحلهٔ تدارکِ تور `continue-on-error` دارد تا یک
+      # قطعیِ dist.torproject.org یک PR را زمین نزند — ولی بیلدی که منتشر
+      # می‌شود باید تور را داشته باشد، وگرنه حالتِ «تور تنها» در نصبِ منتشرشده
+      # هیچ باینریِ توری ندارد.
+      - name: A published build must carry the official tor binary
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $tor = "dist/payload-${{ matrix.arch }}/engine/tor/tor.exe"
+          if (-not (Test-Path $tor)) {
+            Write-Host "::error::No tor binary in the payload ($tor). The 'Stage the official Tor binaries' step above failed and this build must not be published: the Tor path would have nothing to run. Check that step's log."
+            exit 1
+          }
+          foreach ($needed in @('lyrebird.exe','pt_config.json','geoip','geoip6')) {
+            $path = "dist/payload-${{ matrix.arch }}/engine/tor/$needed"
+            if (-not (Test-Path $path)) {
+              Write-Host "::error::$path is missing; tor cannot start without it."
+              exit 1
+            }
+          }
+          Write-Host "==> official tor present: $tor"
+
+      - name: A published payload must carry the stamped engine
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $exe = "dist/payload-${{ matrix.arch }}/engine/aether.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Host "::error::No engine in the payload ($exe)."
+            exit 1
+          }
+          # همان توضیح گیتِ بالاتر: pwsh 7 دیگر `-Encoding Byte` را نمی‌پذیرد.
+          . ./scripts/lib-binary-text.ps1
+          $want = "AETHER-BUILD-STAMP:${{ steps.patch.outputs.level }}"
+          if (-not (Test-BinaryContainsLiteral -Path $exe -Literal $want)) {
+            Write-Host "::error::the staged payload ships an engine that is NOT patch level ${{ steps.patch.outputs.level }}. Publishing it would put a binary in users' hands that no log can identify."
+            exit 1
+          }
+          Write-Host "==> payload engine stamp OK: $want"
 
       - name: Build portable ZIP
         shell: pwsh
@@ -456,7 +825,9 @@ jobs:
       - name: Smoke test the installer (silent install + uninstall)
         timeout-minutes: 10
         shell: pwsh
-        run: ./scripts/smoke-test.ps1 -Arch '${{ matrix.arch }}' -Version '${{ steps.ver.outputs.version }}'
+        # همان شرطی که دروازهٔ «باید tor داشته باشد» دارد: بیلدی که منتشر
+        # می‌شود، باید تور را در درختِ *نصب‌شده* هم داشته باشد — نه فقط در پی‌لود.
+        run: ./scripts/smoke-test.ps1 -Arch '${{ matrix.arch }}' -Version '${{ steps.ver.outputs.version }}' ${{ github.event_name != 'pull_request' && '-RequireTor' || '' }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -466,6 +837,14 @@ jobs:
             dist/Aether-Setup-*.exe
             dist/Aether-Portable-*.zip
           if-no-files-found: error
+          # پیش‌فرضِ GitHub ۹۰ روز است. هر اجرا چهار فایل می‌گذارد (دو
+          # نصب‌کننده + دو زیپِ پرتابل) و سهمیهٔ فضای پلنِ Free فقط ۵۰۰
+          # مگابایت است که با Packages هم شریک است. یعنی چند اجرا بعد،
+          # فضا پر می‌شود و حساب به یک سنجهٔ پولی برمی‌خورد — و با سقفِ
+          # خرجِ صفر، جابِ بعدی که می‌خواهد runner بگیرد اجرا نمی‌شود.
+          # هفت روز برای برداشتنِ فایل کافی است؛ نسخهٔ ماندگار در Release
+          # منتشر می‌شود و فضای Actions را نمی‌خورد.
+          retention-days: 7
 
   # ---------------------------------------------------------------------------
   # 3) انتشار خودکار در GitHub Releases
@@ -493,6 +872,8 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # سقفِ زمان: یک جابِ گیرکرده نباید سهمیهٔ ماه را ببلعد.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -588,5 +969,16 @@ jobs:
             echo "::warning::تلاش $attempt برای انتشار ناموفق بود؛ ۵ ثانیه صبر و تلاش دوباره…"
             sleep 5
           done
-          echo "::error::انتشار ریلیز پس از ۳ تلاش ناموفق ماند."
+          # پس از سه تلاش، به‌جای یک «ناموفق ماند»ِ بی‌محتوا، هرچه برای تشخیص
+          # لازم است چاپ می‌شود: کدام فایل‌ها با چه اندازه، و پاسخِ خودِ گیت‌هاب.
+          echo "::group::چه چیزی را می‌خواستیم منتشر کنیم"
+          ls -la dist || true
+          for a in "${assets[@]}"; do
+            if [ -e "$a" ]; then echo "  ✓ $a ($(stat -c%s "$a") بایت)"; else echo "  ✗ $a وجود ندارد"; fi
+          done
+          echo "tag=$TAG  sha=$GITHUB_SHA  repo=$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" || echo "(چنین ریلیزی وجود ندارد)"
+          gh api "repos/$GITHUB_REPOSITORY" --jq '.permissions' || true
+          echo "::endgroup::"
+          echo "::error::انتشار ریلیز پس از ۳ تلاش ناموفق ماند — جزئیات در گروهِ بالا."
           exit 1

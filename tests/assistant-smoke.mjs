@@ -150,6 +150,28 @@ const NEW_KEYS = [
 const untranslated = NEW_KEYS.filter((k) => t(k) === k)
 check(untranslated.length === 0, 'هر رشتهٔ تازه ترجمهٔ فارسی دارد' + (untranslated.length ? ` — ${untranslated.join(', ')}` : ''))
 
+// ۱.۲.۵ — پیام‌های شکستِ تور از Rust می‌آیند (`snapshot.detail`) و در home.js
+// از `t()` می‌گذرند. سنجهٔ مهم، همان پیامِ دارای درصد است: جمله‌ای که یک عدد
+// داخلش است هیچ‌وقت در جدولی که به متنِ دقیق کلید می‌زند پیدا نمی‌شود، پس تا
+// پیش از ۱.۲.۵ درست همان جمله‌ای انگلیسی می‌ماند که کاربر در لحظهٔ خطا می‌خواند.
+const TOR_FAILURES = [
+  'The tunnel started but the self-test failed.',
+  'The tunnel is up, but Tor never reported any progress from inside it. Try Tor on its own, which lets Tor pick its own way to the network.',
+  'The engine started but Tor never reported any progress towards the Tor network, and no pluggable transport is installed. Use the Aether \u2192 Tor mode, which builds Tor inside the tunnel.',
+]
+const torUntranslated = TOR_FAILURES.filter((k) => t(k) === k)
+check(torUntranslated.length === 0,
+  'پیام‌های شکستِ تور ترجمه دارند' + (torUntranslated.length ? ` — ${torUntranslated.length} مانده` : ''))
+
+const withPercent = 'Tor stopped at 15% and could not reach the Tor network. No pluggable transport is installed, so only plain bridges can be tried \u2014 and a network that filters Tor usually blocks those too. Use the Aether \u2192 Tor mode: Tor is then dialled through the tunnel, where the operator cannot see or block it.'
+const translated = t(withPercent)
+check(translated !== withPercent && translated.includes('15'),
+  `پیامِ دارای درصد هم ترجمه شد و عدد سرِ جایش ماند (${translated.slice(0, 24)}…)`)
+
+// و عددِ دیگری همان ترجمه را می‌گیرد — یعنی یک الگو، نه یک ورودیِ دستی برای ۱۵٪.
+const other = t(withPercent.replace('15%', '80%'))
+check(other !== withPercent && other.includes('80'), 'همان الگو برای هر درصدی کار می‌کند')
+
 // جداسازهای یونیکد باید جای <bdi> نشسته باشند، آن هم جفت‌به‌جفت.
 const isolated = t('Add an app by its executable name, for example <bdi>chrome.exe</bdi>.')
 const opens = [...isolated].filter((c) => c === '\u2068').length

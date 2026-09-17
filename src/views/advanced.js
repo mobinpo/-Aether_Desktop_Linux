@@ -16,10 +16,56 @@ import { flagHtml } from '../flags.js'
 // «Aether → Psiphon» خروجی را با یک IP هاستینگ عادی عوض می‌کند و هاپ اول را
 // روی ترابرد مبهم‌سازی‌شدهٔ اِتِر نگه می‌دارد. حالت تک‌هاپیِ Psiphon عمداً وجود
 // ندارد: نمی‌توانست هاپ اول خودش را رد کند.
+// v13 (۱.۲.۵ / هستهٔ 2.0.0) — چهار حالت تور، عیناً `TransportBackend.entries`
+// موبایل و به همان ترتیب. هر کدام کاری می‌کند که بقیه نمی‌کنند، پس هیچ‌یک
+// «همان قبلی با یک گزینهٔ بیشتر» نیست؛ توضیحِ هر کدام در BACKEND_HELP است.
 const BACKENDS = [
   ['AETHER', 'Aether'],
   ['AETHER_PSIPHON', 'Aether \u2192 Psiphon'],
+  ['TOR', 'Tor'],
+  ['AETHER_TOR', 'Aether \u2192 Tor'],
+  ['TOR_PSIPHON', 'Tor \u2192 Psiphon'],
+  ['TOR_AETHER', 'Tor \u2192 Aether'],
 ]
+
+// توضیحِ زیرِ انتخابگر، برای هر بک‌اند جدا — پورت از `backendHelp` موبایل.
+// تا ۱.۲.۴ اینجا یک جملهٔ ثابت بود که فقط دربارهٔ Psiphon حرف می‌زد؛ با شش
+// بک‌اند، آن یک جمله برای چهارتایشان حرفِ نادرست می‌شد.
+const BACKEND_HELP = {
+  // این دو از `backend_help_aether` و `backend_help_chained` موبایل می‌آیند.
+  // تا ۱.۲.۴ یک جملهٔ واحد برای هر دو بود؛ حالا که توضیح به بک‌اند وابسته است،
+  // آن جمله وقتی «Aether» انتخاب بود هم دربارهٔ سایفون حرف می‌زد.
+  AETHER: 'One hop through the bundled Aether/WARP engine. Fastest.',
+  AETHER_PSIPHON: 'Two hops: Aether connects first, then Psiphon tunnels through it. Your exit IP becomes Psiphon\u2019s, so sites that block Aether/WARP addresses open again.',
+  TOR: 'Tor alone, without the Aether tunnel. Your exit is a Tor exit node and your traffic passes three relays, which is the slowest and the most private of the modes. Tor has to reach the Tor network by itself here, so it uses bridges when it is blocked.',
+  AETHER_TOR: 'Two hops: Aether connects first, then Tor is built INSIDE that tunnel. The network you are on sees only Aether\u2019s obfuscated transport, never Tor \u2014 so this is the mode to use where Tor is blocked. Your exit is a Tor exit node.',
+  TOR_PSIPHON: 'Three hops: Tor first, then Psiphon dialled through it. Your exit IP is Psiphon\u2019s, reached from a Tor address, so sites that block Tor exit nodes open again while your own address stays behind Tor. The slowest mode.',
+  TOR_AETHER: 'The reverse chain: Tor first, then the Aether tunnel built INSIDE it. Your exit is a WARP address \u2014 the same as plain Aether \u2014 but the network you are on sees only Tor, and cannot tell that a VPN tunnel exists at all. Use it where Cloudflare/WARP itself is blocked or throttled but Tor still gets through. Carries normal UDP, unlike the Tor-exit modes.',
+}
+
+// حالت‌هایی که تور در آن‌ها هست — آینهٔ `uses_tor` و `tor_mode` در profile.rs.
+const TOR_BACKENDS = ['TOR', 'AETHER_TOR', 'TOR_PSIPHON', 'TOR_AETHER']
+const usesTor = (b) => TOR_BACKENDS.includes(b || 'AETHER')
+// در زنجیرهٔ عادی، تور از داخلِ تونل زنگ می‌زند: شبکهٔ محلی هرگز آن را
+// نمی‌بیند، پس پل و کشورِ پل بی‌معنی‌اند.
+const torChained = (b) => b === 'AETHER_TOR'
+const torReverse = (b) => b === 'TOR_AETHER'
+
+const TOR_BRIDGES = [
+  ['AUTO', 'Automatic'],
+  ['ALWAYS', 'Always'],
+  ['OFF', 'Off'],
+]
+
+// همان فهرست transport/TorCountries.kt — کشورهایی که bridgedb برایشان پل دارد.
+const TOR_COUNTRIES = [
+  ['', 'Detect automatically'], ['ir', 'Iran'], ['ru', 'Russia'], ['cn', 'China'],
+  ['tm', 'Turkmenistan'], ['by', 'Belarus'], ['eg', 'Egypt'], ['sa', 'Saudi Arabia'],
+  ['ae', 'United Arab Emirates'], ['tr', 'T\u00fcrkiye'],
+]
+
+// صبر برای مسیر مستقیم، پیش از رفتن به پل‌ها. صفر = همان ۷۵ ثانیهٔ خود موتور.
+const TOR_DIRECT_PRESETS = [0, 20, 45, 120, 240]
 
 // همان کدهای transport/ExitRegions.kt و src-tauri/src/exit_regions.rs.
 // ⚠ Psiphon این را فیلتر سخت می‌داند؛ اگر کشور سرور نداشته باشد سمت Rust
@@ -46,6 +92,7 @@ const PROTOCOLS = [
   ['MASQUE', 'MASQUE'],
   ['WIREGUARD', 'WireGuard'],
   ['GOOL', 'WARP×2'],
+  ['MIM', 'MASQUE×2'],
 ]
 const SCAN_MODES = [
   ['TURBO', 'Turbo'],
@@ -328,17 +375,61 @@ const SECTIONS = {
   language: (p) => segmented(t('Language'), '__lang', LANGS, getLang()),
 
   connection: (p) => `
+    <section class="field" id="tor-caps-note" hidden>
+      <span class="field__hint" id="tor-caps-note-text"></span>
+    </section>
     ${segmented(t('Backend'), 'backend', BACKENDS, p.backend || 'AETHER')}
     <section class="field">
-      <span class="field__hint">${t('Aether alone exits through a Cloudflare WARP edge. Chaining Psiphon keeps Aether as the first hop and swaps the exit for an ordinary hosting IP, which is what opens sites that reject WARP ranges.')}</span>
+      <span class="field__hint">${t(BACKEND_HELP[p.backend || 'AETHER'] ?? BACKEND_HELP.AETHER)}</span>
     </section>
     ${flagDropdown(t('Exit country'), 'exitRegion', EXIT_REGIONS, p.exitRegion || '')}
     <section class="field">
-      <span class="field__hint">${t('Only applies to the chained backend. If no server is reachable in that country, Aether falls back to an automatic exit instead of hanging.')}</span>
+      <span class="field__hint">${usesTor(p.backend) && !torReverse(p.backend)
+        ? t('Tor chooses its own exit node, and a new one per circuit. No setting can pin it to a country.')
+        : t('Only applies to the chained backend. If no server is reachable in that country, Aether falls back to an automatic exit instead of hanging.')}</span>
     </section>
+    ${usesTor(p.backend) ? SECTIONS.tor(p) : ''}
     ${segmented(t('Protocol'), 'protocol', PROTOCOLS, p.protocol)}
+    ${torReverse(p.backend) ? `
+    <section class="field">
+      <span class="field__hint">${t('Fixed to MASQUE over HTTP/2 in this mode. Tor carries TCP only and WARP\u2019s WireGuard endpoints answer on UDP alone, so the engine refuses WireGuard and WARP\u00d72 here.')}</span>
+    </section>` : ''}
     ${segmented(t('Scan mode'), 'scanMode', SCAN_MODES, p.scanMode)}
     ${segmented(t('IP version'), 'ipVersion', IP_VERSIONS, p.ipVersion)}`,
+
+  // v13 — گروه تور، پورت از بخش Tor در SettingsScreen.kt. فقط وقتی رندر
+  // می‌شود که حالتِ انتخابی واقعاً تور داشته باشد: گروهی که همیشه آنجاست و
+  // همیشه غیرفعال، تنها پنل را شلوغ می‌کند.
+  tor: (p) => `
+    <div id="v20-tor">
+    <h3 class="view__subtitle">${t('Tor')}</h3>
+    ${dropdown(t('Bridges'), 'torBridges', TOR_BRIDGES, p.torBridges || 'AUTO')}
+    <section class="field">
+      <span class="field__hint">${torChained(p.backend)
+        ? t('Not needed in this mode: Tor is dialled through the Aether tunnel, so the network you are on never sees it.')
+        : t('How Tor reaches the network when it is blocked.')}</span>
+    </section>
+    ${torChained(p.backend) ? '' : `
+    ${dropdown(t('Bridge country'), 'torCountry', TOR_COUNTRIES, (p.torCountry || '').trim().toLowerCase())}
+    <section class="field">
+      <span class="field__hint">${t('Which country bridgedb hands out bridges for. Detection asks the network where you are, which is the request most likely to fail here.')}</span>
+    </section>
+    ${dropdown(t('Bootstrap patience'), 'torDirectSecs',
+      TOR_DIRECT_PRESETS.map((v) => [String(v), v === 0 ? t('Automatic (75 s)') : t('{0} seconds').replace('{0}', String(v))]),
+      String(p.torDirectSecs ?? 0))}
+    <section class="field">
+      <span class="field__hint">${t('How long Tor tries the direct path before falling back to bridges. Shorten it where Tor is definitely blocked.')}</span>
+    </section>
+    ${listArea(t('Own bridge lines'), 'torBridgeLines', (p.torBridgeLines || '').split('\n').filter(Boolean),
+      'obfs4 192.0.2.55:38114 &lt;FINGERPRINT&gt; cert=… iat-mode=0',
+      t('One per line, in the format bridges.torproject.org hands out. Leave empty to use the bridges the app fetches for your country. A line naming a transport the app does not ship is ignored.'))}`}
+    ${textField(t('Reachability check'), 'torCheck', p.torCheck, 'check.torproject.org:443', {
+      hint: t('The address Tor must reach before the bootstrap counts as working. Change it only if bootstrap keeps failing on a Tor that seems fine \u2014 the default target is itself blocked on some networks.'),
+    })}
+    <section class="field">
+      <span class="field__hint">${t('Tor carries TCP only \u2014 in every app, on every platform. Aether answers DNS over TCP inside Tor and drops other UDP, so QUIC-capable apps fall back to TCP. That is normal and nothing is leaking: dropped UDP goes nowhere, least of all around Tor. Expect noticeably higher latency, and expect the first connect to take a while \u2014 Tor downloads its directory before it can build a circuit.')}</span>
+    </section>
+    </div>`,
 
   transport: (p) => `
     ${dropdown(t('Noize'), 'noize', NOIZE, p.noize)}
@@ -446,7 +537,10 @@ export function renderAdvanced(sections) {
         x.setAttribute('aria-checked', String(x === b))
       })
       // v10: تغییر روش ورود Zero Trust فیلدهای متفاوتی می‌خواهد — بازرندر.
-      if (key === 'accessMode') {
+      // v13: عوض شدن بک‌اند هم — گروه تور می‌آید/می‌رود، توضیحِ بک‌اند و
+      // متنِ کشورِ خروجی عوض می‌شود، و در زنجیرهٔ برعکس انتخابگر پروتکل
+      // دلیلِ قفل‌بودنش را می‌نویسد. بدون بازرندر، پنل حرفِ حالتِ قبلی را می‌زد.
+      if (key === 'accessMode' || key === 'backend') {
         refreshTab('advanced')
       }
     })
@@ -456,7 +550,9 @@ export function renderAdvanced(sections) {
     s.addEventListener('change', async () => {
       const key = s.dataset.key
       const raw = s.value
-      const value = ['mtu', 'keepalive', 'reconnectAttempts'].includes(key) ? Number(raw) : raw
+      const value = ['mtu', 'keepalive', 'reconnectAttempts', 'torDirectSecs'].includes(key)
+        ? Number(raw)
+        : raw
       await saveProfile({ [key]: value })
       if (key === 'endpointMode' || key === 'splitMode') {
         refreshTab('advanced')
@@ -509,9 +605,14 @@ export function renderAdvanced(sections) {
       const key = i.dataset.key
       // v10: فیلدهای فهرستی — هر خط یک مقدار (مثل splitApps).
       const LIST_KEYS = ['splitApps', 'routeBlock', 'routeDirect', 'dns']
+      // `torBridgeLines` هم چندخطی است ولی در پروفایل یک رشتهٔ واحد می‌ماند —
+      // همان‌طور که در موبایل هست، چون سَنیتایزرِ سمت Rust خط‌به‌خط پارس و
+      // اعتبارسنجی می‌کند و شکستنِ آن به آرایه، آن اعتبارسنجی را دور می‌زد.
       const value = LIST_KEYS.includes(key)
         ? i.value.split('\n').map((x) => x.trim()).filter(Boolean)
-        : i.value.trim()
+        : key === 'torBridgeLines'
+          ? i.value.split('\n').map((x) => x.trim()).filter(Boolean).join('\n')
+          : i.value.trim()
       await saveProfile({ [key]: value })
       // v10: پاک/پر شدن نام تیم، بخش Zero Trust را نشان/پنهان می‌کند.
       if (key === 'team') {
@@ -551,6 +652,24 @@ export function renderAdvanced(sections) {
       gate('#v17-upstream', caps.upstream)
       gate('#v17-sniff', caps.routeSniff)
       gate('#v17-identity', caps.routeSniff)
+      // v13 — تور از هستهٔ 2.0.0. اگر هستهٔ همراه قدیمی‌تر باشد، بک‌اندهای تور
+      // انتخاب‌شدنی‌اند ولی بی‌اثر: profile.rs فلگ‌هایشان را نمی‌فرستد. پس
+      // همان‌جا گفته می‌شود، نه بعد از یک اتصالِ ساکتاً معمولی.
+      if (!caps.tor) {
+        root.querySelectorAll('.seg[data-key="backend"] .seg__item').forEach((b) => {
+          if (usesTor(b.dataset.value)) {
+            b.disabled = true
+            b.style.opacity = '0.45'
+          }
+        })
+        gate('#v20-tor', false)
+        const note = root.querySelector('#tor-caps-note')
+        const text = root.querySelector('#tor-caps-note-text')
+        if (note && text) {
+          text.textContent = t('The Tor modes need engine core 2.0.0 or newer. The bundled core is older, so they are disabled.')
+          note.hidden = false
+        }
+      }
       const missing15 = !caps.zeroTrust || !caps.routing || !caps.customDns
       const missing17 = !caps.upstream || !caps.routeSniff
       if (missing15 || missing17) {

@@ -55,19 +55,40 @@ impl Tunnel {
     /// نیازمند دسترسی Administrator است — دقیقاً معادل دیالوگ مجوز VPN
     /// در اندروید. برنامه در صورت نیاز خودش درخواست ارتقا می‌دهد.
     pub fn establish(profile: &ConnectionProfile, wintun_dll: &std::path::Path) -> Result<Self> {
-        let lib = unsafe { wintun::load_from_path(wintun_dll) }
-            .context("could not load wintun.dll")?;
+        let lib =
+            unsafe { wintun::load_from_path(wintun_dll) }.context("could not load wintun.dll")?;
 
         let adapter = wintun::Adapter::create(&lib, ADAPTER_NAME, ADAPTER_TYPE, Some(ADAPTER_GUID))
             .context("could not create the Wintun adapter (administrator rights required)")?;
 
+        // ۱.۲.۵-perf — ظرفیتِ رینگ از بزرگ‌ترین مقدارِ ممکن به کوچک‌ترین آمد.
+        //
+        // `MAX_RING_CAPACITY` بزرگ‌ترین ظرفیتی است که Wintun می‌پذیرد و برای
+        // *هر جهت* یک بافر جدا تخصیص می‌شود. سؤال درست این نبود که «چقدر
+        // بگیریم» بلکه این بود که «چه کسی از آن می‌خواند» — و پاسخ، در تمامِ
+        // `src-tauri/src/`، هیچ‌کس است: تنها راهِ رسیدن به نشست، `session()`
+        // است و هیچ فراخوانی‌ای برای آن وجود ندارد؛ نه حلقهٔ خواندنی هست، نه
+        // `receive_blocking`ی.
+        //
+        // و این اتفاقی نیست: خودِ همین فایل چند سطر پایین‌تر می‌گوید مسیر
+        // دادهٔ فعلی پروکسی سیستمی (TCP) است و مسیر پیش‌فرض گرفته نمی‌شود.
+        // آداپتور فقط برای آدرس و DNS داخلی بالا می‌آید. پس آن بافرها حافظه‌ای
+        // بودند که گرفته می‌شد، پُر می‌شد (آداپتور آدرس دارد، پس ویندوز به آن
+        // بسته تحویل می‌دهد) و هرگز تخلیه نمی‌شد.
+        //
+        // کوچک‌ترین ظرفیت و نه حذفِ کاملِ نشست: `session()` یک API عمومی است و
+        // برداشتنش تصمیمِ دیگری است. رجوع به یادداشتِ بالای این فایل.
         let session = adapter
-            .start_session(wintun::MAX_RING_CAPACITY)
+            .start_session(wintun::MIN_RING_CAPACITY)
             .context("could not start the Wintun session")?;
 
         DiagnosticsLog::i(
             "tun",
-            &format!("Wintun adapter up, mtu={} (default {})", profile.mtu, crate::profile::DEFAULT_MTU),
+            &format!(
+                "Wintun adapter up, mtu={} (default {})",
+                profile.mtu,
+                crate::profile::DEFAULT_MTU
+            ),
         );
 
         let me = Self {
@@ -88,23 +109,42 @@ impl Tunnel {
         // نشست از بین می‌رود). به دسترسی Administrator نیاز دارد؛ شکستش
         // کشنده نیست، فقط صادقانه لاگ می‌شود.
         let addr_ok = netsh(&[
-            "interface", "ipv4", "set", "address",
-            &format!("name={ADAPTER_NAME}"), "source=static",
-            &format!("address={TUN_IPV4}"), "mask=255.255.255.0",
+            "interface",
+            "ipv4",
+            "set",
+            "address",
+            &format!("name={ADAPTER_NAME}"),
+            "source=static",
+            &format!("address={TUN_IPV4}"),
+            "mask=255.255.255.0",
         ]);
         let dns_ok = netsh(&[
-            "interface", "ipv4", "set", "dnsservers",
-            &format!("name={ADAPTER_NAME}"), "source=static",
-            &format!("address={TUN_DNS_V4}"), "register=none", "validate=no",
+            "interface",
+            "ipv4",
+            "set",
+            "dnsservers",
+            &format!("name={ADAPTER_NAME}"),
+            "source=static",
+            &format!("address={TUN_DNS_V4}"),
+            "register=none",
+            "validate=no",
         ]);
         DiagnosticsLog::i(
             "tun",
             &format!(
                 "Adapter address {}: {} · in-tunnel DNS {}: {}",
                 TUN_IPV4,
-                if addr_ok { "applied" } else { "not applied (needs administrator)" },
+                if addr_ok {
+                    "applied"
+                } else {
+                    "not applied (needs administrator)"
+                },
                 TUN_DNS_V4,
-                if dns_ok { "applied" } else { "not applied (needs administrator)" },
+                if dns_ok {
+                    "applied"
+                } else {
+                    "not applied (needs administrator)"
+                },
             ),
         );
 
@@ -128,11 +168,17 @@ impl Tunnel {
             SplitMode::Off => DiagnosticsLog::i("tun", "Split tunnelling: off (default)"),
             SplitMode::Include => DiagnosticsLog::i(
                 "tun",
-                &format!("Split tunnelling: only {} go through the tunnel", profile.split_apps.len()),
+                &format!(
+                    "Split tunnelling: only {} go through the tunnel",
+                    profile.split_apps.len()
+                ),
             ),
             SplitMode::Exclude => DiagnosticsLog::i(
                 "tun",
-                &format!("Split tunnelling: {} bypass the tunnel", profile.split_apps.len()),
+                &format!(
+                    "Split tunnelling: {} bypass the tunnel",
+                    profile.split_apps.len()
+                ),
             ),
         }
         Ok(())
@@ -144,7 +190,10 @@ impl Tunnel {
 
     /// بایت‌های دریافتی و ارسالی — همان عددهایی که پنل ترافیک نشان می‌دهد.
     pub fn counters(&self) -> (u64, u64) {
-        (self.rx.load(Ordering::Relaxed), self.tx.load(Ordering::Relaxed))
+        (
+            self.rx.load(Ordering::Relaxed),
+            self.tx.load(Ordering::Relaxed),
+        )
     }
 
     /// معادل teardown در `AetherVpnService`.
@@ -153,11 +202,14 @@ impl Tunnel {
     /// موقع قطع اتصال رفع شود: اول کنسل، بعد کشتن نیتیوها، بعد UI به idle،
     /// و در آخر جمع‌کردن خارج از مسیر بحرانی.
     pub fn close(&mut self) {
-        if let Some(s) = self.session.take() {
-            drop(s);
-        }
+        // `Drop` هم همین را صدا می‌زند، پس بارِ دوم باید ساکت باشد: در لاگِ
+        // ۱۶ سپتامبر «Wintun adapter torn down» دوبار در یک میلی‌ثانیه چاپ شد،
+        // یک‌بار از این‌جا و یک‌بار از Drop، و خواندنِ لاگ را گمراه می‌کرد.
+        let had_session = self.session.take().is_some();
         let _ = self.adapter.get_luid();
-        DiagnosticsLog::i("tun", "Wintun adapter torn down");
+        if had_session {
+            DiagnosticsLog::i("tun", "Wintun adapter torn down");
+        }
     }
 }
 

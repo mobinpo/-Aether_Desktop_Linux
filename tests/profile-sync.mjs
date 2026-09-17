@@ -43,6 +43,7 @@ window.__TAURI_INTERNALS__ = {
     invoked.push([cmd, args])
     if (cmd === 'plugin:event|listen') return Promise.resolve(1)
     if (cmd === 'get_profile') return Promise.resolve({ ...rustProfile })
+    if (cmd === 'core_caps') return Promise.resolve({ tor: true, psiphon: true, warp: true })
     if (cmd === 'set_profile') {
       // همان کاری که کنترلر می‌کند: کلِ شیء را می‌نشاند.
       rustProfile = { ...args.profile }
@@ -73,7 +74,9 @@ main.onChange(() => { notified++ })
 main.applyProfileSnapshot({ ...rustProfile, protocol: 'MASQUE', noize: 'FIREWALL' })
 ok(main.app.profile.protocol === 'MASQUE', `کپیِ رابط جایگزین شد (protocol=${main.app.profile.protocol})`)
 ok(main.app.profile.noize === 'FIREWALL', 'هر دو تغییر رسید، نه یکی')
-ok(notified === 1, `شنونده‌ها یک بار خبردار شدند (${notified}) — پس صفحهٔ تنظیمات دوباره رندر می‌شود`)
+ok(notified === 1, `شنونده‌ها یک بار خبردار شدند (${notified})`)
+// و اینکه پنلِ ساخته‌شده هم واقعاً عوض می‌شود، در بخش ۴ سنجیده می‌شود —
+// چون همین‌جا بود که نتیجه‌گیریِ غلط نشست: خبردادن ≠ بازساختِ کنترل.
 
 // ---- ۲) نوشتنِ کاربر روی پروفایلِ تازه می‌نشیند، نه روی کپیِ کهنه -----------
 //
@@ -111,6 +114,69 @@ await main.saveProfile({ keepalive: 30 })
 console.error = quiet
 ok(last('set_profile')?.[1]?.profile?.keepalive === 30, 'با خواندنِ شکست‌خورده هم تنظیم ذخیره می‌شود')
 window.__TAURI_INTERNALS__.invoke = realInvoke
+
+// ---- ۴) پنلِ **ساخته‌شده** باید مقدارِ تازه را نشان بدهد --------------------
+//
+// این همان چیزی است که کاربر می‌دید: ردیفِ هاب مقدارِ تازه را می‌نوشت (چون
+// `onChange` دارد) و زیرصفحه زیرِ همان ردیف، رگولاتورِ کهنه را. علتش نه IPC بود
+// نه ذخیره‌سازی: `advanced.js` پروفایل را فقط **یک بار، هنگام ساخت** می‌خواند و
+// نمای ساخته‌شده در کَشِ تب می‌ماند.
+console.log('\n── پنلِ ساخته‌شده پس از نوشتنِ Rust')
+
+const { SETTINGS_ROWS } = await import('../src/views/settings.js')
+document.body.innerHTML = '<div id="view"></div>'
+
+rustProfile = { ...rustProfile, noize: 'OFF' }
+main.app.profile = { ...rustProfile }
+main.app.snapshot = { ...main.app.snapshot, state: 'DISCONNECTED' }
+main.showTab('advanced')
+
+// زیرصفحهٔ «ترابری» را باز کن — همان‌جا که کشویِ noize هست.
+const rows = SETTINGS_ROWS
+const transportIndex = rows.findIndex((r) => r.id === 'transport')
+const hubRows = document.querySelectorAll('#view .setrow')
+ok(transportIndex >= 0 && hubRows.length > transportIndex, 'ردیفِ ترابری در هاب هست')
+hubRows[transportIndex].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+
+const noizeNow = () => document.querySelector('#view select[data-key="noize"]')
+ok(noizeNow()?.value === 'OFF', `کشوی noize با مقدارِ فعلی باز شد (${noizeNow()?.value})`)
+
+// همان چیزی که Rust پس از اعمالِ دستیار می‌فرستد.
+main.applyProfileSnapshot({ ...rustProfile, noize: 'GFW' })
+ok(noizeNow()?.value === 'GFW',
+  `پس از رخدادِ پروفایل، کنترل مقدارِ تازه را دارد (${noizeNow()?.value}) — پیش از این fix اینجا OFF می‌ماند`)
+
+// ---- ۵) ...ولی نه وسطِ تایپِ کاربر -----------------------------------------
+//
+// بازساختِ فوری در حین تایپ، فیلدِ زیرِ نشانگر را عوض می‌کند و نوشتهٔ نیمه‌کارهٔ
+// کاربر را می‌خورد. پس تا وقتی نشانگر داخلِ یک فیلدِ متنی است، بازسازی به بعد
+// می‌افتد — و فراموش نمی‌شود.
+console.log('\n── رخداد در حینِ تایپ')
+// بازساختِ بخش ۴ ما را روی همان زیرصفحه نگه داشت (`OPEN` سرِ جایش می‌ماند —
+// همان رفتاری که نگذاشت کاربر وسطِ کار به هاب پرت شود). پس اول با دکمهٔ back
+// به هاب برگرد.
+document.querySelector('#view .setpage__back')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+const hubRows2 = document.querySelectorAll('#view .setrow')
+const dnsIndex = rows.findIndex((r) => r.id === 'dns')
+ok(hubRows2.length > dnsIndex, 'با back به هاب برگشتیم')
+hubRows2[dnsIndex]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+const typing = document.querySelector('#view input, #view textarea')
+ok(!!typing, 'زیرصفحهٔ DNS یک فیلدِ متنی دارد')
+typing.focus()
+typing.value = '9.9.9.'
+main.applyProfileSnapshot({ ...rustProfile, noize: 'FIREWALL' })
+ok(document.activeElement === typing && typing.value === '9.9.9.',
+  'نوشتهٔ نیمه‌کاره سرِ جایش ماند و نشانگر نپرید')
+
+// و بازسازیِ عقب‌افتاده در اولین بازگشت به تب انجام می‌شود. سنجه همان فیلدِ
+// نیمه‌تایپ‌شده است: بازسازی آن را با مقدارِ واقعیِ پروفایل عوض می‌کند. (سنجیدنِ
+// noize اینجا بی‌فایده بود — هر بار که کاربر به یک زیرصفحه می‌رود، آن زیرصفحه
+// از نو از `app.profile` ساخته می‌شود، پس آن سنجه بی fix هم سبز می‌شد.)
+main.showTab('home')
+main.showTab('advanced')
+const dnsArea = document.querySelector('#view textarea[data-key="dns"]')
+ok(dnsArea?.value === '1.1.1.1',
+  `بازسازیِ عقب‌افتاده انجام شد و فیلد از پروفایل پر شد (${JSON.stringify(dnsArea?.value)})`)
 
 console.log(failed === 0 ? '\nPROFILE SYNC OK' : `\n${failed} ایراد`)
 process.exit(failed === 0 ? 0 : 1)

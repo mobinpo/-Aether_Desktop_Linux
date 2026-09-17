@@ -45,17 +45,37 @@ Write-Host "==> Building aether core for $Target"
 # نسخهٔ پرتابل روی بعضی سیستم‌ها اجرا نمی‌شود.
 $env:RUSTFLAGS = '-C target-feature=+crt-static'
 
+# ---- فیچرها -------------------------------------------------------
+# ۱.۲.۵: حالت‌های تور (`--tor` / `--tor-only` / `--tor-reverse`) فقط در باینری‌ای
+# وجود دارند که با فیچر `tor` کامپایل شده باشد؛ هستهٔ ۲.۰.۰ خودِ arti را پشت
+# همین فیچر دارد. بدون این سوییچ، رابط کاربری چهار حالت تور را نشان
+# می‌داد و موتور هیچ‌کدام را نمی‌شناخت.
+#
+# ولی فیچر **کورکورانه** پاس داده نمی‌شود. اگر core-rollback.ps1 به هستهٔ
+# قدیمی‌تری برگشته باشد، آن Cargo.toml فیچر `tor` را ندارد و
+# `cargo build --features tor` کل بیلد را می‌کشت — درست همان چیزی که مسیر
+# rollback برای جلوگیری ازش هست. قاعدهٔ همیشگی مخزن: ارتقا/برگشتِ خودکار
+# هسته هرگز نباید یک انتشار را بشکند.
+$featureArgs = @()
+$coreToml = Get-Content (Join-Path $core 'Cargo.toml') -Raw
+if ($coreToml -match '(?m)^\s*tor\s*=\s*\[') {
+  $featureArgs = @('--features', 'tor')
+  Write-Host '==> Engine features: tor (arti inside the engine)'
+} else {
+  Write-Host '::warning::This core has no `tor` feature - building without it. The Tor transport modes will not exist in this engine.'
+}
+
 Push-Location $core
 try {
   $useLocked = Test-Path (Join-Path $core 'Cargo.lock')
   if ($useLocked) {
-    cargo build --release --locked --target $Target
+    cargo build --release --locked --target $Target @featureArgs
     if ($LASTEXITCODE -ne 0) {
       Write-Host '::warning::--locked build failed; retrying without it.'
-      cargo build --release --target $Target
+      cargo build --release --target $Target @featureArgs
     }
   } else {
-    cargo build --release --target $Target
+    cargo build --release --target $Target @featureArgs
   }
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

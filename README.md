@@ -12,6 +12,78 @@ Windows desktop tunnel client with mandatory leak protection and a resilient con
 
 ---
 
+## What's new in 1.2.5
+
+**Upgrade notice:** 1.2.5 brings the mobile edition's **Tor support** to Windows — four new transport backends, bridges, and a bootstrap percentage in your own language — bundles **Aether Core 2.0.0**, and closes a cleartext lookup found while auditing this upgrade. Saved profiles load unchanged, the default backend is still `Aether`, and the desktop version is `1.2.5` across `tauri.conf.json`, `package.json`, the embedded manifest and the installer script.
+
+### New in this release
+
+**Tor, ported from Aether Mobile 1.3.0.** Four backends in Advanced → *Backend*, each mapping onto a flag of the core itself rather than onto logic of our own:
+
+| Backend | Core flag | Exit | Tunnel under Tor |
+|---|---|---|---|
+| **Tor** | `--tor-only` | Tor | none |
+| **Aether → Tor** | `--tor` | Tor | yes (WARP) |
+| **Tor → Aether** | `--tor-reverse` | Aether | Tor goes first |
+| **Tor → Psiphon** | `--tor-only` + stage 2 | Psiphon | Tor goes first |
+
+**Bridges, only where they mean something.** `Auto` (try direct briefly, then bridges from bridgedb), `Always` and `Off` — enabled in **Tor** and **Tor → Psiphon** only. In *Aether → Tor* the network Tor sees is the tunnel's, not the operator's, so a bridge changes nothing: the control is greyed out with the reason on screen rather than left live and inert. *Tor → Aether* carries a limitation that is not ours to fix — Tor must reach the network before the tunnel exists, so its bridge traffic does cross the operator's network, and the interface says so.
+
+**The bootstrap percentage, in your language.** Tor is slow to start, so progress is read from the engine log and a stall is told apart from slow progress by a time budget rather than by a guess. The percentage travels as a separate numeric field on the snapshot and the sentence is assembled by the translation layer, so the Persian interface shows a Persian line.
+
+**A failed Tor attempt now names the cause that fits that attempt.** Three situations that used to share one sentence are now told apart: Tor stalling *inside* the tunnel in *Aether → Tor* (where turning bridges on would change nothing), Tor facing the operator's network *with* a pluggable transport, and Tor facing it *without* one — where only plain bridges remain, which a network that filters Tor usually blocks too, so the message points at the *Aether → Tor* mode instead. Each message carries the percentage Tor stopped at, in both languages.
+
+**A stalled Tor attempt gives up on a budget instead of retrying forever.** In the chained mode the attempt had no deadline and no attempt limit, so a connection that was never going to complete kept the app in "Connecting…". Every Tor shape now has a bounded budget and hands over to the next strategy.
+
+**The pluggable transport ships with the app — and a published build cannot go out without it.** `obfs4` cannot run without a lyrebird binary, so the build compiles lyrebird 0.6.1 for Windows (`CGO_ENABLED=0`) and stages it in `engine/pt/`. A failure there still does not break a pull-request build, but a **published** build is now gated: if `engine/pt/lyrebird.exe` is missing or implausibly small, the release stops rather than shipping an empty transport directory. The engine is told about both locations it may live in, and the transport counts as present only when the executable itself is there.
+
+**Defaults matched to Aether Mobile 1.3.0.** Scan mode now starts at **Balanced** and the reconnect limit at **5 attempts**, as on mobile. The Smart Auto ladder keeps scanning each rung in **Turbo**, so a faster default does not turn into a slower search.
+
+**Settings the engine changes appear immediately.** When a connection attempt rewrites the profile, every profile-dependent panel is rebuilt from the new values — deferred while you are typing in a field, so nothing is pulled out from under you.
+
+**A readiness gate sits between connecting and the self-test.** The post-connect self-test waits until the network is actually usable, so a Tor stage still bootstrapping is never judged on a half-built connection. Tor modes are also kept off the Smart Auto ladder, which exists to find the *fastest* transport and would read a healthy 90-second bootstrap as "slow, drop it".
+
+**Aether Core 1.9.0 → 2.0.0.** `CoreCaps::for_version` compares with `>=`, so the Tor capabilities switch on with 2.0.0 while no version is hardcoded and `CORE_VERSION` is still read at runtime from beside `aether.exe`. With an older core placed next to the app, the Tor backends are greyed out with the reason shown rather than selectable and silently broken.
+
+**Upgrade note:** saved profiles load untouched, the default backend is unchanged, no engine flag or environment variable was removed, and the Tor backends are **not** writable from the AI chat — `backend` was already outside the chat allowlist and stayed there.
+
+### Security audit summary
+
+| Area | Result |
+|---|---|
+| **Fixed: cleartext exit-country lookup** | A plain `http://ip-api.com` request — no TLS, outside the tunnel — put a domain name on the wire and left the answer forgeable. The lookup now happens only from inside an established tunnel; with no tunnel nothing is sent, and the country is read from the endpoint itself |
+| Released artefact | A published build with a missing or implausibly small lyrebird binary fails the release instead of shipping an empty `engine/pt/` |
+| Advice given on failure | Bridge advice is only given where bridges can act; in *Aether → Tor* the message points elsewhere rather than at a control that cannot help |
+| Bounded attempts | No Tor shape retries without a deadline; a stalled attempt yields to the next strategy instead of holding the connection open |
+| Capability gate | Tor backends are disabled with a stated reason on cores older than 2.0.0, never selectable-but-broken |
+| AI boundary | `backend`, and with it every Tor mode, stays outside the chat's writable allowlist; log excerpts remain redacted and capped |
+| Leak protection | Mandatory DNS, IPv6 and WebRTC protection unchanged; direct UDP and unsafe IPv6 fallback stay blocked |
+| Secrets and keys | No hardcoded credentials; the Gemini key remains DPAPI-sealed; upstream credentials are not persisted |
+
+**Overall audit score: 83 / 100.** Ten areas, each weighted, each scored against
+evidence that was actually produced rather than assumed. The 17 missing points are
+almost entirely one thing: the Windows-only part of the pipeline cannot be exercised
+on a Linux host, so it is scored zero instead of being claimed.
+
+| # | Area | Weight | Score | Evidence |
+|---|---|---|---|---|
+| 1 | Compile and format integrity | 12 | 11 | `cargo check --all-targets` green on `x86_64-pc-windows-gnu` and `i686-pc-windows-gnu`; `cargo fmt --check` clean; a guard proves all 69 `.rs` files parse. 44 clippy findings remain, no errors — 30 are unused API surface, 14 are style |
+| 2 | Automated tests | 12 | 8 | 12 test files green (UI, chat, profile sync, glow direction, protocol options); the desktop layout test now measures in a real Chromium at two window sizes in both languages. `cargo test` runs only on Windows, so it is unproven here |
+| 3 | Regression guards and negative controls | 12 | 12 | 10 positive guards, 5 negative-control suites; every guard is proven to turn red on a deliberate mutation, and each mutation verifies that it actually applied |
+| 4 | CI pipeline | 10 | 9 | 24 preflight steps, extracted from the workflow and executed verbatim, all exit 0. Release publishing is gated by the account spending limit, which no code change can lift |
+| 5 | Package integrity | 10 | 10 | `verify-package.sh` passes 15 cases plus structure on the extracted archive; the archive carries no build artefacts, no `node_modules`, no `target/` |
+| 6 | Memory safety and error paths | 10 | 8 | 5 `unsafe` blocks, all Win32 FFI or wintun loading; no `panic!`, `todo!` or `unreachable!` anywhere; 39 `unwrap()` remain in live code, which is the honest deduction |
+| 7 | Secrets and keys | 8 | 8 | No hardcoded credential in Rust or JavaScript; the only match is a fixture string inside a test; the Gemini key stays DPAPI-sealed and upstream credentials are not persisted |
+| 8 | Network and leak hygiene | 10 | 9 | No cleartext `http://` target left in live code; DNS, IPv6 and WebRTC protection mandatory; country lookup answered from a local GeoIP file before any network refinement |
+| 9 | Durability of core patches | 8 | 8 | All 11 patched core files are protected across a core upgrade, each with an upstream baseline, and a guard fails the build if a patched file ever falls out of that list |
+| 10 | Windows runtime proof | 8 | 0 | MSVC link, `cargo test` on Windows, `tauri build`, installer, signature and smoke test run only on the Windows runner — none of them can be demonstrated from this host, so no credit is taken |
+
+Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+<details>
+<summary>Version 1.2.4 — AI assistant, mobile settings menu, bundled Aether Core 1.9.0</summary>
+
+
 ## What's new in 1.2.4
 
 **Upgrade notice:** 1.2.4 brings the mobile edition's **AI assistant** to Windows — including a full chat page whose assistant can *apply* tuning settings for you — rebuilds the entire settings area as the mobile **hub-and-subpage menu**, bundles **Aether Core 1.9.0**, and fixes a setting that never did anything: a pinned **address range** was handed to the engine and read by nobody. Saved profiles load unchanged, and the desktop version is `1.2.4` across `tauri.conf.json`, `package.json`, the embedded manifest and the installer script.
@@ -61,6 +133,8 @@ Two rules make this safe. A proposal is validated against the allowlist **before
 | Permissions and build | Mandatory UAC; CI checks source, tests, manifest, installer, and cleanup |
 
 Full report: [SECURITY-AUDIT.md](SECURITY-AUDIT.md).
+
+</details>
 
 <details>
 <summary>Version 1.2.3 — bundled Aether Core 1.8.0</summary>

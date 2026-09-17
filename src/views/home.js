@@ -46,14 +46,25 @@ function titleFor(state) {
   }[state] ?? state
 }
 
-/** زیرنویس وضعیت — همان رشته‌های StatusLine.kt. */
+/** زیرنویس وضعیت — همان رشته‌های StatusLine.kt.
+ *
+ * ۱.۲.۵: پیام‌های سمت Rust از `t()` می‌گذرند. پیش از این خامِ انگلیسی نشان
+ * داده می‌شدند، و چون `t()` وقتی ترجمه‌ای نباشد همان کلید را برمی‌گرداند،
+ * این تغییر هیچ پیامِ موجودی را عوض نمی‌کند — فقط ترجمه‌شدن را ممکن می‌کند.
+ *
+ * درصدِ تور جداگانه می‌آید تا جمله همین‌جا و به زبانِ کاربر ساخته شود؛ یک
+ * «Reaching the Tor network… 45%» که از Rust بیاید، هیچ کلیدِ ترجمه‌ای ندارد. */
 function captionFor(snapshot) {
   switch (snapshot.state) {
     case 'DISCONNECTED': return t('Tap to connect securely')
     case 'CONNECTED': return t('Tap to disconnect')
-    case 'FAILED': return snapshot.error || t('Something went wrong')
+    case 'FAILED': return t(snapshot.error || 'Something went wrong')
     case 'VERIFYING': return t('Verifying connection…')
-    default: return snapshot.detail || ''
+    default:
+      if (typeof snapshot.torPercent === 'number') {
+        return t('Reaching the Tor network… {0}%').replace('{0}', String(snapshot.torPercent))
+      }
+      return snapshot.detail ? t(snapshot.detail) : ''
   }
 }
 

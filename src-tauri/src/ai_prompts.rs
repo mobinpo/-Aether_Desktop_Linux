@@ -295,14 +295,24 @@ mod tests {
     #[test]
     fn the_model_is_told_it_cannot_change_anything() {
         // مستقیماً جلوی «تنظیماتت را عوض کردم» را می‌گیرد.
-        let chat = chat_system(Lang::En, &crate::ai_patch::chat_snapshot(&Default::default()));
-        for system in [explain_system(Lang::En), chat.clone(), advisor_system(Lang::En)] {
+        let chat = chat_system(
+            Lang::En,
+            &crate::ai_patch::chat_snapshot(&Default::default()),
+        );
+        for system in [
+            explain_system(Lang::En),
+            chat.clone(),
+            advisor_system(Lang::En),
+        ] {
             assert!(system.contains("Never claim you did"), "{system}");
             assert!(system.contains("Never ask for a password"), "{system}");
         }
         // و در چت، که *می‌تواند* پیشنهاد بدهد، همین قاعده یک بار دیگر و صریح‌تر
         // گفته می‌شود: پیشنهاد دادن با انجام دادن یکی نیست.
-        assert!(chat.contains("You are PROPOSING; never say you already changed anything"), "{chat}");
+        assert!(
+            chat.contains("You are PROPOSING; never say you already changed anything"),
+            "{chat}"
+        );
     }
 
     #[test]
@@ -353,14 +363,20 @@ mod tests {
         );
         let (visible, changes) = split_chat_reply(&reply);
         assert_eq!(visible, "I will lower the MTU.");
-        assert!(!visible.contains("changes"), "the raw JSON must never reach the bubble");
+        assert!(
+            !visible.contains("changes"),
+            "the raw JSON must never reach the bubble"
+        );
         assert_eq!(changes.len(), 2);
         // عدد و بولینِ بی‌کوتیشن باید به متن تبدیل شده باشند.
-        assert_eq!(changes[0], ProposedChange {
-            key: "mtu".into(),
-            value: "1380".into(),
-            why: "handshakes time out".into(),
-        });
+        assert_eq!(
+            changes[0],
+            ProposedChange {
+                key: "mtu".into(),
+                value: "1380".into(),
+                why: "handshakes time out".into(),
+            }
+        );
         assert_eq!(changes[1].value, "true");
     }
 
@@ -379,7 +395,8 @@ mod tests {
     fn a_json_fence_that_is_not_ours_is_left_alone() {
         // کاربر پرسیده «یک فایل پیکربندی WireGuard چه شکلی است؟». این JSON یک
         // پیشنهادِ تنظیمات نیست و نباید دکمهٔ «اعمال» بسازد.
-        let reply = "Like this:\n```json\n{\"changes\":[{\"key\":\"mtu\",\"value\":\"9000\"}]}\n```";
+        let reply =
+            "Like this:\n```json\n{\"changes\":[{\"key\":\"mtu\",\"value\":\"9000\"}]}\n```";
         let (visible, changes) = split_chat_reply(reply);
         assert!(changes.is_empty(), "only our own fence may propose changes");
         assert_eq!(visible, reply.trim());
@@ -414,10 +431,19 @@ mod tests {
 
     #[test]
     fn the_chat_prompt_carries_the_allow_list_and_the_current_values() {
-        let system = chat_system(Lang::Fa, &crate::ai_patch::chat_snapshot(&Default::default()));
+        let system = chat_system(
+            Lang::Fa,
+            &crate::ai_patch::chat_snapshot(&Default::default()),
+        );
         assert!(system.contains(APPLY_FENCE));
-        assert!(system.contains("mtu: a number from 1280 to 9000"), "{system}");
-        assert!(system.contains("mtu = 1280"), "the snapshot must be in the prompt");
+        assert!(
+            system.contains("mtu: a number from 1280 to 9000"),
+            "{system}"
+        );
+        assert!(
+            system.contains("mtu = 1280"),
+            "the snapshot must be in the prompt"
+        );
         // و هیچ‌کدام از کلیدهای خطرناک به مدل پیشنهاد نمی‌شوند.
         assert!(!system.contains("upstream:"));
         assert!(!system.contains("routeDirect"));

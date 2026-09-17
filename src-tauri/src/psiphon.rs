@@ -455,7 +455,8 @@ impl PsiphonTransport {
             TAG,
             &format!(
                 "Psiphon stage ready on 127.0.0.1:{bound} (exit region {})",
-                self.exit_region().unwrap_or_else(|| "automatic".to_string())
+                self.exit_region()
+                    .unwrap_or_else(|| "automatic".to_string())
             ),
         );
         Ok(bound)
@@ -658,10 +659,7 @@ fn next_egress_away(shared: &Arc<Shared>, bad_region: &str) -> String {
         bad.insert(bad_region.to_ascii_uppercase());
     }
     let available = shared.available_regions.lock().clone();
-    let pool: Vec<String> = available
-        .into_iter()
-        .filter(|r| !bad.contains(r))
-        .collect();
+    let pool: Vec<String> = available.into_iter().filter(|r| !bad.contains(r)).collect();
     if pool.is_empty() {
         DiagnosticsLog::w(
             TAG,
@@ -987,11 +985,7 @@ fn build_config(inner: &Mutex<Inner>, egress: &str) -> String {
 /// (خالی) عیناً همان لوپ‌بک-only بودن را می‌دهد که هدف اصلی بود. اگر روزی
 /// واقعاً لازم شد، تنها مقادیر مجاز نام اینترفیس یا `any` است — و `any` برای
 /// استیج ۲ ممنوع است، چون اشتراک LAN کارِ [crate::share] با سیاست خودش است.
-fn child_args(
-    config_path: &Path,
-    server_list: &Path,
-    data_dir: &Path,
-) -> Vec<std::ffi::OsString> {
+fn child_args(config_path: &Path, server_list: &Path, data_dir: &Path) -> Vec<std::ffi::OsString> {
     vec![
         "-config".into(),
         config_path.as_os_str().to_os_string(),
@@ -1136,7 +1130,10 @@ mod tests {
             "LocalProxyError",
             "ssh: rejected: administratively prohibited"
         ));
-        assert!(!is_noise_notice("Info", "port forward failures for abc: 12"));
+        assert!(!is_noise_notice(
+            "Info",
+            "port forward failures for abc: 12"
+        ));
     }
 
     /// ریشهٔ باگ «اِتِر + سایفون کانکت نمی‌شود»: هرگز نباید به استیج ۲ گفته
@@ -1192,7 +1189,9 @@ mod tests {
         );
         assert!(s.config_fault.lock().is_empty());
         assert!(!s.exiting.load(Ordering::Relaxed));
-        assert!(!is_config_fault("Psiphon found no usable server within 200s"));
+        assert!(!is_config_fault(
+            "Psiphon found no usable server within 200s"
+        ));
     }
 
     /// راز پروکسی بالادست هرگز نباید در لاگ ماندگار بنشیند.

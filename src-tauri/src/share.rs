@@ -87,7 +87,10 @@ impl ShareBridge {
 
     /// شمارندهٔ ترافیک (دانلود، آپلود) بر حسب بایت — خوراک TrafficPanel.
     pub fn traffic(&self) -> (u64, u64) {
-        (self.rx.load(Ordering::Relaxed), self.tx.load(Ordering::Relaxed))
+        (
+            self.rx.load(Ordering::Relaxed),
+            self.tx.load(Ordering::Relaxed),
+        )
     }
 
     /// معادل `ShareBridge.start()` — رلهٔ واقعی را بالا می‌آورد.
@@ -116,13 +119,25 @@ impl ShareBridge {
         let mut localhost_http_up = false;
         for ip in binds {
             let is_local = ip == IpAddr::V4(Ipv4Addr::LOCALHOST);
-            if let Some(h) = spawn_listener(ip, http_port, self.running.clone(), self.rx.clone(), self.tx.clone()) {
+            if let Some(h) = spawn_listener(
+                ip,
+                http_port,
+                self.running.clone(),
+                self.rx.clone(),
+                self.tx.clone(),
+            ) {
                 self.threads.push(h);
                 if is_local {
                     localhost_http_up = true;
                 }
             }
-            if let Some(h) = spawn_listener(ip, socks_port, self.running.clone(), self.rx.clone(), self.tx.clone()) {
+            if let Some(h) = spawn_listener(
+                ip,
+                socks_port,
+                self.running.clone(),
+                self.rx.clone(),
+                self.tx.clone(),
+            ) {
                 self.threads.push(h);
             }
         }
@@ -315,7 +330,10 @@ fn handle_http(mut client: TcpStream, rx: Arc<AtomicU64>, tx: Arc<AtomicU64>) {
         let (host, port) = split_host_port(parts[1], 443);
         match probe::socks5_stream(&host, port, UPSTREAM_TIMEOUT) {
             Some(upstream) => {
-                if client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").is_err() {
+                if client
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .is_err()
+                {
                     return;
                 }
                 relay(client, upstream, rx, tx);
@@ -459,8 +477,12 @@ fn detect_lan_ip() -> Option<IpAddr> {
     // first yields the default-route interface address on ANY subnet - the
     // old hard-coded 192.168.1.1 broke on 10.x / 172.16.x / 192.168.0.x
     // networks. Gateway-style fallbacks cover LANs without a default route.
-    const PROBES: [(&str, u16); 4] =
-        [("1.1.1.1", 80), ("8.8.8.8", 80), ("192.168.1.1", 9), ("10.0.0.1", 9)];
+    const PROBES: [(&str, u16); 4] = [
+        ("1.1.1.1", 80),
+        ("8.8.8.8", 80),
+        ("192.168.1.1", 9),
+        ("10.0.0.1", 9),
+    ];
     for (host, port) in PROBES {
         let sock = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) {
             Ok(s) => s,
@@ -484,9 +506,7 @@ fn detect_lan_ip() -> Option<IpAddr> {
 fn is_lan_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            !v4.is_loopback()
-                && !v4.is_unspecified()
-                && (v4.is_private() || v4.is_link_local())
+            !v4.is_loopback() && !v4.is_unspecified() && (v4.is_private() || v4.is_link_local())
         }
         IpAddr::V6(_) => false,
     }
@@ -512,8 +532,14 @@ mod tests {
 
     #[test]
     fn host_port_splitting() {
-        assert_eq!(split_host_port("example.com:8443", 443), ("example.com".to_string(), 8443));
-        assert_eq!(split_host_port("example.com", 80), ("example.com".to_string(), 80));
+        assert_eq!(
+            split_host_port("example.com:8443", 443),
+            ("example.com".to_string(), 8443)
+        );
+        assert_eq!(
+            split_host_port("example.com", 80),
+            ("example.com".to_string(), 80)
+        );
     }
 
     #[test]

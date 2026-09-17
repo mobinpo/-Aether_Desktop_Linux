@@ -218,25 +218,177 @@ export function fitCanvas(canvas, cssWidth, cssHeight) {
 }
 
 /**
- * حلقهٔ فریم مشترک — با یک قاعده: هر بار که صفحه دیده نمی‌شود متوقف شود.
+ * سقفِ نرخِ فریم برای هر نمایش — یک‌جا، تا قابلِ تنظیم و قابلِ بازبینی باشد.
+ *
+ * # چرا سقف، و چرا این عددها
+ *
+ * هیچ‌یک از این سه نمایش حرکتی سریع‌تر از چند ثانیه‌بر‌دور ندارد: دورِ نورِ لبه
+ * ۵۲۰۰ms است، موجِ پینگ ۱۵۰۰ms، و کندترین ساعتِ نشان ۳۴۰۰ms. برای حرکتی با این
+ * سرعت، ۶۰ فریم بر ثانیه چیزی به آنچه چشم می‌بیند اضافه نمی‌کند ولی هزینه را
+ * دقیقاً به همان نسبت بالا می‌برد — و هزینهٔ این سه، رَستری‌کردنِ ده‌ها قلمِ پهن
+ * با blendِ جمعی است، نه اجرای جاوااسکریپت.
+ *
+ * عددها جدا هستند چون کارِ هر فریم جداست: موجِ پینگ در هر فریم ۲۶ مستطیل
+ * گردگوشه می‌کشد و گران‌ترینِ سه‌تاست، پس بیشترین کاهش را می‌گیرد.
+ */
+export const FRAME_CAPS = {
+  /** نورِ متحرکِ لبهٔ کارت — ۳۵ قلمِ جمعی در هر فریم. */
+  edge: 45,
+  /** متر قدرت پینگ — ۲۶ مستطیل گردگوشه در هر فریم. */
+  wave: 30,
+  /** نشانِ A — گرادیان‌ها، کلیپ و لبهٔ نئون. */
+  mark: 40,
+}
+
+// =============================================================================
+//  زمان‌بندِ مشترکِ فریم
+// -----------------------------------------------------------------------------
+//  تا ۱.۲.۵ هر نمایش `requestAnimationFrame` خودش را داشت. سه نمایشِ هم‌زمان
+//  یعنی سه زنجیرهٔ مستقلِ rAF که هیچ‌کدام از دیگری خبر ندارد، و — مهم‌تر —
+//  هیچ‌کدام نمی‌داند که پنجره مینیمایز شده است: `__onHide` فقط با *تعویض تب*
+//  صدا زده می‌شود، پس یک پنجرهٔ مینیمایزِ متصل همان ۶۰ فریم را تا پایان عمر
+//  برنامه ادامه می‌داد.
+//
+//  حالا یک rAF همه را می‌راند، هر مشترک سقفِ نرخِ خودش را دارد، و کلِ زمان‌بند
+//  با `visibilitychange` می‌خوابد و بیدار می‌شود. WebView2 مینیمایز و پوشیده‌شدن
+//  را از همین راه گزارش می‌کند.
+// =============================================================================
+
+/** مشترک‌های فعال: `{ draw, minGap, lastAt }`. */
+const subscribers = new Set()
+let rafId = 0
+let scheduler_paused = false
+
+/** ساعتِ زمان‌بند. آرگومانِ rAF مرجح است؛ هارنس‌های بی‌مرورگر آن را نمی‌دهند. */
+function stamp(ts) {
+  if (typeof ts === 'number') return ts
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+function pump(ts) {
+  rafId = 0
+  const now = stamp(ts)
+  // روی یک کپی پیمایش می‌شود: یک `draw` مجاز است خودش را از حلقه بردارد
+  // (متر پینگ وقتی به سکون می‌رسد همین کار را می‌کند).
+  for (const sub of [...subscribers]) {
+    if (!subscribers.has(sub)) continue
+    if (now - sub.lastAt < sub.minGap) continue
+    sub.lastAt = now
+    sub.draw(now)
+  }
+  schedule()
+}
+
+function schedule() {
+  if (rafId || scheduler_paused || subscribers.size === 0) return
+  rafId = requestAnimationFrame(pump)
+}
+
+/** خوابیدن/بیدارشدنِ کلِ زمان‌بند — پنجرهٔ پنهان هیچ فریمی نمی‌سازد. */
+function setPaused(paused) {
+  if (scheduler_paused === paused) return
+  scheduler_paused = paused
+  if (paused) {
+    if (rafId) cancelAnimationFrame(rafId)
+    rafId = 0
+    return
+  }
+  // بیدار که شد، هیچ مشترکی نباید به‌خاطرِ سقفِ نرخ یک فریم عقب بیفتد.
+  for (const sub of subscribers) sub.lastAt = -Infinity
+  schedule()
+}
+
+// `typeof` و نه دسترسیِ مستقیم: هارنس‌های بی‌مرورگرِ `tests/` هیچ `document`
+// نمی‌سازند و این ماژول باید همان‌جا هم بارگذاری شود.
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    setPaused(document.visibilityState === 'hidden' || document.hidden === true)
+  })
+}
+
+/**
+ * حلقهٔ فریم مشترک — با دو قاعده: هر بار که صفحه دیده نمی‌شود متوقف شود، و
+ * هرگز تندتر از سقفی که فراخوان اعلام کرده نکشد.
  *
  * ریشهٔ مشکلی که در نسخهٔ دسکتاپ ۱.۲.۳ داشتیم: انیمیشن‌های CSS وقتی ویندوز
  * `prefers-reduced-motion` گزارش می‌کرد (ماشین مجازی، RDP، «افکت‌های
  * انیمیشن» خاموش) سراسری بی‌اثر می‌شدند و کمان دکمه یخ می‌زد.
  * `requestAnimationFrame` روی کامپوزیتور اجرا می‌شود و این اتفاق برایش
  * نمی‌افتد؛ به همین دلیل تمام حرکتِ این کارت از همین‌جا می‌آید.
+ *
+ * @param draw فراخوانِ ترسیم. ساعتِ فریم را به‌عنوان آرگومان می‌گیرد، تا لازم
+ *   نباشد خودش `performance.now()` را دوباره بخواند.
+ * @param fps سقفِ نرخِ فریم. `0` یعنی بی‌سقف (همان رفتارِ پیشین).
+ * @returns تابعی که این حلقه را واقعاً از زمان‌بند برمی‌دارد.
  */
-export function frameLoop(draw) {
-  let raf = 0
-  let alive = true
-  const step = () => {
-    if (!alive) return
-    draw()
-    raf = requestAnimationFrame(step)
+export function frameLoop(draw, fps = 0) {
+  const sub = {
+    draw,
+    // ۱ms تخفیف: با سقفِ ۳۰ و فاصلهٔ واقعیِ ۳۳.۳ms، مقایسهٔ دقیقِ ≥۳۳.۳ گاهی
+    // یک فریم را بی‌دلیل می‌انداخت و نرخ روی ۲۰ می‌نشست.
+    minGap: fps > 0 ? 1000 / fps - 1 : 0,
+    lastAt: -Infinity,
   }
-  raf = requestAnimationFrame(step)
+  subscribers.add(sub)
+  schedule()
   return () => {
-    alive = false
-    if (raf) cancelAnimationFrame(raf)
+    subscribers.delete(sub)
+    if (subscribers.size === 0 && rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = 0
+    }
+  }
+}
+
+/**
+ * اندازهٔ یک المان را دنبال می‌کند، بی‌آنکه در هر فریم چیدمان را اجبار کند.
+ *
+ * # چرا این لازم شد
+ *
+ * هر سه حلقهٔ ترسیم در **هر فریم** `getBoundingClientRect()` می‌گرفتند. این
+ * فراخوان مرورگر را وادار می‌کند چیدمان را همان‌جا و همان لحظه حساب کند، و
+ * چیزی که با آن سنجیده می‌شد — عرض و ارتفاعِ کارت — بین دو فریم عوض نمی‌شود
+ * مگر پنجره تغییرِ اندازه بدهد.
+ *
+ * `ResizeObserver` همان خبر را می‌دهد بی‌آنکه کسی چیدمان را اجبار کند. جایی که
+ * نیست (هارنس‌های jsdom در `tests/`)، به خواندنِ کم‌تکرار برمی‌گردیم: نیم‌ثانیه
+ * یک‌بار، نه شصت‌بار در ثانیه.
+ */
+export function trackSize(el, onResize) {
+  let width = 0
+  let height = 0
+  let polledAt = -Infinity
+
+  const read = () => {
+    const box = el.getBoundingClientRect()
+    const w = box.width
+    const h = box.height
+    if (w === width && h === height) return
+    width = w
+    height = h
+    onResize?.(w, h)
+  }
+
+  let observer = null
+  if (typeof ResizeObserver === 'function') {
+    // `ResizeObserver` بی‌درنگ یک بار برای اندازهٔ فعلی هم آتش می‌کند.
+    observer = new ResizeObserver(read)
+    observer.observe(el)
+  } else {
+    read()
+  }
+
+  return {
+    get width() { return width },
+    get height() { return height },
+    /** فقط در نبودِ `ResizeObserver` کاری می‌کند. */
+    poll(now) {
+      if (observer) return
+      if (now - polledAt < 500) return
+      polledAt = now
+      read()
+    },
+    read,
+    stop() { observer?.disconnect() },
   }
 }

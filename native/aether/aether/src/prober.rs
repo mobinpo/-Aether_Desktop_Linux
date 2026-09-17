@@ -157,7 +157,9 @@ fn pinned_all(specific: &str) -> Option<&'static [&'static str]> {
     static CACHE: OnceLock<Mutex<HashMap<String, Option<&'static [&'static str]>>>> =
         OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(hit) = guard.get(specific) {
         return *hit;
     }
@@ -211,7 +213,11 @@ fn cidr_v4_contains(cidr: &str, addr: Ipv4Addr) -> bool {
 fn cidr_v6_contains(cidr: &str, addr: Ipv6Addr) -> bool {
     match parse_cidr_v6(cidr) {
         Some((base, len)) if len <= 128 => {
-            let mask = if len == 0 { 0 } else { u128::MAX << (128 - len) };
+            let mask = if len == 0 {
+                0
+            } else {
+                u128::MAX << (128 - len)
+            };
             (u128::from(addr) & mask) == (base & mask)
         }
         _ => false,
@@ -264,7 +270,12 @@ pub fn masque_cidrs_v6() -> Vec<&'static str> {
     prioritize(MASQUE_CIDRS_V6, MASQUE_ZT_CIDRS_V6)
 }
 
-pub const MASQUE_SEEDS_V6: &[&str] = &["2606:4700:d0::a29f:c602", "2606:4700:d1::a29f:c602", "2606:4700:d0::a29f:c601", "2606:4700:d0::a29f:c001"];
+pub const MASQUE_SEEDS_V6: &[&str] = &[
+    "2606:4700:d0::a29f:c602",
+    "2606:4700:d1::a29f:c602",
+    "2606:4700:d0::a29f:c601",
+    "2606:4700:d0::a29f:c001",
+];
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProbeResult {
@@ -492,7 +503,7 @@ pub struct MasqueProbe {
 }
 
 pub async fn host_has_ipv6() -> bool {
-    match tokio::net::UdpSocket::bind("[::]:0").await {
+    match crate::egress::udp_bind("[::]:0".parse().expect("a wildcard address")) {
         Ok(sock) => sock.connect("[2606:4700:d0::a29f:c001]:443").await.is_ok(),
         Err(_) => false,
     }
@@ -596,7 +607,7 @@ pub async fn hunt_best_gateway(probe: &MasqueProbe, mode: ScanMode) -> Result<Pr
                             _ => pr,
                         });
                         found += 1;
-                        
+
                         if st.target_successes > 0 && found >= st.target_successes && quiet_until.is_none() {
                             log::info!("[+] reached target of {} gateways, selecting best", st.target_successes);
                             if !st.quiet_after_first.is_zero() {
@@ -654,7 +665,10 @@ async fn verify_one(
         };
         return match crate::tunnelping::masque_http_ping(&params, IRONCLAD_TCPING_TIMEOUT).await {
             Ok(rtt) => {
-                log::info!("[+] ironclad verified {ip}:{port} real http round trip rtt={:?}", rtt);
+                log::info!(
+                    "[+] ironclad verified {ip}:{port} real http round trip rtt={:?}",
+                    rtt
+                );
                 Some(ProbeResult { ip, port, rtt })
             }
             Err(e) => {
@@ -675,7 +689,10 @@ async fn verify_one(
             local_ipv4: probe.local_ipv4,
             quiet: true,
             pin_endpoint: true,
-            expected_pins: crate::consts::MASQUE_PINS.iter().map(|p| p.to_vec()).collect(),
+            expected_pins: crate::consts::MASQUE_PINS
+                .iter()
+                .map(|p| p.to_vec())
+                .collect(),
         };
         return match crate::masque_h2::verify_h2(&cfg, timeout).await {
             Ok(rtt) => Some(ProbeResult { ip, port, rtt }),
@@ -758,12 +775,16 @@ fn build_candidates(st: &Strategy, ports: &[u16], ip: IpScan) -> Vec<(IpAddr, u1
                 out.push((IpAddr::V6(*a), primary));
             }
         }
-        let per = if st.sample_per_cidr == 0 { 96 } else { st.sample_per_cidr };
+        let per = if st.sample_per_cidr == 0 {
+            96
+        } else {
+            st.sample_per_cidr
+        };
         // >>> AETHER-APP-PATCH scan-cidrs
         // آدرس v6 وارپ یک آدرس v4 را در خودش جا می‌دهد؛ اگر کاربر بازهٔ v4 پین
         // کرده باشد، همان باید جاسازی شود، وگرنه v6 از بازه بیرون می‌زند.
-        let embed_v4: Vec<&'static str> = pinned_cidrs_v4("AETHER_MASQUE_CIDRS")
-            .unwrap_or_else(|| MASQUE_CIDRS_V4.to_vec());
+        let embed_v4: Vec<&'static str> =
+            pinned_cidrs_v4("AETHER_MASQUE_CIDRS").unwrap_or_else(|| MASQUE_CIDRS_V4.to_vec());
         let cidr6: Vec<Vec<Ipv6Addr>> = masque_cidrs_v6()
             .iter()
             .map(|c| sample_cidr_v6(c, per, &embed_v4))
@@ -805,7 +826,10 @@ fn build_candidates(st: &Strategy, ports: &[u16], ip: IpScan) -> Vec<(IpAddr, u1
 
 fn parse_cidr_v4(cidr: &str) -> Option<(u32, u8)> {
     let (ip, prefix) = cidr.split_once('/')?;
-    Some((u32::from(ip.parse::<Ipv4Addr>().ok()?), prefix.parse().ok()?))
+    Some((
+        u32::from(ip.parse::<Ipv4Addr>().ok()?),
+        prefix.parse().ok()?,
+    ))
 }
 
 fn enumerate_cidr_v4(cidr: &str) -> Vec<Ipv4Addr> {
@@ -832,7 +856,11 @@ fn sample_cidr_v4(cidr: &str, n: usize) -> Vec<Ipv4Addr> {
         None => return Vec::new(),
     };
     let host_bits = 32u32.saturating_sub(prefix as u32);
-    let size = if host_bits >= 32 { u32::MAX } else { 1u32 << host_bits };
+    let size = if host_bits >= 32 {
+        u32::MAX
+    } else {
+        1u32 << host_bits
+    };
     if size <= 2 {
         return vec![Ipv4Addr::from(base)];
     }
@@ -855,7 +883,10 @@ fn sample_cidr_v4(cidr: &str, n: usize) -> Vec<Ipv4Addr> {
 
 fn parse_cidr_v6(cidr: &str) -> Option<(u128, u8)> {
     let (ip, prefix) = cidr.split_once('/')?;
-    Some((u128::from(ip.parse::<Ipv6Addr>().ok()?), prefix.parse().ok()?))
+    Some((
+        u128::from(ip.parse::<Ipv6Addr>().ok()?),
+        prefix.parse().ok()?,
+    ))
 }
 
 fn sample_cidr_v6(cidr: &str, n: usize, v4_cidrs: &[&str]) -> Vec<Ipv6Addr> {
@@ -915,7 +946,10 @@ mod tests {
     #[test]
     fn a_pinned_range_replaces_the_built_in_ranges_and_trims_the_seeds() {
         // متغیر مخصوصِ همین آزمون تا با آزمون‌های دیگر (و AETHER_SCAN_CIDRS) قاطی نشود.
-        std::env::set_var("AETHER_TEST_PIN_CIDRS", "188.114.98.0/24, 2606:4700:d0::/64");
+        std::env::set_var(
+            "AETHER_TEST_PIN_CIDRS",
+            "188.114.98.0/24, 2606:4700:d0::/64",
+        );
 
         let v4 = pinned_cidrs_v4("AETHER_TEST_PIN_CIDRS").unwrap();
         assert_eq!(v4, vec!["188.114.98.0/24"]);
@@ -938,8 +972,14 @@ mod tests {
 
     #[test]
     fn range_membership_is_computed_on_the_prefix_not_on_the_text() {
-        assert!(cidr_v4_contains("162.159.192.0/24", "162.159.192.77".parse().unwrap()));
-        assert!(!cidr_v4_contains("162.159.192.0/24", "162.159.193.1".parse().unwrap()));
+        assert!(cidr_v4_contains(
+            "162.159.192.0/24",
+            "162.159.192.77".parse().unwrap()
+        ));
+        assert!(!cidr_v4_contains(
+            "162.159.192.0/24",
+            "162.159.193.1".parse().unwrap()
+        ));
         assert!(cidr_v4_contains("0.0.0.0/0", "8.8.8.8".parse().unwrap()));
         assert!(cidr_v6_contains(
             "2606:4700:d0::/48",
@@ -979,7 +1019,10 @@ mod tests {
     #[test]
     fn without_a_team_the_range_order_is_left_alone() {
         std::env::remove_var("AETHER_TEAM");
-        assert_eq!(prioritize(MASQUE_CIDRS_V4, MASQUE_ZT_CIDRS_V4), MASQUE_CIDRS_V4.to_vec());
+        assert_eq!(
+            prioritize(MASQUE_CIDRS_V4, MASQUE_ZT_CIDRS_V4),
+            MASQUE_CIDRS_V4.to_vec()
+        );
     }
 
     #[test]
@@ -1009,7 +1052,11 @@ mod tests {
     }
 
     async fn quic_answers(peer: SocketAddr, timeout: Duration) -> Option<Duration> {
-        let bind = if peer.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+        let bind = if peer.is_ipv4() {
+            "0.0.0.0:0"
+        } else {
+            "[::]:0"
+        };
         let sock = tokio::net::UdpSocket::bind(bind).await.ok()?;
         sock.connect(peer).await.ok()?;
         let local = sock.local_addr().ok()?;

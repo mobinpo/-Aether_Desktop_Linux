@@ -50,6 +50,37 @@ Copy-Item (Join-Path $root 'dist-engine/psiphon-tunnel-core.exe') (Join-Path $ou
 Copy-Item (Join-Path $root 'dist-engine/server_entries.txt')      (Join-Path $out 'engine') -Force
 $psiVer = Join-Path $root 'dist-engine/PSIPHON_VERSION'
 if (Test-Path $psiVer) { Copy-Item $psiVer (Join-Path $out 'engine') -Force }
+# ترابرِ افزودنیِ تور (اگر ساخته شده باشد) در زیرپوشهٔ `pt` کنار موتور.
+# هستهٔ ۲.۰.۰ همان `<پوشهٔ موتور>/pt` را می‌گردد، و `prepare_runtime_engine`
+# این زیرپوشه را با بقیهٔ موتور به پوشهٔ دادهٔ قابل‌نوشتن منتقل می‌کند.
+#
+# نبودنش خطا نیست و نباید انتشار را نگه دارد: پل‌ها یک افزودنی‌اند، تور بدون
+# آن‌ها هم وصل می‌شود. فقط با صدای بلند گفته می‌شود تا کسی نپرسد چرا نصبِ
+# منتشرشده پل ندارد.
+# تورِ رسمی (اگر تدارک شده باشد) در زیرپوشهٔ `tor` کنارِ موتور: tor.exe،
+# lyrebird.exe، pt_config.json و دو فایلِ geoip. مسیرِ تورِ برنامه از همین
+# باینری می‌گذرد، نه از arti داخلِ موتور؛ دلیلش در سرِ
+# `src-tauri/src/tor_native.rs` است.
+$torSrc = Join-Path $root 'dist-engine/tor'
+if (Test-Path $torSrc) {
+  $torOut = Join-Path $out 'engine/tor'
+  New-Item -ItemType Directory -Force -Path $torOut | Out-Null
+  Copy-Item (Join-Path $torSrc '*') $torOut -Force
+  Write-Host "==> official tor bundled: engine/tor/tor.exe"
+} else {
+  Write-Host "==> no dist-engine/tor; this payload carries no tor binary"
+}
+
+$ptSrc = Join-Path $root 'dist-engine/pt'
+if (Test-Path (Join-Path $ptSrc 'lyrebird.exe')) {
+  $ptOut = Join-Path $out 'engine/pt'
+  New-Item -ItemType Directory -Force -Path $ptOut | Out-Null
+  Copy-Item (Join-Path $ptSrc '*') $ptOut -Force
+  Write-Host "==> pluggable transport bundled: engine/pt/lyrebird.exe"
+} else {
+  Write-Host "==> NOTE: no pluggable transport in this build - Tor works, Tor BRIDGES do not."
+}
+
 # نسخهٔ واقعی هستهٔ سینک‌شده را در payload بگذار (نه برچسب ثابت ریشهٔ مخزن).
 $realVer = Join-Path $root 'native/aether/CORE_VERSION'
 if (Test-Path $realVer) { Copy-Item $realVer (Join-Path $out 'engine') -Force }

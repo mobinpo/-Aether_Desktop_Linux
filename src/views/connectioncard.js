@@ -34,11 +34,13 @@
 import { flagHtml } from '../flags.js'
 import { t } from '../i18n.js'
 import {
+  FRAME_CAPS,
   GlowCycle,
   drawGlowCycle,
   fitCanvas,
   frameLoop,
   roundRectPath,
+  trackSize,
   TWO_PI,
 } from '../ui/glowcycle.js'
 
@@ -59,6 +61,39 @@ const PING_GOOD_MS = 190
 const PING_FAIR_MS = 320
 const PING_BEST_MS = PING_EXCELLENT_MS
 const PING_WORST_MS = 400
+
+// >>> AETHER-APP-PATCH tor-has-its-own-ping-scale
+// ۱.۲.۵ — مقیاس به خطِ لوله بستگی دارد.
+//
+// اعداد بالا برای یک هاپ تا لبهٔ WARP نوشته شده‌اند. تور سه هاپ دارد
+// (با پل چهار)؛ کفِ فیزیکیِ آن دویست و خرده‌ای میلی‌ثانیه است و لاگِ ۱۷
+// سپتامبر هم همین را می‌گوید: `session floor 247 ms`. با مقیاسِ تونل،
+// هر خواندنِ سالمی در تور «Poor» می‌شد — در تصویرِ کاربر ۳۹۷ms زیرِ
+// کلمهٔ Poor نشسته بود در حالی که برای تورِ پل‌دار خواندنِ خوبی است.
+// کارت دروغ نمی‌گوید: عدد همان عدد است، فقط با معیارِ خودِ همین مسیر
+// قضاوت می‌شود.
+const PING_BANDS_TUNNEL = {
+  excellent: PING_EXCELLENT_MS,
+  good: PING_GOOD_MS,
+  fair: PING_FAIR_MS,
+  best: PING_BEST_MS,
+  worst: PING_WORST_MS,
+}
+const PING_BANDS_TOR = {
+  excellent: 250,
+  good: 450,
+  fair: 800,
+  best: 250,
+  worst: 1200,
+}
+
+/** کدام مقیاس به این خطِ لوله می‌خورد؟ `null` و ناشناخته = مقیاسِ تونل. */
+export function pingBandsFor(protocol) {
+  return typeof protocol === 'string' && protocol.toLowerCase().includes('tor')
+    ? PING_BANDS_TOR
+    : PING_BANDS_TUNNEL
+}
+// <<< AETHER-APP-PATCH tor-has-its-own-ping-scale
 const PING_BARS = 26
 const PING_BAR_GAP = 3
 /** سقف پهنای هر میله — رجوع به توضیح در `paintWave`. */
@@ -69,6 +104,21 @@ const PING_POOR = '#FF5C7A'
 const CARD_TEXT_DIM = 'rgba(255,255,255,0.34)'
 
 const DASH = '\u2014'
+
+/**
+ * متن را فقط وقتی می‌نویسد که عوض شده باشد.
+ *
+ * مقدارِ نوشته‌شده روی خودِ گره یادداشت می‌شود و نه با `el.textContent` مقایسه —
+ * خواندنِ `textContent` خودش مرورگر را وادار می‌کند متنِ زیردرخت را از نو بسازد،
+ * که همان چیزی است که می‌خواستیم از آن پرهیز کنیم.
+ */
+function setText(el, value) {
+  if (!el) return
+  const next = String(value)
+  if (el.__aetherText === next) return
+  el.__aetherText = next
+  el.textContent = next
+}
 
 function formatBytes(v) {
   if (v < 1024) return `${Math.round(v)} B`
@@ -93,12 +143,12 @@ function formatClock(totalSecs) {
 /**
  * تنها درجه‌ای که یک خواندنِ تأخیر دارد. رنگ *و* برچسب هر دو از همین می‌آیند.
  */
-function pingGrade(connected, ms) {
+export function pingGrade(connected, ms, bands = PING_BANDS_TUNNEL) {
   if (!connected) return 'offline'
   if (ms == null || ms < 0) return 'measuring'
-  if (ms <= PING_EXCELLENT_MS) return 'excellent'
-  if (ms <= PING_GOOD_MS) return 'good'
-  if (ms <= PING_FAIR_MS) return 'fair'
+  if (ms <= bands.excellent) return 'excellent'
+  if (ms <= bands.good) return 'good'
+  if (ms <= bands.fair) return 'fair'
   return 'poor'
 }
 
@@ -139,11 +189,11 @@ function pingQualityLabel(grade) {
  * جدا از [pingGrade] نگه داشته شده چون یک انیمیشن مقدار پیوسته می‌خواهد؛ ولی
  * دیگر چیزی را تصمیم نمی‌گیرد که یک *کلمه* هم تصمیم می‌گیرد.
  */
-function pingStrength(connected, ms) {
+export function pingStrength(connected, ms, bands = PING_BANDS_TUNNEL) {
   if (!connected || ms == null || ms < 0) return 0
-  if (ms <= PING_BEST_MS) return 1
-  if (ms >= PING_WORST_MS) return 0.08
-  return 1 - (ms - PING_BEST_MS) / (PING_WORST_MS - PING_BEST_MS)
+  if (ms <= bands.best) return 1
+  if (ms >= bands.worst) return 0.08
+  return 1 - (ms - bands.best) / (bands.worst - bands.best)
 }
 
 /**
@@ -184,7 +234,7 @@ export function createConnectionCard() {
           </span>
           <span class="ccard__speed-text">
             <span class="ccard__speed-rate ltr" dir="ltr" id="cc-rx-rate">0 B/s</span>
-            <span class="ccard__speed-total" id="cc-rx-total">${t('Total')} <bdi>0 B</bdi></span>
+            <span class="ccard__speed-total">${t('Total')} <bdi id="cc-rx-total">0 B</bdi></span>
           </span>
         </div>
         <span class="ccard__divider" aria-hidden="true"></span>
@@ -197,7 +247,7 @@ export function createConnectionCard() {
           </span>
           <span class="ccard__speed-text">
             <span class="ccard__speed-rate ltr" dir="ltr" id="cc-tx-rate">0 B/s</span>
-            <span class="ccard__speed-total" id="cc-tx-total">${t('Total')} <bdi>0 B</bdi></span>
+            <span class="ccard__speed-total">${t('Total')} <bdi id="cc-tx-total">0 B</bdi></span>
           </span>
         </div>
       </div>
@@ -234,6 +284,9 @@ export function createConnectionCard() {
 
   // ---- وضعیتِ زندهٔ ترسیم ------------------------------------------------
   let accent = IDLE_ACCENT
+  // آخرین لهجه‌ای که واقعاً روی گره نوشته شد — نوشتنِ یک متغیرِ CSS با همان
+  // مقدارِ قبلی، بازمحاسبهٔ سبکِ کلِ زیردرخت را به‌دنبال دارد.
+  let paintedAccent = null
   let connected = false
   // چرخهٔ نور: فقط وقتی متصل‌ایم ساخته می‌شود — بی‌هیچ اشتراکِ فریم در حالت
   // قطع، همان قاعدهٔ `if (connected) rememberGlowCycle() else null`.
@@ -245,6 +298,19 @@ export function createConnectionCard() {
   let level = 0
   let levelTarget = 0
   let levelAt = performance.now()
+  // مقیاسِ پینگِ نشستِ جاری — با هر رندر از برچسبِ خطِ لوله تازه می‌شود.
+  let bands = PING_BANDS_TUNNEL
+
+  // دستگیرهٔ دو حلقهٔ فریم، و «نما روی صفحه است؟».
+  //
+  // پیش از `trackSize` اعلام می‌شوند و نه پایین‌تر: جایی که `ResizeObserver`
+  // نیست (هارنس‌های jsdom در `tests/`)، `trackSize` پاسخِ خودش را همان لحطهٔ
+  // ساخته‌شدن و همگام صدا می‌زند، و آن پاسخ به `requestWaveFrame` می‌رسد.
+  // با اعلامِ پایین‌تر، همان پاسخ در ناحیهٔ مردهٔ `let` می‌افتاد و با ReferenceError
+  // می‌مرد — همان جایی که در بازنویسیِ این پرونده یک بار شکست.
+  let stopEdge = null
+  let stopWave = null
+  let visible = false
 
   // نرخ لحظه‌ای از دلتای بایت‌ها روی ساعت یکنواخت — یک جهش ساعت دیواری
   // نباید بتواند یک اسپایک جعلی بسازد.
@@ -255,12 +321,29 @@ export function createConnectionCard() {
   // ---- لبهٔ کارت -----------------------------------------------------------
   // یک تابش نرم درونی، یک حاشیهٔ مویی، و — تا وقتی متصل‌ایم — نور متحرک،
   // یک رنگ در هر دور.
-  const drawEdgeFrame = () => {
-    const box = node.getBoundingClientRect()
-    if (box.width <= 0 || box.height <= 0) return
-    fitCanvas(edge, box.width, box.height)
+  //
+  // ۱.۲.۵-perf: هندسه و گرادیان بین فریم‌ها **کَش** می‌شوند. هیچ‌کدام به زمان
+  // وابسته نیست — مسیر فقط به اندازهٔ کارت بستگی دارد و گرادیان به اندازه و
+  // رنگِ لهجه — ولی هر فریم از نو ساخته می‌شدند: یک `Path2D` و یک
+  // `CanvasGradient` تازه، شصت بار در ثانیه، که هم تخصیص است و هم فشارِ مداوم
+  // روی جمع‌آورِ حافظه.
+  let edgePath = null
+  let edgePerimeter = 0
+  let edgeGrad = null
+  let edgeGradKey = ''
+
+  const edgeSize = trackSize(node, () => { edgePath = null; edgeGrad = null })
+
+  const drawEdgeFrame = (now) => {
+    edgeSize.poll(now)
+    const width = edgeSize.width
+    const height = edgeSize.height
+    if (width <= 0 || height <= 0) return
     const ctx = edge.getContext('2d')
-    ctx.clearRect(0, 0, box.width, box.height)
+    // تغییرِ اندازهٔ بافرِ canvas خودش محتوا را پاک می‌کند و ترنسفورم را
+    // بازمی‌نشاند، پس هندسهٔ کَش‌شده هم باید دور ریخته شود.
+    if (fitCanvas(edge, width, height)) edgePath = null
+    ctx.clearRect(0, 0, width, height)
 
     const hairline = 1
     // نور متحرک کمی پهن‌تر از حاشیهٔ ساختاری کشیده می‌شود: در ۱ پیکسل، هستهٔ
@@ -268,23 +351,32 @@ export function createConnectionCard() {
     // می‌کند. ۱.۵ بیشتر اوقات روی مرز پیکسل می‌نشیند و مثل رشتهٔ نور تیز
     // خوانده می‌شود.
     const lightStroke = 1.5
-    const { path, perimeter } = roundRectPath(box.width, box.height, CARD_RADIUS, hairline / 2)
+    if (!edgePath) {
+      const built = roundRectPath(width, height, CARD_RADIUS, hairline / 2)
+      edgePath = built.path
+      edgePerimeter = built.perimeter
+      edgeGrad = null
+    }
 
-    const grad = ctx.createRadialGradient(
-      box.width / 2, 0, 0,
-      box.width / 2, 0, box.width * 0.95,
-    )
-    grad.addColorStop(0, hexAlpha(accent, 0.10))
-    grad.addColorStop(1, hexAlpha(accent, 0))
-    ctx.fillStyle = grad
-    ctx.fill(path)
+    const gradKey = `${width}\u00d7${height}\u00d7${accent}`
+    if (!edgeGrad || edgeGradKey !== gradKey) {
+      edgeGrad = ctx.createRadialGradient(
+        width / 2, 0, 0,
+        width / 2, 0, width * 0.95,
+      )
+      edgeGrad.addColorStop(0, hexAlpha(accent, 0.10))
+      edgeGrad.addColorStop(1, hexAlpha(accent, 0))
+      edgeGradKey = gradKey
+    }
+    ctx.fillStyle = edgeGrad
+    ctx.fill(edgePath)
 
     ctx.strokeStyle = hexAlpha(accent, cycle ? 0.16 : 0.10)
     ctx.lineWidth = hairline
     ctx.setLineDash([])
-    ctx.stroke(path)
+    ctx.stroke(edgePath)
 
-    if (cycle) drawGlowCycle(ctx, path, perimeter, cycle, lightStroke)
+    if (cycle) drawGlowCycle(ctx, edgePath, edgePerimeter, cycle, lightStroke)
   }
 
   // ---- متر قدرت پینگ ------------------------------------------------------
@@ -292,22 +384,31 @@ export function createConnectionCard() {
   // میله‌های گرد که ارتفاع، روشنایی و رنگش کیفیت آخرین کاوش را دنبال می‌کند.
   // سرعتِ حرکت عمداً ثابت است: در موبایل مشتق‌کردنش از تأخیر باعث می‌شد spec
   // در هر کاوش عوض شود و موج هر چهار ثانیه یک‌بار به‌چشم بپرد.
-  const drawWaveFrame = () => {
-    const box = wave.getBoundingClientRect()
-    if (box.width <= 0 || box.height <= 0) return
-    fitCanvas(wave, box.width, box.height)
-    const ctx = wave.getContext('2d')
-    ctx.clearRect(0, 0, box.width, box.height)
+  //
+  // ۱.۲.۵-perf — دو چیز عوض شد و هیچ‌کدام ظاهر را عوض نمی‌کند:
+  //
+  //   * چیدمانِ ردیف (پهنای میله، گام، مبدأ) روی تغییرِ اندازه حساب می‌شود و
+  //     نه در هر فریم؛ همان چهار تقسیمِ ساده بود، ولی کنارش یک
+  //     `getBoundingClientRect()` می‌نشست که مرورگر را وادار به محاسبهٔ
+  //     چیدمان می‌کرد.
+  //   * حلقه وقتی چیزی برای نشان‌دادن نیست **می‌ایستد**. در حالت قطع، ارتفاعِ
+  //     میله‌ها صفر است و موج حرکت نمی‌کند (`phase = 0`)، پس هر فریم دقیقاً
+  //     همان تصویرِ فریمِ قبل را می‌کشید — ۲۶ مستطیل گردگوشه، شصت بار در ثانیه،
+  //     برای تصویری که تکان نمی‌خورد. سنجهٔ `bench/count-card-ops.mjs` همین را
+  //     نشان داد: کارتِ قطع ۳۲۲ فراخوانِ canvas در هر فریم داشت، در برابر ۳۶۶
+  //     در حالت متصل.
+  let waveLayout = null
 
-    const now = performance.now()
-    // میان‌یابی ساعت‌محور به سمت هدف — معادل animateFloatAsState(tween(700)).
-    const dt = Math.min(1, (now - levelAt) / 700)
-    levelAt = now
-    level += (levelTarget - level) * dt
+  const waveSize = trackSize(wave, () => {
+    waveLayout = null
+    // اندازه تازه شد، و ممکن است حلقه ایستاده باشد (حالتِ قطع). بدون این یک
+    // فریم، متر در اولین نمایش خالی می‌ماند: `ResizeObserver` فقط پس از
+    // اتصالِ نود به سند آتش می‌کند و تا آن لحطه عرض و ارتفاع صفر بوده‌اند، پس
+    // `drawWaveFrame` زود برمی‌گشت و دیگر هیچ‌کس صدایش نمی‌زد.
+    requestWaveFrame()
+  })
 
-    const grade = pingGrade(connected, lastMs)
-    const tint = pingTint(grade)
-    const phase = connected ? (now % PING_WAVE_MS) / PING_WAVE_MS : 0
+  const layoutWave = (boxWidth, boxHeight) => {
     const gap = PING_BAR_GAP
     // ۱.۲.۴-p4 — میله‌ها سقف پهنا دارند و ردیف وسط‌چین می‌شود.
     //
@@ -315,13 +416,42 @@ export function createConnectionCard() {
     // پهن‌تر می‌شد مستقیماً به میله‌ها می‌رفت و دایره‌های موبایل روی دسکتاپ به
     // کپسولِ کشیده تبدیل می‌شدند. ۱۱ پیکسل همان پهنایی است که ۲۶ میله در کارت
     // گوشی دارند؛ سقف می‌گذاریم و نه مقدار ثابت، تا در پنجرهٔ باریک باز هم جا شود.
-    const barWidth = Math.min(PING_BAR_MAX_W, (box.width + gap) / PING_BARS - gap)
-    if (barWidth <= 0) return
+    const barWidth = Math.min(PING_BAR_MAX_W, (boxWidth + gap) / PING_BARS - gap)
+    if (barWidth <= 0) return null
     const pitch = barWidth + gap
     const rowWidth = PING_BARS * pitch - gap
-    const originX = (box.width - rowWidth) / 2
-    const radius = barWidth / 2
-    const floorH = box.height * 0.16
+    return {
+      width: boxWidth,
+      height: boxHeight,
+      barWidth,
+      pitch,
+      originX: (boxWidth - rowWidth) / 2,
+      radius: barWidth / 2,
+      floorH: boxHeight * 0.16,
+    }
+  }
+
+  const drawWaveFrame = (now) => {
+    waveSize.poll(now)
+    const boxWidth = waveSize.width
+    const boxHeight = waveSize.height
+    if (boxWidth <= 0 || boxHeight <= 0) return
+    const ctx = wave.getContext('2d')
+    fitCanvas(wave, boxWidth, boxHeight)
+    ctx.clearRect(0, 0, boxWidth, boxHeight)
+
+    // میان‌یابی ساعت‌محور به سمت هدف — معادل animateFloatAsState(tween(700)).
+    const dt = Math.min(1, (now - levelAt) / 700)
+    levelAt = now
+    level += (levelTarget - level) * dt
+
+    if (!waveLayout) waveLayout = layoutWave(boxWidth, boxHeight)
+    const L = waveLayout
+    if (!L) return
+
+    const grade = pingGrade(connected, lastMs, bands)
+    const tint = pingTint(grade)
+    const phase = connected ? (now % PING_WAVE_MS) / PING_WAVE_MS : 0
 
     for (let i = 0; i < PING_BARS; i++) {
       const x = i / (PING_BARS - 1)
@@ -330,14 +460,36 @@ export function createConnectionCard() {
       const a = 0.5 + 0.5 * Math.sin(TWO_PI * (2.0 * x - phase))
       const b = 0.5 + 0.5 * Math.sin(TWO_PI * (3.7 * x + 1.6 * phase))
       const w = 0.58 * a + 0.42 * b
-      const h = floorH + (box.height - floorH) * level * w
-      const top = (box.height - h) / 2
-      const left = originX + i * pitch
+      const h = L.floorH + (boxHeight - L.floorH) * level * w
+      const top = (boxHeight - h) / 2
+      const left = L.originX + i * L.pitch
       const alpha = 0.30 + 0.70 * w * (0.25 + 0.75 * level)
 
       ctx.fillStyle = hexAlpha(tint, Math.min(1, Math.max(0, alpha)))
-      roundBar(ctx, left, top, barWidth, h, radius)
+      roundBar(ctx, left, top, L.barWidth, h, L.radius)
     }
+
+    // تصویرِ ساکن، حلقهٔ ساکن. آخرین فریم پیش از ایستادن همان فریمِ صافِ حالتِ
+    // قطع است، پس چیزی نیمه‌کشیده روی صفحه نمی‌ماند؛ `paint` هر وقت لازم شود
+    // دوباره حلقه را راه می‌اندازد.
+    if (waveIsIdle()) stopWaveLoop()
+  }
+
+  /** موج چیزی برای نشان‌دادن ندارد؟ (قطع، و میله‌ها به صفر رسیده‌اند) */
+  function waveIsIdle() {
+    return !connected && level < 0.004 && levelTarget < 0.004
+  }
+
+  /**
+   * یک فریمِ تک، وقتی حلقه ایستاده ولی تصویر باید تازه شود.
+   *
+   * `function` و نه `const`: این دو تابع از پاسخِ `trackSize` صدا زده می‌شوند که
+   * ممکن است بالاتر از اینجا بیفتد؛ اعلامِ `function` بالا می‌رود و مستقل از
+   * ترتیبِ سطرها کار می‌کند.
+   */
+  function requestWaveFrame() {
+    if (stopWave || !visible) return
+    drawWaveFrame(performance.now())
   }
 
   // حلقه‌های فریم، قابل شروع و توقف.
@@ -346,17 +498,35 @@ export function createConnectionCard() {
   // حلقه به عمر *نما* گره نخورند، کارتِ نامرئی تا پایان عمر برنامه شصت فریم در
   // ثانیه می‌کشد — همان هزینهٔ پس‌زمینه‌ای که ۱.۲.۳ برای امیت‌کردن snapshotِ
   // بی‌تغییر می‌داد و ریشه‌اش کنده شد.
-  let stopEdge = null
-  let stopWave = null
+  //
+  // ۱.۲.۵-perf: حلقهٔ موج علاوه بر این، *به‌خودیِ‌خود* هم می‌ایستد. `visible`
+  // یادش می‌ماند که نما روی صفحه است یا نه، وگرنه یک `paint` که در غیبتِ تب
+  // برسد، حلقهٔ ایستاده را روی تبِ نامرئی از نو راه می‌انداخت.
+  // (اعلامِ سه متغیر بالاتر است — دلیلش همانجا نوشته شده.)
+
+  const stopWaveLoop = () => {
+    if (stopWave) { stopWave(); stopWave = null }
+  }
+
+  const startWaveLoop = () => {
+    if (!visible || stopWave) return
+    // ساعتِ میان‌یابی از سرِ ایستادن ادامه پیدا کند، نه از لحظهٔ توقف: وگرنه
+    // اولین `dt` بعد از بیدارشدن به ۱ می‌رسد و میله‌ها به هدف می‌پرند.
+    levelAt = performance.now()
+    stopWave = frameLoop(drawWaveFrame, FRAME_CAPS.wave)
+  }
 
   function start() {
-    if (!stopEdge) stopEdge = frameLoop(drawEdgeFrame)
-    if (!stopWave) stopWave = frameLoop(drawWaveFrame)
+    visible = true
+    if (!stopEdge) stopEdge = frameLoop(drawEdgeFrame, FRAME_CAPS.edge)
+    if (!waveIsIdle()) startWaveLoop()
+    else drawWaveFrame(performance.now())
   }
 
   function stop() {
+    visible = false
     if (stopEdge) { stopEdge(); stopEdge = null }
-    if (stopWave) { stopWave(); stopWave = null }
+    stopWaveLoop()
   }
 
   /**
@@ -365,50 +535,68 @@ export function createConnectionCard() {
    * سرعت‌ها *فقط* اینجا نمونه‌برداری می‌شوند و نه در حلقهٔ فریم: نرخ باید از
    * دلتای بایت‌های واقعیِ موتور بیاید، و موتور هر ۲۰۰ میلی‌ثانیه یک snapshot
    * می‌فرستد.
+   *
+   * ۱.۲.۵-perf — هر نوشتن روی DOM از `setText` می‌گذرد و فقط وقتی انجام می‌شود
+   * که مقدار **واقعاً** عوض شده باشد. پیش از این هر رسیدنِ snapshot حدود پانزده
+   * `textContent` و چهار `innerHTML` می‌نوشت، پنج بار در ثانیه، در حالی که
+   * بیشترشان در طولِ یک نشست هرگز عوض نمی‌شوند (`cc-proto`، `cc-endpoint`،
+   * برچسبِ آی‌پی). یک نوشتنِ بی‌تغییر روی `textContent` هم مرورگر را وادار به
+   * بازمحاسبهٔ سبک و چیدمانِ همان زیردرخت می‌کند، و `innerHTML` علاوه بر آن
+   * HTML را از نو parse می‌کند.
    */
   function paint(snapshot, opts) {
     const busy = !!(opts && opts.busy)
     const failed = snapshot.state === 'FAILED'
+    const wasConnected = connected
     connected = snapshot.state === 'CONNECTED'
     accent = failed ? ERROR_ACCENT : connected ? AETHER_MINT : IDLE_ACCENT
 
     if (connected && !cycle) cycle = new GlowCycle()
     if (!connected && cycle) cycle = null
 
-    node.style.setProperty('--cc-accent', accent)
+    if (accent !== paintedAccent) {
+      paintedAccent = accent
+      node.style.setProperty('--cc-accent', accent)
+    }
     node.classList.toggle('is-on', connected)
     node.classList.toggle('is-error', failed)
 
     // ۱. وضعیت
     const title = el('cc-title')
-    title.textContent = opts.title
-    title.style.color = accent
-    el('cc-caption').textContent = opts.caption
+    setText(title, opts.title)
+    if (title.style.color !== accent) title.style.color = accent
+    setText(el('cc-caption'), opts.caption)
 
     // ۲. تایمر — در حالت قطع، خاموش و کم‌رنگ می‌ماند و صفر نشان می‌دهد؛
     //    ردیف هرگز از کارت حذف نمی‌شود تا ارتفاع کارت نلرزد.
     const clock = el('cc-clock')
-    clock.textContent = formatClock(connected ? snapshot.uptimeSecs : 0)
+    setText(clock, formatClock(connected ? snapshot.uptimeSecs : 0))
     clock.classList.toggle('is-dim', !connected)
 
     // ۳. پیل آی‌پی
     const info = snapshot.ipInfo
     const viaTunnel = !!(info && info.viaTunnel)
-    el('cc-ip-label').textContent = viaTunnel ? t('Server IP') : t('Your IP')
+    setText(el('cc-ip-label'), viaTunnel ? t('Server IP') : t('Your IP'))
     const pill = el('cc-pill')
     pill.classList.toggle('is-tunnel', viaTunnel)
     const flagBox = el('cc-ip-flag')
     // پرچم SVG درون‌ساخت است چون ویندوز فونت ایموجی پرچم ندارد و کد کشور
     // به‌صورت دو حرف («DE») رندر می‌شد.
     flagBox.hidden = !info
-    if (info) flagBox.innerHTML = flagHtml(info.countryCode)
-    el('cc-ip-value').textContent = busy
+    // پرچم تنها جایی است که `innerHTML` می‌ماند (یک SVG است، نه متن) — پس با
+    // کدِ کشور مقایسه می‌شود تا در هر snapshot از نو parse نشود.
+    const flagKey = info ? String(info.countryCode ?? '') : ''
+    if (info && flagBox.dataset.cc !== flagKey) {
+      flagBox.dataset.cc = flagKey
+      flagBox.innerHTML = flagHtml(info.countryCode)
+    }
+    setText(el('cc-ip-value'), busy
       ? t('Checking IP…')
       : info
         ? info.ip
         : snapshot.ipLoading
           ? t('Checking IP…')
-          : t('IP unavailable')
+          : t('IP unavailable'))
 
     // ۴. سرعت‌ها
     if (connected) {
@@ -417,40 +605,49 @@ export function createConnectionCard() {
         const seconds = (now - lastSampleAt) / 1000
         const rx = Math.max(0, (snapshot.rxBytes - lastRx) / seconds)
         const tx = Math.max(0, (snapshot.txBytes - lastTx) / seconds)
-        el('cc-rx-rate').textContent = formatRate(rx)
-        el('cc-tx-rate').textContent = formatRate(tx)
+        setText(el('cc-rx-rate'), formatRate(rx))
+        setText(el('cc-tx-rate'), formatRate(tx))
       }
       lastRx = snapshot.rxBytes
       lastTx = snapshot.txBytes
       lastSampleAt = now
-      el('cc-rx-total').innerHTML = `${t('Total')} <bdi>${formatBytes(snapshot.rxBytes)}</bdi>`
-      el('cc-tx-total').innerHTML = `${t('Total')} <bdi>${formatBytes(snapshot.txBytes)}</bdi>`
+      setText(el('cc-rx-total'), formatBytes(snapshot.rxBytes))
+      setText(el('cc-tx-total'), formatBytes(snapshot.txBytes))
     } else {
       lastRx = -1
       lastTx = -1
       lastSampleAt = 0
-      el('cc-rx-rate').textContent = '0 B/s'
-      el('cc-tx-rate').textContent = '0 B/s'
-      el('cc-rx-total').innerHTML = `${t('Total')} <bdi>0 B</bdi>`
-      el('cc-tx-total').innerHTML = `${t('Total')} <bdi>0 B</bdi>`
+      setText(el('cc-rx-rate'), '0 B/s')
+      setText(el('cc-tx-rate'), '0 B/s')
+      setText(el('cc-rx-total'), '0 B')
+      setText(el('cc-tx-total'), '0 B')
     }
 
     // ۵–۷. اسلایدهای متا
-    el('cc-proto').textContent = connected ? (snapshot.protocol ?? DASH) : DASH
-    el('cc-endpoint').textContent = connected ? (snapshot.endpoint ?? '\u2026') : DASH
+    setText(el('cc-proto'), connected ? (snapshot.protocol ?? DASH) : DASH)
+    setText(el('cc-endpoint'), connected ? (snapshot.endpoint ?? '\u2026') : DASH)
 
     lastMs = !connected ? -1 : snapshot.latencyMs != null ? snapshot.latencyMs : lastMs
-    el('cc-latency').textContent = !connected
+    setText(el('cc-latency'), !connected
       ? DASH
       : lastMs >= 0
         ? `${lastMs} ms`
-        : '\u2026'
+        : '\u2026')
 
-    const grade = pingGrade(connected, lastMs)
+    // مقیاسِ پینگ از خطِ لولهٔ همین نشست می‌آید — پیش از هر قضاوتی روی عدد.
+    bands = pingBandsFor(connected ? snapshot.protocol : null)
+
+    const grade = pingGrade(connected, lastMs, bands)
     const quality = el('cc-ping-q')
-    quality.textContent = pingQualityLabel(grade)
-    quality.style.color = connected ? pingTint(grade) : CARD_TEXT_DIM
-    levelTarget = pingStrength(connected, lastMs)
+    setText(quality, pingQualityLabel(grade))
+    const qColour = connected ? pingTint(grade) : CARD_TEXT_DIM
+    if (quality.style.color !== qColour) quality.style.color = qColour
+    levelTarget = pingStrength(connected, lastMs, bands)
+
+    // موج باید بدود؟ هر گذاری که چیزی برای نشان‌دادن می‌سازد، حلقهٔ ایستاده را
+    // بیدار می‌کند — وصل‌شدن، و همچنین قطع‌شدن (میله‌ها باید *به‌نرمی* بخوابند
+    // و نه یک‌دفعه ناپدید شوند).
+    if (!waveIsIdle() || wasConnected !== connected) startWaveLoop()
   }
 
   start()

@@ -104,11 +104,36 @@ pub struct Target {
 /// the plain-HTTP tier are the desktop's fallbacks for a Windows TLS stack that
 /// refuses to hand-shake against an address.
 pub const TARGETS: [Target; 5] = [
-    Target { host: "1.1.1.1", port: 443, tls: true, strict_hostname: false },
-    Target { host: "8.8.8.8", port: 443, tls: true, strict_hostname: false },
-    Target { host: "9.9.9.9", port: 443, tls: true, strict_hostname: false },
-    Target { host: "www.cloudflare.com", port: 443, tls: true, strict_hostname: true },
-    Target { host: "1.1.1.1", port: 80, tls: false, strict_hostname: false },
+    Target {
+        host: "1.1.1.1",
+        port: 443,
+        tls: true,
+        strict_hostname: false,
+    },
+    Target {
+        host: "8.8.8.8",
+        port: 443,
+        tls: true,
+        strict_hostname: false,
+    },
+    Target {
+        host: "9.9.9.9",
+        port: 443,
+        tls: true,
+        strict_hostname: false,
+    },
+    Target {
+        host: "www.cloudflare.com",
+        port: 443,
+        tls: true,
+        strict_hostname: true,
+    },
+    Target {
+        host: "1.1.1.1",
+        port: 80,
+        tls: false,
+        strict_hostname: false,
+    },
 ];
 
 /// The destinations above, for whoever needs to exempt them from health scoring.
@@ -150,7 +175,13 @@ static SETUP_MS: AtomicI64 = AtomicI64::new(-1);
 
 fn cell() -> &'static Mutex<Session> {
     static CELL: OnceLock<Mutex<Session>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(Session { warm: None, floor_ms: None, generation: 0 }))
+    CELL.get_or_init(|| {
+        Mutex::new(Session {
+            warm: None,
+            floor_ms: None,
+            generation: 0,
+        })
+    })
 }
 
 /// What it cost to establish the current warm probe session, if any.
@@ -196,7 +227,11 @@ fn open_warm(target: &Target) -> Option<Warm> {
     };
 
     SETUP_MS.store(started.elapsed().as_millis() as i64, Ordering::Relaxed);
-    Some(Warm { io, host: target.host, port: target.port })
+    Some(Warm {
+        io,
+        host: target.host,
+        port: target.port,
+    })
 }
 
 /// One application round trip on an ALREADY ESTABLISHED session.

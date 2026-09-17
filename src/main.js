@@ -37,6 +37,7 @@ export const app = {
     // v1.2.0 — سنجش نشتی WebRTC: null = هنوز سنجیده نشده.
     webrtcLeak: null,
     leakGuard: false,
+    torPercent: null,
   },
   profile: null,
   tab: 'home',
@@ -52,7 +53,7 @@ export function onChange(fn, owner = null) {
   return () => app.listeners.delete(entry)
 }
 
-function emit() {
+export function emit() {
   for (const l of app.listeners) {
     if (l.owner && !l.owner.isConnected) continue
     l.fn(app)
@@ -102,6 +103,7 @@ export async function saveProfile(patch) {
  */
 export function applyProfileSnapshot(profile) {
   app.profile = profile
+  dropProfileViews()
   emit()
 }
 
@@ -257,6 +259,18 @@ function renderTab() {
   for (const b of document.querySelectorAll('.rail__item')) {
     b.classList.toggle('is-active', b.dataset.tab === app.tab)
   }
+  // v14 — یک آپدیت را که وقتی این تب پنهان بود از دست رفت، همین‌جا برمی‌گردانیم.
+  //
+  // `emit()` هر listenerی را که مالکش هنوز `isConnected` نیست رد می‌کند —
+  // دقیقاً همان چیزی که این تب را تا این لحظه ارزان نگه می‌داشت. مشکل این بود
+  // که هیچ‌کس، درست در لحظه‌ای که یک نودِ کش‌شده دوباره متصل می‌شود، این
+  // رد‌شده‌ها را دوباره صدا نمی‌زد؛ یک `emit()` که *وسطِ* غیبتِ این تب اتفاق
+  // می‌افتاد (مثلاً `saveProfile` از تبِ Settings) برای همیشه گم می‌شد و تنها
+  // با رخداد بعدیِ `emit` (که مقدارِ *آن لحظه* را می‌داد، نه لزوماً مقدارِ درست
+  // برای این ردیف) جایش پر می‌شد. همین‌جا، بعد از اتصالِ دوبارهٔ نود، یک
+  // `emit()` تازه تضمین می‌کند هر چیزی که این تب نشان می‌دهد با `app.profile`/
+  // `app.snapshot` *همین الان* یکی است — نه با آخرین باری که این تب دیده شد.
+  emit()
 }
 
 // Drops a cached view so the next visit rebuilds it. Used by panels whose markup
@@ -268,11 +282,62 @@ export function refreshTab(tab = app.tab) {
   if (tab === app.tab) renderTab()
 }
 
+/// Tabs whose MARKUP is built from the profile.
+///
+/// Only one, and that is the point: `advanced.js` reads `app.profile` while it
+/// builds its controls and never subscribes to `onChange`. Combined with the
+/// view cache above, a profile that Rust writes -- the assistant applying a
+/// change, Smart Auto lowering the noize, `reset_profile` -- left the built
+/// panel showing the OLD value for the rest of the session. The hub row updated
+/// (it has an `onChange`), so the row said one thing and the control under it
+/// said another.
+const PROFILE_TABS = ['advanced']
+
+/// A rebuild pending because the user is typing. See [`dropProfileViews`].
+let profileTabStale = false
+
+/// True while the caret sits in an editable control inside [node].
+function editingInside(node) {
+  const active = document.activeElement
+  if (!active || active === document.body || !node.contains(active)) return false
+  return active.matches('input, textarea, select, [contenteditable="true"]')
+}
+
+/// Throws away the profile-built views so the next paint reads the new profile.
+///
+/// The one case that must NOT rebuild immediately is a user typing into the
+/// panel (a bridge line, a team name): a snapshot arriving mid-keystroke would
+/// replace the field under the caret and eat the edit. There the rebuild is
+/// deferred to the next time the tab is shown.
+function dropProfileViews() {
+  for (const tab of PROFILE_TABS) {
+    const node = BUILT.get(tab)
+    if (!node) continue
+    if (node === mounted && editingInside(node)) {
+      profileTabStale = true
+      continue
+    }
+    if (node === mounted) refreshTab(tab)
+    else BUILT.delete(tab)
+  }
+}
+
+/// Switches tab. The rail and the jsdom harness go through here, so the cache
+/// invalidation cannot be true on one path and false on the other.
+export function showTab(tab) {
+  app.tab = tab
+  if (profileTabStale && PROFILE_TABS.includes(tab)) {
+    profileTabStale = false
+    BUILT.delete(tab)
+    if (mounted && BUILT.get(tab) === undefined) mounted = null
+  }
+  renderTab()
+}
+
 function wireRail() {
   for (const b of document.querySelectorAll('.rail__item')) {
     b.addEventListener('click', () => {
-      app.tab = b.dataset.tab
-      renderTab()
+      showTab(b.dataset.tab)
     })
   }
 }

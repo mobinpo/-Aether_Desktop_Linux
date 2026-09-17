@@ -17,6 +17,18 @@ export const LANGS = [
 ]
 
 const FA = {
+
+  // --- ۱.۲.۵: پیام‌های شکستِ تور (از diagnostics.rs، از راهِ snapshot.detail)
+  'The tunnel started but the self-test failed.':
+    'تونل بالا آمد ولی خودآزما شکست خورد.',
+  'The tunnel is up, but Tor never reported any progress from inside it. Try Tor on its own, which lets Tor pick its own way to the network.':
+    'تونل بالاست، ولی تور از داخلش هیچ پیشرفتی گزارش نکرد. «تنها تور» را امتحان کنید تا تور خودش راهش به شبکه را انتخاب کند.',
+  'The tunnel is up, but Tor stopped at {0}% inside it and did not reach the Tor network. Try another protocol for the tunnel, or Tor on its own with bridges.':
+    'تونل بالاست، ولی تور داخلش روی {0}٪ ایستاد و به شبکهٔ تور نرسید. پروتکل دیگری برای تونل امتحان کنید، یا «تنها تور» با پل.',
+  'Tor stopped at {0}% and could not reach the Tor network. No pluggable transport is installed, so only plain bridges can be tried — and a network that filters Tor usually blocks those too. Use the Aether → Tor mode: Tor is then dialled through the tunnel, where the operator cannot see or block it.':
+    'تور روی {0}٪ ایستاد و به شبکهٔ تور نرسید. هیچ ترابرِ افزودنی نصب نیست، پس فقط پلِ ساده ممکن است — و شبکه‌ای که تور را فیلتر می‌کند معمولاً آن را هم می‌بندد. از حالتِ <bdi>Aether → Tor</bdi> استفاده کنید: آن‌وقت تور از داخلِ تونل شماره‌گیری می‌شود، جایی که اپراتور نه می‌بیندش نه می‌تواند ببندد.',
+  'The engine started but Tor never reported any progress towards the Tor network, and no pluggable transport is installed. Use the Aether → Tor mode, which builds Tor inside the tunnel.':
+    'موتور اجرا شد ولی تور هیچ پیشرفتی به سمتِ شبکهٔ تور گزارش نکرد، و هیچ ترابرِ افزودنی نصب نیست. از حالتِ <bdi>Aether → Tor</bdi> استفاده کنید که تور را داخلِ تونل می‌سازد.',
   // --- v12 (۱.۲.۴-p4): صفحهٔ گفت‌وگو، پورت از AiChatScreen.kt ---
   // ترجمه‌ها همان `ai_chat_*` در values-fa/strings.xml هستند؛ جملهٔ تازه‌ای
   // ساخته نشده تا کاربری که موبایل را می‌شناسد همان کلمات را ببیند.
@@ -194,6 +206,7 @@ const FA = {
   'IP unavailable': 'آی‌پی در دسترس نیست',
   'Connected for': 'مدت اتصال',
   'Protocol': 'پروتکل',
+  'MASQUE×2': 'ماسک×۲',
   'Endpoint': 'نقطهٔ اتصال',
   'Latency': 'تأخیر',
   'Download': 'دانلود',
@@ -349,6 +362,59 @@ const FA = {
   'Checks the key and lists the models it may use': 'کلید را بررسی می‌کند و مدل‌هایی که اجازهٔ استفاده دارد را فهرست می‌کند',
   'Working — {0} model(s) available through {1}': 'سالم — {0} مدل از مسیر {1} در دسترس است',
   'Not working: {0}': 'کار نمی‌کند: {0}',
+  // --- v13 (۱.۲.۵ / هستهٔ 2.0.0): تور -----------------------------------
+  // ترجمه‌ها همان رشته‌های `tor_*` و `backend_help_*` در values-fa/strings.xml
+  // هستند. نام کشورهای پل ترجمه نشده — نه در این برنامه (فهرست کشور خروجی هم
+  // انگلیسی است) و نه در موبایل.
+  'Tor': 'تور',
+  'Bridges': 'پل‌ها',
+  'How Tor reaches the network when it is blocked.': 'وقتی تور بلاک است، چگونه به شبکه برسد.',
+  'Not needed in this mode: Tor is dialled through the Aether tunnel, so the network you are on never sees it.':
+    'در این حالت لازم نیست: تور از داخل تونل اتر وصل می‌شود، پس شبکه‌ای که در آن هستید هرگز آن را نمی‌بیند.',
+  'Always': 'همیشه',
+  'Bridge country': 'کشور پل',
+  'Detect automatically': 'تشخیص خودکار',
+  'Which country bridgedb hands out bridges for. Detection asks the network where you are, which is the request most likely to fail here.':
+    'اینکه <bdi>bridgedb</bdi> پل‌های مربوط به کدام کشور را بدهد. تشخیص خودکار از شبکه می‌پرسد کجا هستید، و همین درخواست بیشتر از هر چیز اینجا شکست می‌خورد.',
+  'Bootstrap patience': 'مدت صبر برای بوت‌استرپ',
+  'Automatic (75 s)': 'خودکار (۷۵ ثانیه)',
+  '{0} seconds': '{0} ثانیه',
+  'How long Tor tries the direct path before falling back to bridges. Shorten it where Tor is definitely blocked.':
+    'تور چقدر مسیر مستقیم را امتحان کند پیش از رفتن به سراغ پل‌ها. اگر مطمئنید تور بلاک است، کوتاه‌ترش کنید.',
+  'Own bridge lines': 'خطوط پل خودتان',
+  'One per line, in the format bridges.torproject.org hands out. Leave empty to use the bridges the app fetches for your country. A line naming a transport the app does not ship is ignored.':
+    'هر خط یکی، در قالبی که <bdi>bridges.torproject.org</bdi> می‌دهد. خالی بگذارید تا برنامه پل‌های مناسب کشور شما را خودش بگیرد. خطی که نام ترانسپورتی را بگوید که برنامه ندارد، نادیده گرفته می‌شود.',
+  'Reachability check': 'بررسی دسترسی',
+  'The address Tor must reach before the bootstrap counts as working. Change it only if bootstrap keeps failing on a Tor that seems fine \u2014 the default target is itself blocked on some networks.':
+    'آدرسی که تور باید به آن برسد تا بوت‌استرپ موفق شمرده شود. فقط وقتی عوضش کنید که بوت‌استرپ مدام شکست می‌خورد در حالی که تور سالم به نظر می‌رسد — خود مقصد پیش‌فرض در بعضی شبکه‌ها بلاک است.',
+  'Tor carries TCP only \u2014 in every app, on every platform. Aether answers DNS over TCP inside Tor and drops other UDP, so QUIC-capable apps fall back to TCP. That is normal and nothing is leaking: dropped UDP goes nowhere, least of all around Tor. Expect noticeably higher latency, and expect the first connect to take a while \u2014 Tor downloads its directory before it can build a circuit.':
+    'تور فقط <bdi>TCP</bdi> را حمل می‌کند — در هر برنامه و روی هر پلتفرم. اتر <bdi>DNS</bdi> را روی <bdi>TCP</bdi> داخل تور پاسخ می‌دهد و بقیهٔ <bdi>UDP</bdi> را دور می‌ریزد، پس برنامه‌هایی که <bdi>QUIC</bdi> دارند به <bdi>TCP</bdi> برمی‌گردند. این طبیعی است و چیزی لیک نمی‌شود: <bdi>UDP</bdi> دورریخته به هیچ‌جا نمی‌رود، چه برسد به دور زدن تور. منتظر تاخیر محسوساً بیشتر باشید، و اینکه اولین اتصال طول بکشد — تور قبل از ساخت مدار، دایرکتوری خود را دانلود می‌کند.',
+  'Fixed to MASQUE over HTTP/2 in this mode. Tor carries TCP only and WARP\u2019s WireGuard endpoints answer on UDP alone, so the engine refuses WireGuard and WARP\u00d72 here.':
+    'در این حالت روی <bdi>MASQUE</bdi> بر <bdi>HTTP/2</bdi> قفل است. تور فقط <bdi>TCP</bdi> را حمل می‌کند و اندپوینت‌های <bdi>WireGuard</bdi> مربوط به <bdi>WARP</bdi> فقط روی <bdi>UDP</bdi> پاسخ می‌دهند، پس موتور اینجا <bdi>WireGuard</bdi> و <bdi>WARP×۲</bdi> را قبول نمی‌کند.',
+  'Tor chooses its own exit node, and a new one per circuit. No setting can pin it to a country.':
+    'تور خودش گره خروجی را انتخاب می‌کند، و برای هر مدار یکی تازه. هیچ تنظیمی آن را به یک کشور محدود نمی‌کند.',
+  'The Tor modes need engine core 2.0.0 or newer. The bundled core is older, so they are disabled.':
+    'حالت‌های تور به هستهٔ <bdi>2.0.0</bdi> یا بالاتر نیاز دارند. هستهٔ همراه این بیلد قدیمی‌تر است، پس غیرفعال شده‌اند.',
+
+  // وضعیتِ زندهٔ bootstrap — همان `state_tor_*`. درصد را رابط جاگذاری می‌کند.
+  'Reaching the Tor network… {0}%': 'در حال رسیدن به شبکهٔ تور… {0}%',
+  'Reaching the Tor network…': 'در حال رسیدن به شبکهٔ تور…',
+  'Tor is not getting through directly — trying bridges…': 'تور بلاک شده است — تلاش با پل‌ها…',
+  'Tor is ready — opening its local proxy…': 'تور آماده است — در حال باز کردن پروکسی محلی آن…',
+
+  // توضیحِ هر بک‌اند — همان `backend_help_*`.
+  'One hop through the bundled Aether/WARP engine. Fastest.':
+    'یک هاپ از موتور اتر/<bdi>WARP</bdi> همراه برنامه. سریع‌ترین حالت.',
+  'Two hops: Aether connects first, then Psiphon tunnels through it. Your exit IP becomes Psiphon\u2019s, so sites that block Aether/WARP addresses open again.':
+    'دو هاپ: اول اتر وصل می‌شود، بعد سایفون از داخل آن تونل می‌زند. آی‌پی خروجی شما به سایفون تغییر می‌کند، پس سایت‌هایی که آدرس‌های اتر/<bdi>WARP</bdi> را بلاک می‌کنند باز می‌شوند.',
+  'Tor alone, without the Aether tunnel. Your exit is a Tor exit node and your traffic passes three relays, which is the slowest and the most private of the modes. Tor has to reach the Tor network by itself here, so it uses bridges when it is blocked.':
+    'تور به تنهایی، بدون تونل اتر. خروجی شما یک گره خروجی تور است و ترافیک از سه رله می‌گذرد: کندترین و خصوصی‌ترین حالت. اینجا تور باید خودش به شبکهٔ تور برسد، پس اگر بلاک باشد از پل استفاده می‌کند.',
+  'Two hops: Aether connects first, then Tor is built INSIDE that tunnel. The network you are on sees only Aether\u2019s obfuscated transport, never Tor \u2014 so this is the mode to use where Tor is blocked. Your exit is a Tor exit node.':
+    'دو هاپ: اول اتر وصل می‌شود، بعد تور داخل همان تونل ساخته می‌شود. شبکه‌ای که در آن هستید فقط ترانسپورت مخفی‌شدهٔ اتر را می‌بیند، هرگز تور را — پس هر جا تور بلاک است، این حالت را انتخاب کنید. خروجی شما گره خروجی تور است.',
+  'Three hops: Tor first, then Psiphon dialled through it. Your exit IP is Psiphon\u2019s, reached from a Tor address, so sites that block Tor exit nodes open again while your own address stays behind Tor. The slowest mode.':
+    'سه هاپ: اول تور، بعد سایفون از داخل آن. آی‌پی خروجی شما مال سایفون است که از یک آدرس تور به آن رسیده‌اید؛ پس سایت‌هایی که گره‌های خروجی تور را بلاک می‌کنند باز می‌شوند و آدرس خود شما پشت تور می‌ماند. کندترین حالت.',
+  'The reverse chain: Tor first, then the Aether tunnel built INSIDE it. Your exit is a WARP address \u2014 the same as plain Aether \u2014 but the network you are on sees only Tor, and cannot tell that a VPN tunnel exists at all. Use it where Cloudflare/WARP itself is blocked or throttled but Tor still gets through. Carries normal UDP, unlike the Tor-exit modes.':
+    'زنجیرهٔ معکوس: اول تور، بعد تونل اتر داخل آن ساخته می‌شود. خروجی شما یک آدرس <bdi>WARP</bdi> است — همان چیزی که اتر ساده می‌دهد — اما شبکه‌ای که در آن هستید فقط تور را می‌بیند و اصلاً نمی‌تواند بفهمد که تونل <bdi>VPN</bdi>‌ی وجود دارد. جایی به کار بیاید که خود <bdi>Cloudflare/WARP</bdi> بلاک یا کند شده اما تور هنوز رد می‌شود. برخلاف حالت‌های با خروجی تور، <bdi>UDP</bdi> عادی را حمل می‌کند.',
 }
 
 let current = (() => {
@@ -409,6 +475,20 @@ export function isolateBidi(text) {
 }
 
 export function t(key) {
-  const raw = current === 'fa' ? (FA[key] ?? key) : key
+  const raw = current === 'fa' ? (FA[key] ?? numbered(key) ?? key) : key
   return isolateBidi(raw)
+}
+
+/// دومین تلاشِ ترجمه برای جمله‌هایی که یک عدد داخلشان است.
+///
+/// وضعیتِ اتصال از سمتِ Rust به‌صورت **جملهٔ کامل** می‌آید (`snapshot.detail`)،
+/// پس جمله‌ای مثل «Tor stopped at 15% …» هیچ‌وقت در جدولی که به متنِ دقیق کلید
+/// می‌زند پیدا نمی‌شود — و درست همان جمله‌ای است که کاربر در لحظهٔ خطا می‌خواند.
+/// این‌جا عدد با {0} جایگزین می‌شود، ترجمه پیدا می‌شود، و عدد سرِ جایش برمی‌گردد.
+function numbered(key) {
+  const digits = key.match(/\d+/)
+  if (!digits) return null
+  const pattern = key.replace(/\d+/, '{0}')
+  const hit = FA[pattern]
+  return hit ? hit.replace('{0}', digits[0]) : null
 }

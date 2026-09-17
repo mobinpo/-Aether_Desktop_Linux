@@ -18,7 +18,7 @@
 //  متصل اتفاق می‌افتد، بنابراین صفحهٔ قطع‌شده به هیچ فریمی مشترک نمی‌شود.
 // =============================================================================
 
-import { TWO_PI, fitCanvas, frameLoop } from './glowcycle.js'
+import { FRAME_CAPS, TWO_PI, fitCanvas, frameLoop, trackSize } from './glowcycle.js'
 
 // ------------------------------------------------------------------ هندسه
 
@@ -154,11 +154,55 @@ function drawBody(ctx, w, h, colour, ahead) {
  * تیره و نه روشن، و فقط ۱۴٪ کدر: این بافتی است که نشان را شبیه نمایشگری
  * می‌کند که خوانده می‌شود، و لحظه‌ای که آن‌قدر روشن شود که خودش دیده شود،
  * دیگر بافت نیست و راه‌راه است.
+ *
+ * # ۱.۲.۵-perf — یک `fillRect` جای بیست‌وشش تا
+ *
+ * الگو ثابت است و فقط *جابه‌جا* می‌شود؛ پس یک‌بار روی یک canvas کوچکِ `۱×gap`
+ * کشیده می‌شود و بعد به‌عنوان `CanvasPattern` تکرار می‌شود. رانش با `translate`
+ * روی همان الگو می‌آید — دقیقاً همان تصویر، با یک فراخوانِ پُرکردن به‌جای یکی
+ * برای هر خط.
+ *
+ * الگو روی خودِ canvas کَش می‌شود و نه سراسری: یک `CanvasPattern` به context
+ * سازنده‌اش گره خورده است.
  */
-function drawHairlines(ctx, w, h, scan) {
+function hairlinePattern(ctx, canvas, gap, thickness) {
+  if (canvas.__aetherHairline !== undefined) return canvas.__aetherHairline
+  // نبودِ `document` (هارنس‌های بی‌مرورگرِ `tests/`) یا نبودِ `createPattern`
+  // یعنی همان حلقهٔ قبلی اجرا می‌شود. `null` هم کَش می‌شود تا در هر فریم دوباره
+  // تلاش نشود.
+  let pattern = null
+  try {
+    if (typeof document !== 'undefined' && typeof ctx.createPattern === 'function') {
+      const tile = document.createElement('canvas')
+      tile.width = 1
+      tile.height = gap
+      const tctx = tile.getContext('2d')
+      if (tctx) {
+        tctx.fillStyle = 'rgba(0,0,0,0.14)'
+        tctx.fillRect(0, 0, 1, thickness)
+        pattern = ctx.createPattern(tile, 'repeat')
+      }
+    }
+  } catch {
+    pattern = null
+  }
+  canvas.__aetherHairline = pattern
+  return pattern
+}
+
+function drawHairlines(ctx, canvas, w, h, scan) {
   const gap = 5
   const drift = scan * gap
   const thickness = 1
+  const pattern = hairlinePattern(ctx, canvas, gap, thickness)
+  if (pattern) {
+    ctx.save()
+    ctx.translate(0, drift - gap)
+    ctx.fillStyle = pattern
+    ctx.fillRect(0, 0, w, h + gap)
+    ctx.restore()
+    return
+  }
   ctx.fillStyle = 'rgba(0,0,0,0.14)'
   for (let y = -gap + drift; y < h; y += gap) {
     ctx.fillRect(0, y, w, thickness)
@@ -273,15 +317,28 @@ export function startAetherMark(canvas) {
   // است که تونل بالا آمده — اتصال یک رخداد است و یکی می‌ارزد.
   const bornAt = performance.now()
 
-  return frameLoop(() => {
-    const box = canvas.getBoundingClientRect()
-    const w = box.width || canvas.clientWidth
-    const h = box.height || canvas.clientHeight
+  // ۱.۲.۵-perf — دو مسیرِ گلیف بین فریم‌ها کَش می‌شوند.
+  //
+  // `buildMark` فقط به اندازهٔ canvas بستگی دارد، ولی در هر فریم صدا زده
+  // می‌شد: دو `Path2D` تازه، شصت بار در ثانیه، برای هندسه‌ای که تا تغییرِ
+  // اندازهٔ پنجره ثابت است. اندازه هم دیگر با `getBoundingClientRect()` در
+  // حلقهٔ فریم خوانده نمی‌شود — آن فراخوان مرورگر را وادار به محاسبهٔ چیدمان
+  // می‌کرد؛ حالا `trackSize` خبر می‌دهد.
+  let paths = null
+  const size = trackSize(canvas, () => { paths = null })
+
+  const stopLoop = frameLoop((frameNow) => {
+    size.poll(frameNow)
+    const w = size.width || canvas.clientWidth
+    const h = size.height || canvas.clientHeight
     if (w <= 0 || h <= 0) return
+    // تغییرِ بافرِ canvas ترنسفورم را بازمی‌نشاند ولی مسیرها در مختصاتِ CSS
+    // ساخته می‌شوند، پس تنها چیزی که مسیرها را باطل می‌کند تغییرِ w/h است —
+    // و آن از `trackSize` می‌آید.
     fitCanvas(canvas, w, h)
     const ctx = canvas.getContext('2d')
 
-    const now = performance.now()
+    const now = frameNow
     const age = now - bornAt
     const huePhase = (now / HUE_STEP_MS) % MARK_COLORS.length
     const colour = cycleColour(huePhase)
@@ -298,7 +355,8 @@ export function startAetherMark(canvas) {
     ctx.clearRect(0, 0, w, h)
     if (entered <= 0.001) return
 
-    const { outline, counter } = buildMark(w, h)
+    if (!paths) paths = buildMark(w, h)
+    const { outline, counter } = paths
 
     // ۱. هاله‌ای که گلیف در آن نشسته، پشت همه‌چیز و بیرون از کلیپ تا بتواند
     //    از لبه‌های حرف بیرون بزند.
@@ -313,7 +371,7 @@ export function startAetherMark(canvas) {
     ctx.save()
     ctx.clip(outline)
     drawBody(ctx, w, h, colour, ahead)
-    drawHairlines(ctx, w, h, scan)
+    drawHairlines(ctx, canvas, w, h, scan)
     drawSweepLight(ctx, w, h, sweep, pulse)
     drawScanBar(ctx, w, h, scan, colour, pulse)
     ctx.restore()
@@ -326,5 +384,13 @@ export function startAetherMark(canvas) {
 
     // ۴. خط ساخت: فقط تا وقتی موج در حال اجراست.
     if (entered < 0.999) drawBuildLine(ctx, w, wipeTop, colour, entered)
-  })
+  }, FRAME_CAPS.mark)
+
+  // نشان در هر گذارِ غیرِ متصل لغو می‌شود، پس ناظرِ اندازه هم باید همان‌جا آزاد
+  // شود: یک `ResizeObserver` که کسی جمعش نکند، بعد از چند بار وصل و قطع تبدیل
+  // به چند ناظرِ زنده روی یک canvas می‌شود.
+  return () => {
+    stopLoop()
+    size.stop()
+  }
 }

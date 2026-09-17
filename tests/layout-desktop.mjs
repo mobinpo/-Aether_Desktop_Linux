@@ -209,6 +209,45 @@ async function probe(w, h, lang) {
     return { bg: rgb, range: [x0, x1], paintedPixels: painted, sampled: strip.length / 4 }
   }, png, w, h)
   out.errors = errors
+
+  // >>> AETHER-APP-PATCH seg-labels-stay-on-one-line
+  // ردیفِ Backend شش برچسب دارد و بلندترینش «Aether → Psiphon» است. با عرضِ
+  // مساویِ اجباری، همان یکی دو خطی می‌شد و «Psiphon» زیرِ فلش می‌افتاد. jsdom
+  // این را نمی‌بیند (ارتفاع همه صفر است)؛ فقط اندازه‌گیریِ واقعی می‌بیند.
+  out.seg = await page.evaluate(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+    const tab = document.querySelector('.rail__item[data-tab="advanced"]')
+    if (!tab) return { reached: false, why: 'تبِ Settings در ریل نیست' }
+    tab.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(150)
+    const rows = [...document.querySelectorAll('.setrow__title')]
+    const row = rows.find((x) => /^(Connection|اتصال)$/.test(x.textContent.trim()))
+    if (!row) return { reached: false, why: 'ردیفِ Connection نیست، ردیف‌ها: ' + rows.map((x) => x.textContent.trim()).join('/') }
+    row.closest('.setrow').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await wait(150)
+    const bar = document.querySelector('.seg[data-key="backend"]')
+    if (!bar) return { reached: false, why: 'ردیفِ قطعه‌ایِ backend نیست' }
+    const items = [...bar.querySelectorAll('.seg__item')].map((b) => {
+      const line = parseFloat(getComputedStyle(b).lineHeight) || 17
+      const pad = parseFloat(getComputedStyle(b).paddingTop) + parseFloat(getComputedStyle(b).paddingBottom)
+      return {
+        text: b.textContent.trim(),
+        h: Math.round(b.getBoundingClientRect().height),
+        oneLineH: Math.round(line + pad),
+        clipped: b.scrollWidth > b.clientWidth + 1,
+      }
+    })
+    return {
+      reached: true,
+      count: items.length,
+      overflow: bar.scrollWidth > bar.clientWidth + 1,
+      barW: Math.round(bar.getBoundingClientRect().width),
+      needW: bar.scrollWidth,
+      items,
+    }
+  })
+  // <<< AETHER-APP-PATCH seg-labels-stay-on-one-line
+
   await page.close()
   return out
 }
@@ -235,6 +274,18 @@ for (const [label, w, h] of [
   if (r.main) check(r.main.scrollH <= r.main.clientH + 1, `ناحیهٔ main سرریز ندارد (${r.main.scrollH} \u2264 ${r.main.clientH})`)
   check(r.edge.paintedPixels === 0,
     `سه ردیفِ آخرِ تصویر خالی است (${r.edge.paintedPixels} پیکسلِ رنگ‌خورده از ${r.edge.sampled})`)
+  // >>> AETHER-APP-PATCH seg-labels-stay-on-one-line
+  if (r.seg?.reached) {
+    const tall = r.seg.items.filter((i) => i.h > i.oneLineH + 2)
+    check(tall.length === 0,
+      `هر شش برچسبِ Backend یک‌خطی است${tall.length ? ' — دوخطی: ' + tall.map((i) => `«${i.text}» ${i.h}px`).join('، ') : ''}`)
+    check(!r.seg.overflow, `ردیفِ Backend سرریز ندارد (${r.seg.needW} \u2264 ${r.seg.barW})`)
+    const cut = r.seg.items.filter((i) => i.clipped)
+    check(cut.length === 0, `هیچ برچسبی بریده نشده${cut.length ? ' — ' + cut.map((i) => `«${i.text}»`).join('، ') : ''}`)
+  } else {
+    check(false, 'ردیفِ Backend سنجیده نشد: ' + (r.seg?.why ?? '?'))
+  }
+  // <<< AETHER-APP-PATCH seg-labels-stay-on-one-line
   if (r.connect) console.log(`   دکمهٔ اتصال: ${r.connect.w}\u00d7${r.connect.h}px` + (r.card ? `\u060c کارت: ${r.card.h}px` : ''))
 }
 
