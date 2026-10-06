@@ -355,18 +355,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: aether-linux-*
+          # `merge-multiple` حیاتی است: بدون آن، هر آرتیفکت در زیرپوشهٔ خودش
+          # می‌نشیند (`dist/aether-linux-x86_64/…`) و الگوی `dist/*.deb` هیچ‌چیز
+          # پیدا نمی‌کند — که همان اتفاق افتاد و مرحلهٔ بعد با «خروجِ ۱» مُرد.
+          merge-multiple: true
           path: dist
 
       - name: Collect every package + one checksum file
         run: |
           set -euo pipefail
           cd dist
-          ls -1
+          ls -la
           # یک SHA256SUMS برای کلِ ریلیز، نه یکی به‌ازای هر معماری: کاربر باید
-          # بعد از دانلود یک دستور بزند، نه سه تا.
-          sha256sum ./*.deb ./*.rpm ./*.AppImage > SHA256SUMS.txt 2>/dev/null \
-            || sha256sum ./*.deb ./*.rpm > SHA256SUMS.txt 2>/dev/null \
-            || sha256sum ./*.deb > SHA256SUMS.txt
+          # بعد از دانلود یک دستور بزند، نه سه تا. `find` به‌جای الگو، تا
+          # نبودِ یک قالب باعث شکستِ `sha256sum` نشود.
+          find . -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+            -printf '%P\n' | sort > "$RUNNER_TEMP/pkgs.txt"
+          [[ -s "$RUNNER_TEMP/pkgs.txt" ]] || { echo 'no packages downloaded' >&2; exit 1; }
+          xargs -a "$RUNNER_TEMP/pkgs.txt" sha256sum > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Resolve version and tag
         id: meta
@@ -424,11 +431,14 @@ jobs:
             ولی بستهٔ برنامه نه.
           EOF
 
+          # به‌جای زنجیرهٔ `|| gh release upload …` که بر سرِ الگوهای ناموجود
+          # شکننده بود، فهرستِ واقعیِ فایل‌ها از روی همان فهرستِ مرحلهٔ قبل خوانده
+          # می‌شود. یک قالب که تولید نشده دیگر نمی‌تواند کلِ انتشار را بیندازد.
+          mapfile -t ASSETS < <(sed "s|^|dist/|" "$RUNNER_TEMP/pkgs.txt")
+          ASSETS+=("dist/SHA256SUMS.txt")
+
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.deb dist/*.rpm dist/*.AppImage dist/SHA256SUMS.txt \
-              --clobber 2>/dev/null \
-              || gh release upload "$TAG" dist/*.deb dist/*.rpm dist/SHA256SUMS.txt --clobber 2>/dev/null \
-              || gh release upload "$TAG" dist/*.deb dist/SHA256SUMS.txt --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
             gh release edit "$TAG" --notes-file "$notes"
             echo "updated $TAG"
           else
@@ -436,7 +446,7 @@ jobs:
               --title "Aether $VERSION (Linux)" \
               --notes-file "$notes" \
               --target "$GITHUB_SHA" \
-              dist/*.deb dist/*.rpm dist/*.AppImage dist/SHA256SUMS.txt
+              "${ASSETS[@]}"
             echo "created $TAG"
           fi
           rm -f "$notes"
