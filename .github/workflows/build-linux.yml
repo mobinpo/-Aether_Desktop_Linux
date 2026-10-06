@@ -81,10 +81,7 @@ jobs:
           node -e "
             const c = require('./src-tauri/tauri.conf.json');
             if (c.bundle.targets.indexOf('deb') < 0) throw new Error('deb target missing');
-            for (const src of Object.keys(c.bundle.resources)) {
-              if (!require('fs').existsSync(src)) throw new Error('resource missing: ' + src);
-            }
-            console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources');
+            console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources declared');
           "
           node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json ok')"
 
@@ -143,6 +140,24 @@ jobs:
             aarch64) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
             armv7)   file dist-engine/aether | grep -qE 'ARM' ;;
           esac
+
+      # اینجا، نه در preflight: `dist-engine/` در `.gitignore` است و روی یک
+      # چک‌اوت تازه وجود ندارد تا وقتی همین بالا ساخته نشود. جای درستِ این
+      # بررسی بعد از `fetch-engine.sh` است — جایی که فایل‌ها واقعاً باید باشند.
+      # یک منبعِ اعلام‌شده ولی موجودنبودن، بیلد را با پیامی مبهم می‌شکند.
+      - name: Every declared bundle resource now exists
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const c = require('./src-tauri/tauri.conf.json');
+            const missing = Object.keys(c.bundle.resources).filter(s => !fs.existsSync(s));
+            if (missing.length) {
+              console.error('declared resource missing after staging: ' + missing.join(', '));
+              process.exit(1);
+            }
+            console.log('all ' + Object.keys(c.bundle.resources).length + ' resources present');
+          "
 
       # ---- Rust ---------------------------------------------------------------
       - name: Toolchain

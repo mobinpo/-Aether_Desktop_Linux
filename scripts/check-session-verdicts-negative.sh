@@ -37,7 +37,11 @@ py src-tauri/src/state.rs 'tor.mark_starting();' '/* moved */'
 expect_red "علامتِ انلاق حذف شد"
 
 # ۳) داوریِ نشتی دامنه را نخواند
-py src-tauri/src/diagnostics.rs 'let leaking = !via_tunnel && !browser_policy_only && !udp_open_by_design;' 'let leaking = !via_tunnel && !browser_policy_only;'
+# این سطر عیناً باید با `diagnostics.rs` یکی باشد — گهبان با `replace` روی همین
+# متن کار می‌کند و اگر جمله عوض شود، به‌جای «قرمز شد» یک AssertionError می‌دهد.
+# `!enforceable` شرطِ لینوکس است: آنجا WebRTC مهار نمی‌شود و بدون این شرط، هر
+# نشستی «نشتی» خوانده می‌شد.
+py src-tauri/src/diagnostics.rs 'let leaking = !enforceable && !via_tunnel && !browser_policy_only && !udp_open_by_design;' 'let leaking = !enforceable && !via_tunnel && !browser_policy_only;'
 expect_red "داوری دامنه را نادیده گرفت"
 
 # ۴) تخفیفِ نشتی بی‌شرطِ سیاستِ مرورگر (نشتِ واقعی را می‌بخشد)
