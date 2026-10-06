@@ -1,0 +1,358 @@
+# =============================================================================
+#  Aether Desktop — Linux build / package / release
+# -----------------------------------------------------------------------------
+#  ورک‌فلوی جدا از `build.yml` (که ویندوز است). دلیلِ جدا بودن یک کلمه است:
+#  `runs-on`. آن ورک‌فلو `windows-latest` است و هیچ‌کدام از قدم‌هایش روی لینوکس
+#  معنا ندارد — Inno Setup، Wintun، `.exe`.
+#
+#  خروجی هر اجرا (به ازای هر خانهٔ ماتریس):
+#      Aether_<ver>_<arch>.deb        Tauri خودش deb می‌سازد
+#      Aether_<ver>_<arch>.rpm        برای فدورا/آرچو/RHEL
+#      Aether_<ver>_<arch>.AppImage   مستقل از توزیع
+#      SHA256SUMS.txt
+#
+#  سه معماری، نه یکی: نسخهٔ منتشرشدهٔ قبلی فقط amd64 داشت. Raspberry Pi 4/5،
+#  لپ‌تاپ‌های ARM و موبایل‌های اندرویدی با گوشی در ماتریس می‌آیند تا یک اجرا
+#  همه را پوشش دهد.
+#
+#  هستهٔ موتور از ریلیز رسمی دانلود و با دایجستِ منتشرشدهٔ خودش تأیید می‌شود
+#  (`scripts/fetch-engine.sh`) — از سورس ساخته نمی‌شود، چون اسکریپت‌های ساختِ
+#  هسته در این مخزن PowerShell ویندوزی‌اند.
+# =============================================================================
+name: Build Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # یک بیلد روی یک شاخه. بیلدِ قدیمی که هنوز در صف است، وقت شاخه را جلو برده
+  # و خروجی‌اش دور ریخته می‌شود؛ فقط وقتِ runner را می‌سوزاند.
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  # نسخهٔ هستهٔ موتور. یک‌جا نگه داشته شده تا این ورک‌فلو، `fetch-engine.sh`
+  # و متنِ ریلیز یک عدد را ببینند.
+  CORE_VERSION: '2.3.0'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  #  1) بررسی‌هایی که نه Rust می‌خواهند نه Node کامل
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Every file this pipeline needs exists
+        run: |
+          set -euo pipefail
+          for f in package.json package-lock.json vite.config.js \
+                   src-tauri/Cargo.toml src-tauri/Cargo.lock \
+                   src-tauri/tauri.conf.json src-tauri/build.rs \
+                   src-tauri/src/main.rs \
+                   scripts/fetch-engine.sh \
+                   assets/psiphon/server_entries.txt; do
+            [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 1; }
+          done
+          # نماد پنجره هم لازم است؛ Tauri بدون آن بیلد نمی‌شود.
+          for i in 32x32.png 128x128.png 128x128@2x.png icon.png; do
+            [[ -f "src-tauri/icons/$i" ]] || { echo "MISSING icon: $i" >&2; exit 1; }
+          done
+
+      - name: Config and JSON must parse
+        run: |
+          set -euo pipefail
+          node -e "
+            const c = require('./src-tauri/tauri.conf.json');
+            if (c.bundle.targets.indexOf('deb') < 0) throw new Error('deb target missing');
+            for (const src of Object.keys(c.bundle.resources)) {
+              if (!require('fs').existsSync(src)) throw new Error('resource missing: ' + src);
+            }
+            console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources');
+          "
+          node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json ok')"
+
+      - name: Frontend unit tests
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+  # ---------------------------------------------------------------------------
+  #  2) بیلد — یک جاب برای هر (رانر، معماری)
+  #
+  #     ARM64 روی رانرهای بومی گیت‌هاب (`ubuntu-24.04-arm`): برای مخازن عمومی
+  #     رایگان‌اند و چند برابر سریع‌تر از شبیه‌سازی. armv7 چنین رانری ندارد،
+  #     پس QEMU می‌آید — کند، ولی کار می‌کند.
+  # ---------------------------------------------------------------------------
+  build:
+    name: ${{ matrix.arch }} / ${{ matrix.bundles }}
+    needs: preflight
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - arch: armv7
+            runner: ubuntu-24.04
+            rust_target: armv7-unknown-linux-gnueabihf
+            bundles: deb
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- هسته --------------------------------------------------------------
+      # باینریِ از پیش ساخته + تأیید دایجست. قبل از هر کار دیگری، چون همهٔ
+      # قدم‌های بعدی به `dist-engine/` نیاز دارند.
+      - name: Stage the official engine
+        env:
+          ARCH_SLUG: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG"
+
+      - name: Engine is the right machine code
+        run: |
+          set -euo pipefail
+          file dist-engine/aether dist-engine/psiphon-tunnel-core
+          case "${{ matrix.arch }}" in
+            x86_64) file dist-engine/aether | grep -q 'x86-64' ;;
+            aarch64) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
+            armv7)   file dist-engine/aether | grep -qE 'ARM' ;;
+          esac
+
+      # ---- Rust ---------------------------------------------------------------
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      # QEMU برای armv7: بدون آن نه کامپایلر نه لینکر (که هر دو برنامهٔ بومیِ
+      # هستند) روی معماریِ غریبه اجرا نمی‌شوند.
+      - name: QEMU user emulation (armv7 only)
+        if: matrix.arch == 'armv7'
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-user-static gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          {
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc"
+            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
+            echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf"
+          } >> "$GITHUB_ENV"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.arch }}
+          cache-on-failure: true
+
+      # ---- وابستگی‌های سیستمی ------------------------------------------------
+      # `libwebkit2gtk-4.1-dev` برای Tauri v2 است؛ نسخهٔ `4.0` مالِ v1 بود و
+      # روی اوبونتوی جدید وجود ندارد.
+      - name: System dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            file \
+            fuse3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Frontend deps
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend
+        run: npm run web:build
+
+      # ---- آزمون‌ها ----------------------------------------------------------
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
+
+      # ---- بسته‌بندی ---------------------------------------------------------
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building Aether $v (${{ matrix.arch }})"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          npm run tauri build \
+            -- --bundles "${{ matrix.bundles }}" \
+               --target ${{ matrix.rust_target }}
+
+      - name: Collect artifacts and checksums
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.version }}"
+          out="dist-pkg"
+          mkdir -p "$out"
+          # نامِ فایل از `productName` + نسخه + معماری ساخته می‌شود. نامِ نهایی
+          # از خودِ فایل‌های تولیدشده خوانده می‌شود، نه از یک الگوی حدسی: یک
+          # تغییر کوچک در Tauri نباید بیلد را بشکند.
+          found=0
+          for pkg in $(find src-tauri/target/${{ matrix.rust_target }}/release/bundle \
+                        -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) 2>/dev/null); do
+            base="$(basename "$pkg")"
+            ext="$(echo "${base##*.}" | tr '[:upper:]' '[:lower:]')"
+            cp "$pkg" "$out/Aether_${ver}_${{ matrix.arch }}.${ext}"
+            found=1
+          done
+          [[ "$found" -eq 1 ]] || { echo "no packages produced" >&2; exit 1; }
+          ( cd "$out" && sha256sum ./* > SHA256SUMS.txt && ls -la )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-linux-${{ matrix.arch }}
+          path: dist-pkg/
+          if-no-files-found: error
+          # پیش‌فرض ۹۰ روز است. نسخهٔ ماندگار در Release منتشر می‌شود و
+          # نگه‌داشتنِ این فقط سهمیهٔ فضای پلن Free را می‌خورد.
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  #  3) انتشار در GitHub Release
+  #
+  #     `gh` روی هر رانر نصب است و به رانتایم پین نمی‌شود — برخلاف اکشن‌های
+  #     شخص ثالث که با عوض شدن Node می‌میرند (همان بلایی که سرِ
+  #     upload-artifact@v3 و softprops/action-gh-release آمد).
+  #
+  #     روند idempotent است: اگر تگ باشد همان را تازه می‌کند. نه delete/create
+  #     (که race داشت) و نه خطای «asset already exists».
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: aether-linux-*
+          path: dist
+
+      - name: Collect every package + one checksum file
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -1
+          # یک SHA256SUMS برای کلِ ریلیز، نه یکی به‌ازای هر معماری: کاربر باید
+          # بعد از دانلود یک دستور بزند، نه سه تا.
+          sha256sum ./*.deb ./*.rpm ./*.AppImage > SHA256SUMS.txt 2>/dev/null \
+            || sha256sum ./*.deb ./*.rpm > SHA256SUMS.txt 2>/dev/null \
+            || sha256sum ./*.deb > SHA256SUMS.txt
+
+      - name: Resolve version and tag
+        id: meta
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+            TAG="$GITHUB_REF"
+          else
+            V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+            TAG="v$V"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"    >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          cat > "$notes" <<EOF
+          ## Aether Desktop $VERSION — Linux
+
+          بسته برای سه معماری و سه قالب. نصب:
+
+          \`\`\`bash
+          # Debian / Ubuntu / Mint
+          sudo apt install ./Aether_${VERSION}_amd64.deb
+
+          # Fedora / RHEL / openSUSE
+          sudo dnf install ./Aether_${VERSION}_x86_64.rpm
+
+          # مستقل از توزیع، بدون نصب
+          chmod +x Aether_${VERSION}_x86_64.AppImage && ./Aether_${VERSION}_x86_64.AppImage
+          \`\`\`
+
+          روی Raspberry Pi و گوشی‌های اندرویدی، به‌جای \`_amd64\` از \`_aarch64\` بگیرید.
+
+          ### کدام حالت را انتخاب کنم
+
+          اگر پشت فیلترِ SNI هستید — جایی که WARP و MASQUE قطع می‌شوند — از
+          **Connection → Backend = Psiphon** استفاده کنید. این تنها حاملی است که
+          روی این شبکه بدون پروکسیِ بالادست کار می‌کند.
+
+          ### دانستنی‌ها
+
+          * WebRTC روی لینوکس قابل مهار نیست؛ در مرورگر خودتان خاموشش کنید.
+          * پروکسیِ سیستمی از راه GSettings نوشته می‌شود، نه رجیستری ویندوز.
+          * TUN به \`CAP_NET_ADMIN\` نیاز دارد؛ بستهٔ deb آن را می‌دهد.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.deb dist/*.rpm dist/*.AppImage dist/SHA256SUMS.txt \
+              --clobber 2>/dev/null \
+              || gh release upload "$TAG" dist/*.deb dist/*.rpm dist/SHA256SUMS.txt --clobber 2>/dev/null \
+              || gh release upload "$TAG" dist/*.deb dist/SHA256SUMS.txt --clobber
+            gh release edit "$TAG" --notes-file "$notes"
+            echo "updated $TAG"
+          else
+            gh release create "$TAG" \
+              --title "Aether $VERSION (Linux)" \
+              --notes-file "$notes" \
+              --target "$GITHUB_SHA" \
+              dist/*.deb dist/*.rpm dist/*.AppImage dist/SHA256SUMS.txt
+            echo "created $TAG"
+          fi
+          rm -f "$notes"

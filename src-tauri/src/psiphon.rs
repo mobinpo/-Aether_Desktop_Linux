@@ -116,7 +116,14 @@ pub fn is_config_fault(message: &str) -> bool {
 }
 
 /// نام فایل اجرایی استیج ۲ در پوشهٔ `engine`.
-pub const PSIPHON_EXE: &str = "psiphon-tunnel-core.exe";
+///
+/// ویندوز پسوند `.exe` دارد و لینوکس ندارد — بستهٔ رسمی v2.3.0 در هر دو سکو
+/// بدون پسوند می‌آید (`pt/psiphon-tunnel-core`). یک ثابت، هر دو مسیر را پوشش می‌دهد.
+pub const PSIPHON_EXE: &str = if cfg!(windows) {
+    "psiphon-tunnel-core.exe"
+} else {
+    "psiphon-tunnel-core"
+};
 /// فهرست سرور تعبیه‌شده — همان فایلی که نسخهٔ موبایل در assets دارد.
 pub const SERVER_LIST_FILE: &str = "server_entries.txt";
 /// پوشهٔ datastore، جدا از هر چیز دیگری تا مستقل پاک شود.

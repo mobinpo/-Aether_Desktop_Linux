@@ -101,6 +101,13 @@ pub fn reset_exit_socks_port() {
 /// است. نامزدها به ترتیب امتحان می‌شوند و اولین پوشه‌ای که واقعاً `engine/aether`
 /// دارد برنده است.
 ///
+/// نامِ فایلِ اجراییِ موتور روی این سکو.
+///
+/// ویندوز `aether.exe` دارد و لینوکس ندارد. این ثابت یک‌جا نگه داشته شده تا
+/// `prepare_runtime_engine` روی لینوکس دنبالِ `aether.exe` نگردد و بی‌صدا به شاخهٔ
+/// fallback بیفتد — یعنی اجرا از پوشهٔ ریشه‌ای، با خطای `PermissionDenied`.
+pub const EXE_NAME: &str = if cfg!(windows) { "aether.exe" } else { "aether" };
+
 /// این یکی را همهٔ چهار فراخوانی باید بپرسند: `state.rs`، `main.rs::core_caps`،
 /// `main.rs::core_version` و `diagnostics::run`. مسیرِ اشتباه در `core_caps` همهٔ
 /// قابلیت‌ها را false برمی‌گرداند و رابط کاربری هر ورودی را غیرفعال می‌کند.
@@ -242,7 +249,7 @@ impl AetherProcess {
                     "engine",
                     &format!("Could not stage the engine in a writable folder ({e}); running it from the install folder."),
                 );
-                bundled_dir.join("aether.exe")
+                bundled_dir.join(EXE_NAME)
             }
         };
         Self {
@@ -671,7 +678,7 @@ impl Drop for AetherProcess {
 fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<PathBuf> {
     let runtime_dir = working_dir.join("engine");
     if runtime_dir == *bundled_dir {
-        let exe = runtime_dir.join("aether.exe");
+        let exe = runtime_dir.join(EXE_NAME);
         return if exe.exists() {
             Ok(exe)
         } else {
@@ -758,11 +765,11 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
             let _ = std::fs::copy(&src, &dst);
         }
     }
-    let exe = runtime_dir.join("aether.exe");
+    let exe = runtime_dir.join(EXE_NAME);
     if !exe.exists() {
         return Err(anyhow!(
             "Engine binary missing: {}",
-            bundled_dir.join("aether.exe").display()
+            bundled_dir.join(EXE_NAME).display()
         ));
     }
     Ok(exe)
