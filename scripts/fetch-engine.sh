@@ -24,12 +24,17 @@ set -euo pipefail
 VERSION="${1:-${CORE_VERSION:-2.3.0}}"
 ARCH="${2:-$(uname -m)}"
 
-# uname says x86_64 / aarch64 / armv7l; upstream names them the same way except
-# that 32-bit arm needs the explicit `armv7`.
+# نامِ معماری بین `uname` و نامِ آرشیوِ بالادست یکی نیست:
+#   uname:   x86_64  aarch64  arm64  armv7l
+#   upstream: x86_64   arm64   arm64    armv7
+# نگاشت صریح است تا یک معماریِ ناشناخته بی‌صدا به x86_64 نیفتد و باینریِ
+# ۶۴ بیتی را در بستهٔ ۳۲ بیتی جا بزند. (`aarch64` نامِ آرشیو نیست — تست شد
+# و ۴۰۴ داد؛ `arm64` است.)
 case "$ARCH" in
-  x86_64|aarch64|arm64) SLUG="$ARCH" ;;
-  armv7l|armv7)          SLUG="armv7"   ;;
-  i386|i686)             SLUG="x86"     ;;
+  x86_64)                 SLUG="x86_64" ;;
+  aarch64|arm64)          SLUG="arm64"   ;;
+  armv7l|armv7)           SLUG="armv7"   ;;
+  i386|i686)              SLUG="x86"     ;;
   *) echo "fetch-engine: unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
 

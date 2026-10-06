@@ -176,20 +176,29 @@ jobs:
       # اینجا، نه در preflight: `dist-engine/` در `.gitignore` است و روی یک
       # چک‌اوت تازه وجود ندارد تا وقتی همین بالا ساخته نشود. جای درستِ این
       # بررسی بعد از `fetch-engine.sh` است — جایی که فایل‌ها واقعاً باید باشند.
-      # یک منبعِ اعلام‌شده ولی موجودنبودن، بیلد را با پیامی مبهم می‌شکند.
+      #
+      # با `python3` نوشته شده، نه `node`: این قدم پیش از `setup-node` می‌آید
+      # و `node` هنوز روی رانر نصب نیست — که همان‌جا اجرا را می‌شکست.
       - name: Every declared bundle resource now exists
         run: |
           set -euo pipefail
-          node -e "
-            const fs = require('fs');
-            const c = require('./src-tauri/tauri.conf.json');
-            const missing = Object.keys(c.bundle.resources).filter(s => !fs.existsSync(s));
-            if (missing.length) {
-              console.error('declared resource missing after staging: ' + missing.join(', '));
-              process.exit(1);
-            }
-            console.log('all ' + Object.keys(c.bundle.resources).length + ' resources present');
-          "
+          python3 - <<'PY'
+          import json, os, sys
+          # مسیرهای `bundle.resources` نسبت به پوشهٔ خودِ tauri.conf.json معنا
+          # دارند (`../dist-engine/...`)، نه نسبت به ریشهٔ مخزن — همان‌طور که
+          # Tauri و bundler می‌فهمندشان. از ریشهٔ مخزن نگاه کردن، `../` را بیرونِ
+          # مخزن می‌برد و هر پنج تا را «گم» نشان می‌دهد.
+          conf_path = 'src-tauri/tauri.conf.json'
+          base = os.path.dirname(os.path.abspath(conf_path))
+          with open(conf_path) as fh:
+              conf = json.load(fh)
+          resources = list(conf['bundle']['resources'])
+          missing = [p for p in resources if not os.path.exists(os.path.join(base, p))]
+          if missing:
+              print('declared resource missing after staging: ' + ', '.join(missing), file=sys.stderr)
+              sys.exit(1)
+          print(f'all {len(resources)} resources present')
+          PY
 
       # ---- Rust ---------------------------------------------------------------
       - name: Toolchain
