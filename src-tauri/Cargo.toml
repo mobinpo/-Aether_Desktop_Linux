@@ -18,20 +18,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 parking_lot = "0.12"
-# Wintun — معادل ویندوزیِ VpnService + hev-tun در اندروید
-wintun = "0.5"
-# ۱.۲.۵-perf — `ipstack` و `tokio` از این‌جا برداشته شدند.
+# ۱.۲.۵-perf — `ipstack` از این‌جا برداشته شد: هیچ‌جا در `src-tauri/src/`
+# استفاده نمی‌شد و تنها اشاره‌اش یک کامنت در سرِ `tun.rs` بود.
 #
-# هیچ‌یک در `src-tauri/src/` استفاده نمی‌شد: تنها اشارهٔ `ipstack` یک کامنت در
-# سرِ `tun.rs` بود («ترافیک TUN → SOCKS5») که مسیرِ دادهٔ *فعلی* نیست، و `tokio`
-# حتی یک بار هم نامش برده نشده بود. هر دو زمانِ بیلد و حجمِ باینری را می‌خوردند
-# — `tokio` با `rt-multi-thread` یک زمان‌اجرای کامل را کامپایل می‌کرد.
-#
-# اگر روزی رلهٔ فضای‌کاربرِ TUN→SOCKS5 نوشته شود، همان‌جا برمی‌گردند.
 # native-tls: دست‌دادن TLS برای جای‌یابی IP روی 443 (معادل tlsWrap موبایل). در ویندوز از SChannel بومی استفاده می‌کند.
 native-tls = "0.2"
 
 [target.'cfg(windows)'.dependencies]
+# Wintun — معادل ویندوزیِ VpnService + hev-tun در اندروید
+wintun = "0.5"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",
@@ -42,6 +37,12 @@ windows = { version = "0.58", features = [
   # v12: DPAPI (CryptProtectData) — انبار رازِ مهرشدهٔ کلید API.
   "Win32_Security_Cryptography",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# TUN روی لینوکس: crateٔ `tun` به‌جای Wintun. `tokio` فقط برای زمان‌اجرای async
+# که `tun` لازم دارد؛ خودِ برنامه runtime ندارد.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
+tun = { version = "0.7", features = ["async"] }
 
 [profile.release]
 # معادل minifyEnabled/R8 در اندروید — باینری کوچک و بدون سمبل اضافی.

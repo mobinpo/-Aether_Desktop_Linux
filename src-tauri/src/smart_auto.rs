@@ -11,7 +11,9 @@
 //!    (همان ترتیب ترجیح SmartAuto.kt).
 
 use crate::log::DiagnosticsLog;
-use crate::profile::{ConnectionProfile, IpVersion, Noize, Protocol, ScanMode, TorMode};
+use crate::profile::{
+    ConnectionProfile, IpVersion, Noize, Protocol, ScanMode, TorMode, TransportBackend,
+};
 
 const TAG: &str = "auto";
 
@@ -365,7 +367,7 @@ pub fn build_plan(user: &ConnectionProfile, fp: NetFingerprint) -> Vec<Candidate
     // پیش از هر چیز: حالت‌هایی که ترافیک دستگاه از تور بیرون می‌رود، نردبان
     // ندارند. اثرانگشتِ شبکه هم برایشان بی‌معنی است — چیزی که آن‌جا شکست
     // می‌خورد یا موفق می‌شود، bootstrapِ تور است نه یک نقطهٔ پایانی WARP.
-    if let Some(plan) = tor_plan(user) {
+    if let Some(plan) = tor_plan(user).or_else(|| psiphon_plan(user)) {
         let summary: Vec<String> = plan.iter().map(|c| c.label.clone()).collect();
         DiagnosticsLog::i(
             TAG,
@@ -475,6 +477,27 @@ fn tor_plan(user: &ConnectionProfile) -> Option<Vec<Candidate>> {
         }
         _ => None,
     }
+}
+
+/// سایفونِ تنها: یک تلاش، بدون نردبان پروتکل.
+///
+/// نردبانِ معمول (`MASQUE → GOOL → WireGuard`) برای این حالت بی‌معناست — هیچ‌کدام
+/// از آن پروتکل‌ها اجرا نمی‌شوند و `to_args_with_caps` همان `--psiphon-only
+/// --psiphon-mode cdn` را برمی‌گرداند. ساختنِ نردبانی که هر پله‌اش یکسان است
+/// فقط بودجهٔ بی‌حاصل می‌سوزاند.
+fn psiphon_plan(user: &ConnectionProfile) -> Option<Vec<Candidate>> {
+    if user.backend != TransportBackend::PsiphonOnly {
+        return None;
+    }
+    DiagnosticsLog::i(
+        TAG,
+        "Psiphon alone: no WARP tunnel to scan — one attempt on a bootstrap-sized budget.",
+    );
+    Some(vec![Candidate {
+        profile: user.clone(),
+        timeout_ms: tor_budget(user),
+        label: "Psiphon \u{b7} alone \u{b7} cdn fronting".to_string(),
+    }])
 }
 
 /// معادل `SmartAuto.choose()` — برای سازگاری با کد/تست‌های قبلی حفظ شده.

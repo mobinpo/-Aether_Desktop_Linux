@@ -388,13 +388,25 @@ pub fn webrtc_leak_check(exit_ip: Option<&str>) -> LeakReport {
             // شرطِ `browser_policies > 0` عمدی است: اگر هیچ حفاظتی نصب نشده
             // باشد، این تخفیف داده نمی‌شود و اتصال مثل قبل بسته می‌شود.
             let udp_open_by_design = guard.udp_browser_scoped && guard.browser_policies > 0;
-            let leaking = !via_tunnel && !browser_policy_only && !udp_open_by_design;
+            // لینوکس هیچ ابزارِ مهارِ UDP ندارد، پس STUN همیشه از مسیرِ مستقیم
+            // جواب می‌دهد و این نشتیِ «اثبات‌شده» نیست — نتیجهٔ نبودِ ابزار است.
+            // fail-closed اینجا یعنی رد کردنِ هر نشستِ سالم، پس داوری به هشدار تنزل
+            // می‌کند و صریح می‌گوید چه چیزی کار نمی‌کند.
+            let enforceable = guard.can_enforce;
+            let leaking = !enforceable && !via_tunnel && !browser_policy_only && !udp_open_by_design;
             LeakReport {
                 leaking,
                 ip: Some(r.reflexive_ip.clone()),
                 server: Some(r.server.clone()),
                 detail: if via_tunnel {
                     format!("STUN answered with the tunnel exit ({})", r.reflexive_ip)
+                } else if !enforceable {
+                    format!(
+                        "STUN answered with the real IP ({}) over direct UDP — this platform has no \
+                         system-level UDP containment, so WebRTC inside the browser can bypass \
+                         the tunnel. Disable WebRTC in the browser for full protection.",
+                        r.reflexive_ip
+                    )
                 } else if browser_policy_only {
                     "browser WebRTC policy is active; restart the browser to reload it".to_string()
                 } else if udp_open_by_design {
@@ -626,10 +638,8 @@ fn check(name: &str, verdict: Verdict, detail: impl Into<String>) -> Check {
 pub fn run(profile: &ConnectionProfile) -> Report {
     let mut checks = Vec::new();
 
-    // ۱) باینری موتور
-    let engine_exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("engine").join("aether.exe")));
+    // ۱) باینری موتور — از همان resolverِ مشترک، چون روی لینوکس کنارِ باینری نیست.
+    let engine_exe = Some(crate::engine::bundled_engine_exe());
     checks.push(match &engine_exe {
         Some(p) if p.exists() => check("Engine binary", Verdict::Pass, p.display().to_string()),
         Some(p) => check(

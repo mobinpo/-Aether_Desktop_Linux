@@ -44,7 +44,7 @@ const ICON = {
 // یک منوی تنظیمات که مقدار فعلی را با نام داخلی (`AETHER_PSIPHON`) نشان بدهد،
 // کاربر را مجبور می‌کند برای خواندنِ وضعیت وارد زیرصفحه شود.
 const VALUE_LABEL = {
-  AETHER: 'Aether', AETHER_PSIPHON: 'Aether \u2192 Psiphon',
+  AETHER: 'Aether', AETHER_PSIPHON: 'Aether \u2192 Psiphon', PSIPHON_ONLY: 'Psiphon',
   TOR: 'Tor', AETHER_TOR: 'Aether \u2192 Tor',
   TOR_PSIPHON: 'Tor \u2192 Psiphon', TOR_AETHER: 'Tor \u2192 Aether',
   SMART: 'Smart', MASQUE: 'MASQUE', WIREGUARD: 'WireGuard', GOOL: 'WARP\u00d72', MIM: 'MASQUE\u00d72',

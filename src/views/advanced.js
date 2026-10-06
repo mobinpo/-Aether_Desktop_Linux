@@ -26,6 +26,7 @@ const BACKENDS = [
   ['AETHER_TOR', 'Aether \u2192 Tor'],
   ['TOR_PSIPHON', 'Tor \u2192 Psiphon'],
   ['TOR_AETHER', 'Tor \u2192 Aether'],
+  ['PSIPHON_ONLY', 'Psiphon'],
 ]
 
 // توضیحِ زیرِ انتخابگر، برای هر بک‌اند جدا — پورت از `backendHelp` موبایل.
@@ -41,11 +42,16 @@ const BACKEND_HELP = {
   AETHER_TOR: 'Two hops: Aether connects first, then Tor is built INSIDE that tunnel. The network you are on sees only Aether\u2019s obfuscated transport, never Tor \u2014 so this is the mode to use where Tor is blocked. Your exit is a Tor exit node.',
   TOR_PSIPHON: 'Three hops: Tor first, then Psiphon dialled through it. Your exit IP is Psiphon\u2019s, reached from a Tor address, so sites that block Tor exit nodes open again while your own address stays behind Tor. The slowest mode.',
   TOR_AETHER: 'The reverse chain: Tor first, then the Aether tunnel built INSIDE it. Your exit is a WARP address \u2014 the same as plain Aether \u2014 but the network you are on sees only Tor, and cannot tell that a VPN tunnel exists at all. Use it where Cloudflare/WARP itself is blocked or throttled but Tor still gets through. Carries normal UDP, unlike the Tor-exit modes.',
+  PSIPHON_ONLY: 'Psiphon alone, with no Aether/WARP tunnel under it. Use it where WARP is blocked outright \u2014 the other Psiphon mode needs WARP to come up first, so it never reaches Psiphon on such a network. Exits through a Psiphon server and carries TCP only.',
 }
 
 // حالت‌هایی که تور در آن‌ها هست — آینهٔ `uses_tor` و `tor_mode` در profile.rs.
 const TOR_BACKENDS = ['TOR', 'AETHER_TOR', 'TOR_PSIPHON', 'TOR_AETHER']
 const usesTor = (b) => TOR_BACKENDS.includes(b || 'AETHER')
+// آینهٔ `TransportBackend::uses_warp` در profile.rs: `PSIPHON_ONLY` هم مثل حالت‌های
+// `--tor-only` هیچ تونل WARPی بالا نمی‌آورد، پس سطرهای WARP‌شکل برایش بی‌معنایند.
+const NO_WARP_BACKENDS = [...TOR_BACKENDS, 'PSIPHON_ONLY']
+const usesWarp = (b) => !NO_WARP_BACKENDS.includes(b || 'AETHER')
 // در زنجیرهٔ عادی، تور از داخلِ تونل زنگ می‌زند: شبکهٔ محلی هرگز آن را
 // نمی‌بیند، پس پل و کشورِ پل بی‌معنی‌اند.
 const torChained = (b) => b === 'AETHER_TOR'
@@ -389,13 +395,17 @@ const SECTIONS = {
         : t('Only applies to the chained backend. If no server is reachable in that country, Aether falls back to an automatic exit instead of hanging.')}</span>
     </section>
     ${usesTor(p.backend) ? SECTIONS.tor(p) : ''}
+    ${usesWarp(p.backend) ? `
     ${segmented(t('Protocol'), 'protocol', PROTOCOLS, p.protocol)}
     ${torReverse(p.backend) ? `
     <section class="field">
       <span class="field__hint">${t('Fixed to MASQUE over HTTP/2 in this mode. Tor carries TCP only and WARP\u2019s WireGuard endpoints answer on UDP alone, so the engine refuses WireGuard and WARP\u00d72 here.')}</span>
     </section>` : ''}
     ${segmented(t('Scan mode'), 'scanMode', SCAN_MODES, p.scanMode)}
-    ${segmented(t('IP version'), 'ipVersion', IP_VERSIONS, p.ipVersion)}`,
+    ${segmented(t('IP version'), 'ipVersion', IP_VERSIONS, p.ipVersion)}` : `
+    <section class="field">
+      <span class="field__hint">${t('No WARP tunnel runs in this mode, so there is no protocol, scan mode or IP version to choose \u2014 Psiphon picks its own server and reaches the internet by itself.')}</span>
+    </section>`}`,
 
   // v13 — گروه تور، پورت از بخش Tor در SettingsScreen.kt. فقط وقتی رندر
   // می‌شود که حالتِ انتخابی واقعاً تور داشته باشد: گروهی که همیشه آنجاست و

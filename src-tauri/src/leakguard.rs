@@ -44,6 +44,15 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const TAG: &str = "leakguard";
 
+/// آیا این سیستم‌عامل اصلاً ابزارِ مهارِ نشتی دارد؟
+///
+/// ویندوز `netsh advfirewall` + رجیستری دارد. لینوکس در این برنامه ندارد: `netsh`
+/// و `reg` وجود ندارند، پس گارد هیچ قاعده‌ای نصب نمی‌کند. اگر این پرچم false
+/// باشد، داوریِ «fail closed» دیگر معنا ندارد — نه چون نشتی مهم نیست، بلکه چون
+/// ابزارِ بستنش وجود ندارد؛ رد کردنِ هر نشستِ سالم یعنی محصول روی این
+/// سیستم‌عامل هرگز کار نمی‌کند.
+const CAN_ENFORCE: bool = cfg!(windows);
+
 /// نام مشترک همهٔ قواعد فایروال — پاک‌سازی با یک دستور انجام می‌شود.
 pub const FW_RULE: &str = "Aether Leak Guard";
 /// Kill-switch rules intentionally have a separate name so they survive a
@@ -117,6 +126,8 @@ pub struct GuardStatus {
     /// برای **فرآیندهای خودمان** انتظارِ طرح است، نه نشتی — و داوریِ نشتی
     /// باید همین را بداند، وگرنه نشستی را رد می‌کند که خودش این‌طور خواسته.
     pub udp_browser_scoped: bool,
+    /// آیا این سیستم‌عامل اصلاً ابزارِ مهارِ نشتی دارد؟ ببین [CAN_ENFORCE].
+    pub can_enforce: bool,
 }
 
 fn status_cell() -> &'static parking_lot::Mutex<GuardStatus> {
@@ -179,14 +190,27 @@ impl LeakGuard {
             firewall_rules: me.rules + me.kill_rules,
             browser_policies: me.policies,
             udp_browser_scoped: me.udp_browser_scoped,
+            can_enforce: CAN_ENFORCE,
         };
 
         if me.rules == 0 {
             if me.edits.is_empty() {
-                DiagnosticsLog::e(
-                    TAG,
-                    "Leak guard could not install any protection. The connection must fail closed; administrator rights are required for the firewall kill-switch.",
-                );
+                if CAN_ENFORCE {
+                    DiagnosticsLog::e(
+                        TAG,
+                        "Leak guard could not install any protection. The connection must fail closed; administrator rights are required for the firewall kill-switch.",
+                    );
+                } else {
+                    // لینوکس: نه `netsh` داریم نه رجیستری، پس «هیچ حفاظتی نصب
+                    // نشد» یک واقعیتِ معماری است نه یک خطا. تونل کار می‌کند و
+                    // کاربر می‌تواند WebRTC مرورگرش را خودش تنظیم کند.
+                    DiagnosticsLog::w(
+                        TAG,
+                        "No system-level leak containment on this platform (no netsh/registry). \
+                         The tunnel runs, but WebRTC inside the browser can bypass it — \
+                         disable WebRTC in the browser, or route it through the tunnel manually.",
+                    );
+                }
             } else {
                 DiagnosticsLog::w(
                     TAG,
@@ -436,6 +460,7 @@ impl LeakGuard {
             firewall_rules: self.kill_rules,
             browser_policies: 0,
             udp_browser_scoped: self.udp_browser_scoped,
+            can_enforce: CAN_ENFORCE,
         };
     }
 

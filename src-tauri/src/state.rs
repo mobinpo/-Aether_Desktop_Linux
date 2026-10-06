@@ -306,10 +306,15 @@ impl AetherController {
         let store = ProfileStore::new(data_dir);
         let mut profile = store.load();
         profile.normalize();
-        let install_dir = std::env::current_exe()
+        let exe_parent = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| data_dir.to_path_buf());
+        // بستهٔ deb پروژه را در `/usr/bin` می‌گذارد ولی منابع را در
+        // `/usr/lib/Aether/engine` — پس «کنارِ خودِ باینری» روی لینوکس غلط است.
+        let install_dir = crate::engine::bundled_engine_dir()
+            .and_then(|d| d.parent().map(Path::to_path_buf))
+            .unwrap_or(exe_parent);
 
         let ip_slot = Arc::new(Mutex::new(IpSlot {
             info: None,
@@ -633,14 +638,22 @@ impl AetherController {
                     engine::LOCAL_SOCKS_PORT,
                     Duration::from_millis(PORT_RELEASE_WAIT_MS),
                 ) {
-                    DiagnosticsLog::w(
+                    // هشدار و ادامه دروغ می‌گفت: موتور بعداً با
+                    // `Address already in use (os error 98)` می‌مرد و تلاش شکست
+                    // می‌خورد — که در لاگ فقط به شکل «این پروتکل نتوانست تونل
+                    // بسازد» دیده می‌شد و علتش معلوم نبود.
+                    DiagnosticsLog::e(
                         TAG,
                         &format!(
-                            "Local port {} is still busy after {}s — starting anyway.",
+                            "Local port {} is still held after {}s by another process — \
+                             abandoning this attempt. A stale aether engine from an earlier \
+                             session is the usual cause; quit it (pkill -f 'engine/aether') \
+                             and reconnect.",
                             engine::LOCAL_SOCKS_PORT,
                             PORT_RELEASE_WAIT_MS / 1000
                         ),
                     );
+                    return;
                 }
                 // SmartAuto.kt parity: fingerprint the network before planning.
                 // 1.2.3-p2 adds the UDP leg. Without it the planner could not
@@ -1648,7 +1661,21 @@ impl AetherController {
                         }
                         TorGate::Ready => {}
                     }
-                    if self.profile.is_chained() {
+                    if self.profile.backend == crate::profile::TransportBackend::PsiphonOnly {
+                        // سایفونِ تنها استیج ۱ ندارد. `begin_chain()` موتور را بالا
+                        // می‌آورد و بعد منتظر می‌ماند کار کند — روی شبکه‌ای که
+                        // WARP بسته است موتور هرگز کار نمی‌کند و کل بودجه می‌سوزد
+                        // (`stage 1: 127.0.0.1:1819 speaks SOCKS5 but cannot reach
+                        // the internet`). در حالت `--psiphon-only` خودِ موتور
+                        // سایفون را روی ۱۸۱۹ سرویس می‌دهد، پس همان لازم است.
+                        //
+                        // دو فراخوانیِ پایانی لازم است: بدون آن‌ها حالت هرگز از
+                        // `Connecting` بیرون نمی‌آمد و همین شاخه هر ۲۰۰ms دوباره
+                        // اجرا می‌شد — لاگ پر از تکرارِ همین پیام.
+                        engine::set_exit_socks_port(engine::LOCAL_SOCKS_PORT);
+                        self.bring_up_data_path();
+                        self.begin_verification();
+                    } else if self.profile.is_chained() {
                         self.begin_chain();
                     } else {
                         // ۱.۲.۵ — خروجی خط لوله همیشه پورت همیشگی نیست. هر چیزی
@@ -1754,11 +1781,27 @@ impl AetherController {
                             spawn_ip_lookup(self.ip_slot.clone(), true);
                         }
                     } else if out.leak.as_ref().map(|l| l.leaking).unwrap_or(false) {
-                        // Fail closed. A tunnel that exposes the real IP is not
-                        // a successful connection, even when TCP/DNS passed.
-                        self.fail(
-                            "Connection refused: WebRTC can still reach the real IP over direct UDP. Browser and system protection could not be verified.",
-                        );
+                        // Fail closed — ولی فقط جایی که نشتی واقعاً قابلِ جلوگیری
+                        // بوده. سیستمی که مهارِ UDP ندارد (نه `netsh` نه رجیستری)
+                        // هیچ‌وقت نمی‌تواند جوابِ STUN را بگیرد، پس رد کردنِ آنجا
+                        // یعنی رد کردنِ هر نشستِ سالم: تونل با TCP و DNS ثابت شده
+                        // کار می‌کند و نشتِ WebRTC تنظیمِ مرورگر است، نه برنامه.
+                        if leakguard::status().can_enforce {
+                            self.fail(
+                                "Connection refused: WebRTC can still reach the real IP over direct UDP. Browser and system protection could not be verified.",
+                            );
+                        } else {
+                            DiagnosticsLog::w(
+                                TAG,
+                                "WebRTC can bypass the tunnel (no UDP containment on this \
+                                 platform) — connecting anyway. Disable WebRTC in your browser \
+                                 to avoid the leak.",
+                            );
+                            self.set_state(ConnectionState::Connected, "");
+                            if out.exit.is_none() {
+                                spawn_ip_lookup(self.ip_slot.clone(), true);
+                            }
+                        }
                     } else {
                         self.advance_or_fail("Tunnel started, but the end-to-end self-test failed");
                     }
@@ -1855,7 +1898,12 @@ impl AetherController {
                 // `is_alive` استیج ۲ در طول یک چرخشِ عمدی عمداً true می‌ماند
                 // (نگاه کنید به psiphon.rs)، وگرنه واچ‌داگ همان نشستی را
                 // می‌کشت که قرار بود نجاتش بدهد.
-                if self.profile.is_chained() && !self.psiphon.is_alive() {
+                // سایفونِ تنها: psiphon را **موتور** اجرا می‌کند، نه `psiphon.rs`.
+                // پس `is_alive()` همیشه false است و واچ‌داگ هر نشستِ سالم را
+                // می‌کُشد (`Connected` و بعد بلافاصله «The Psiphon stage died»).
+                let app_owns_psiphon = self.profile.is_chained()
+                    && self.profile.backend != crate::profile::TransportBackend::PsiphonOnly;
+                if app_owns_psiphon && !self.psiphon.is_alive() {
                     DiagnosticsLog::e(
                         TAG,
                         "The Psiphon stage died while connected — rebuilding the session.",

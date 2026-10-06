@@ -34,7 +34,7 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "deb"
     ],
     "icon": [
       "icons/32x32.png",
@@ -43,11 +43,14 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../dist-engine/aether.exe": "engine/aether.exe",
-      "../dist-engine/wintun.dll": "engine/wintun.dll",
-      "../dist-engine/psiphon-tunnel-core.exe": "engine/psiphon-tunnel-core.exe",
+      "../dist-engine/aether": "engine/aether",
+      "../dist-engine/psiphon-tunnel-core": "engine/psiphon-tunnel-core",
       "../dist-engine/server_entries.txt": "engine/server_entries.txt",
-      "../CORE_VERSION": "engine/CORE_VERSION"
+      "../dist-engine/pt/lyrebird": "engine/pt/lyrebird",
+      "../dist-engine/pt/pt_config.json": "engine/pt/pt_config.json",
+      "../dist-engine/pt/geoip": "engine/pt/geoip",
+      "../dist-engine/pt/geoip6": "engine/pt/geoip6",
+      "../dist-engine/CORE_VERSION": "engine/CORE_VERSION"
     },
     "windows": {
       "webviewInstallMode": {
@@ -56,10 +59,10 @@
       },
       "allowDowngrades": false
     },
-    "publisher": "Cluvex Studio",
-    "copyright": "Copyright \u00a9 Cluvex Studio",
+    "publisher": "mobinpo",
+    "copyright": "Copyright \u00a9 mobinpo",
     "category": "Utility",
     "shortDescription": "Freedom, in one tap",
-    "longDescription": "Aether Desktop \u2014 the Windows edition of the Aether tunnelling client."
+    "longDescription": "Aether Desktop \u2014 the Linux edition of the Aether tunnelling client."
   }
 }

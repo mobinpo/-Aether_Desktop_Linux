@@ -94,6 +94,46 @@ pub fn reset_exit_socks_port() {
 /// نسخهٔ هستهٔ همراه برنامه — از فایل CORE_VERSION کنار aether.exe خوانده
 /// می‌شود (همان فایلی که پنل About نشان می‌دهد). در صورت هر ابهامی (0،0)
 /// برمی‌گردد تا رفتار محافظه‌کارانه باشد.
+/// پوشه‌ای که `engine/` در آن است.
+///
+/// بستهٔ deb پروژه را می‌رود `/usr/bin/aether-desktop` ولی منابع را در
+/// `/usr/lib/Aether/engine` می‌گذارد، پس «کنار خودِ باینری» روی لینوکس همیشه غلط
+/// است. نامزدها به ترتیب امتحان می‌شوند و اولین پوشه‌ای که واقعاً `engine/aether`
+/// دارد برنده است.
+///
+/// این یکی را همهٔ چهار فراخوانی باید بپرسند: `state.rs`، `main.rs::core_caps`،
+/// `main.rs::core_version` و `diagnostics::run`. مسیرِ اشتباه در `core_caps` همهٔ
+/// قابلیت‌ها را false برمی‌گرداند و رابط کاربری هر ورودی را غیرفعال می‌کند.
+pub fn bundled_engine_dir() -> Option<PathBuf> {
+    let exe_parent = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(v) = std::env::var("AETHER_INSTALL_DIR") {
+        roots.push(PathBuf::from(v));
+    }
+    if let Some(p) = exe_parent {
+        roots.push(p.clone());
+        roots.push(p.join("..").join("lib").join("Aether"));
+    }
+    roots.push(PathBuf::from("/usr/lib/Aether"));
+    roots.push(PathBuf::from("/usr/lib/aether"));
+    roots.push(PathBuf::from("/opt/Aether"));
+
+    roots
+        .into_iter()
+        .map(|r| r.join("engine"))
+        .find(|d| d.join("aether").is_file())
+}
+
+/// باینری موتورِ همراه برنامه — یا یک مسیرِ خالی اگر پیدا نشد.
+pub fn bundled_engine_exe() -> PathBuf {
+    bundled_engine_dir()
+        .map(|d| d.join("aether"))
+        .unwrap_or_default()
+}
+
 fn engine_core_version(exe: &Path) -> (u32, u32) {
     let Some(dir) = exe.parent() else {
         return (0, 0);
@@ -531,6 +571,13 @@ impl AetherProcess {
         };
         self.uses_tor = false;
 
+        // **اول فرزندان، بعد والد.** `child.kill()` فقط فرآیندِ خودِ موتور را
+        // می‌فرستد؛ در حالت `--psiphon-only` (و `--tor-only`/`--psiphon`) موتور
+        // یک فرزندِ واقعی اجرا می‌کند — `psiphon-tunnel-core` یا `tor` — که پورت
+        // SOCKS را نگه می‌دارد. اگر فقط والد کشته شود، آن فرزند زنده می‌ماند و
+        // پورت ۱۸۱۹ را برای نشستِ بعدی قفل می‌کند؛ کاربر هر بار با «Local port
+        // 1819 is still held» گیر می‌کرد.
+        let children = child_pids(child.id());
         let _ = child.kill(); // در ویندوز TerminateProcess فوری است
         let deadline = Instant::now() + Duration::from_millis(GRACEFUL_EXIT_MS);
         while Instant::now() < deadline {
@@ -540,8 +587,67 @@ impl AetherProcess {
             std::thread::sleep(Duration::from_millis(10));
         }
         let _ = child.wait();
+
+        for pid in children {
+            if pid != child.id() && kill_pid(pid) {
+                DiagnosticsLog::w(
+                    "engine",
+                    &format!("Engine left a child behind (pid {pid}) — killed it too."),
+                );
+            }
+        }
         DiagnosticsLog::w("engine", "Engine stopped and reaped.");
     }
+}
+
+/// فرزندانِ مستقیمِ یک پروسه — فقط روی لینوکس، از `/proc`.
+///
+/// عمداً یک سطح: psiphon و tor یک لایه زیر موتور اجرا می‌شوند و خودشان فرزندِ
+/// ماندگاری نمی‌سازند.
+fn child_pids(parent: u32) -> Vec<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut pids = Vec::new();
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return pids;
+        };
+        for entry in entries.flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                continue;
+            };
+            // فیلدِ چهارم `ppid` است. `comm` می‌تواند داخل پرانتز و با فاصله
+            // باشد، پس از آخرین `) ` به بعد خوانده می‌شود.
+            let Some((_, rest)) = text.rsplit_once(") ") else {
+                continue;
+            };
+            if rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u32>().ok())
+                == Some(parent)
+            {
+                pids.push(pid);
+            }
+        }
+        return pids;
+    }
+    #[cfg(not(target_os = "linux"))]
+    Vec::new()
+}
+
+fn kill_pid(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 impl Drop for AetherProcess {

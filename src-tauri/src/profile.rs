@@ -111,6 +111,12 @@ pub enum TransportBackend {
     AetherTor,
     TorPsiphon,
     TorAether,
+    /// سایفون **بدون** WARP زیرش (`--psiphon-only`).
+    ///
+    /// `AetherPsiphon` دو تونل می‌سازد و سایفون داخلِ WARP است؛ روی شبکه‌ای که
+    /// WARP بسته است آن حالت هرگز به سایفون نمی‌رسد چون پلهٔ اول می‌میرد. روی
+    /// همین شبکه تنها `--psiphon-only --psiphon-mode cdn` تونل ساخت.
+    PsiphonOnly,
 }
 
 /// ۱.۲.۵ (هستهٔ ۲.۰.۰) — پورت ۱:۱ از `TransportBackend.kt::TorMode`.
@@ -174,14 +180,18 @@ impl TransportBackend {
     pub fn is_chained(self) -> bool {
         matches!(
             self,
-            TransportBackend::AetherPsiphon | TransportBackend::TorPsiphon
+            TransportBackend::AetherPsiphon
+                | TransportBackend::TorPsiphon
+                | TransportBackend::PsiphonOnly
         )
     }
 
     /// موتور چگونه تور را با تونل ترکیب کند، یا `None` وقتی تور در کار نیست.
     pub fn tor_mode(self) -> Option<TorMode> {
         match self {
-            TransportBackend::Aether | TransportBackend::AetherPsiphon => None,
+            TransportBackend::Aether
+            | TransportBackend::AetherPsiphon
+            | TransportBackend::PsiphonOnly => None,
             TransportBackend::AetherTor => Some(TorMode::Chain),
             TransportBackend::Tor | TransportBackend::TorPsiphon => Some(TorMode::Only),
             TransportBackend::TorAether => Some(TorMode::Reverse),
@@ -199,8 +209,10 @@ impl TransportBackend {
     /// آن دو بی‌معنا می‌کند: نه لبه‌ای برای اسکن، نه پروتکلی برای انتخاب، نه
     /// هویتی برای ثبت. رابط کاربری آن سطرها را بر مبنای همین خاموش می‌کند، نه
     /// بر مبنای نام بک‌اند.
+    ///
+    /// `PsiphonOnly` هم نه: سایفون خودش تنها تونل است و WARP اصلاً در کار نیست.
     pub fn uses_warp(self) -> bool {
-        self.tor_mode() != Some(TorMode::Only)
+        self.tor_mode() != Some(TorMode::Only) && self != TransportBackend::PsiphonOnly
     }
 
     /// پورت SOCKS5 محلی‌ای که **خروجیِ خط لولهٔ تمام‌شده** است.
@@ -255,6 +267,9 @@ impl TransportBackend {
             TransportBackend::TorAether => {
                 "Tor → Aether (the tunnel goes out through tor; exit = WARP edge)"
             }
+            TransportBackend::PsiphonOnly => {
+                "Psiphon alone, no tunnel under it (exit = Psiphon server)"
+            }
         }
     }
 
@@ -276,6 +291,7 @@ impl TransportBackend {
             TransportBackend::AetherTor => Some("Aether \u{2192} Tor"),
             TransportBackend::TorPsiphon => Some("Tor \u{2192} Psiphon"),
             TransportBackend::TorAether => Some("Tor \u{2192} Aether"),
+            TransportBackend::PsiphonOnly => Some("Psiphon"),
         }
     }
 }
@@ -792,10 +808,15 @@ impl ConnectionProfile {
         // این‌جا مثل قبل روی `Aether` می‌افتاد، Psiphon از یک تونل WARP بیرون
         // می‌رفت و کاربری که تور را انتخاب کرده بود اصلاً از تور رد نمی‌شد —
         // یک نشستِ به‌ظاهر موفق با خروجیِ کاملاً اشتباه.
-        stage.backend = if self.backend.tor_mode() == Some(TorMode::Only) {
-            TransportBackend::Tor
-        } else {
-            TransportBackend::Aether
+        stage.backend = match self.backend.tor_mode() {
+            Some(TorMode::Only) => TransportBackend::Tor,
+            // سایفونِ تنها استیج ۱ ندارد — خودش تنها تونل است. اگر این‌جا
+            // `Aether` می‌شد، موتور با `--masque` بالا می‌آمد و `--psiphon-only`
+            // هرگز فرستاده نمی‌شد.
+            None if self.backend == TransportBackend::PsiphonOnly => {
+                TransportBackend::PsiphonOnly
+            }
+            _ => TransportBackend::Aether,
         };
         stage.lan_share = false;
         stage
@@ -837,6 +858,26 @@ impl ConnectionProfile {
     /// نسخه‌ی گِیت‌شده‌ی `toArgs()` — فلگ‌های 1.5.0 فقط با هسته‌ی سازگار.
     pub fn to_args_with_caps(&self, caps: CoreCaps) -> Vec<String> {
         let mut args: Vec<String> = Vec::new();
+
+        // ----- سایفونِ تنها (`--psiphon-only`) ------------------------------
+        //
+        // اول از همه می‌آید و بعدش برمی‌گردیم، دقیقاً مثل `--tor-only`: هیچ
+        // تونلی بالا نمی‌آید، پس هیچ لبه‌ای برای اسکن، هیچ پروتکلی برای انتخاب
+        // و هیچ هویت WARPی برای گرفتن نیست.
+        //
+        // `--psiphon-mode cdn` تفاوتِ معناداری است: با `auto` روی همین شبکه
+        // `tactics request failed` می‌داد و با `cdn` در ۲۵ ثانیه آماده شد.
+        //
+        // `--psiphon-bind` اینجا غلط بود: در حالت `--psiphon-only` خودِ سایفون
+        // روی پورتِ `--bind` (یعنی ۱۸۱۹) سرویس می‌دهد. با دادنِ `1825` پورتِ
+        // ۱۸۱۹ یک لیسنرِ توخالی می‌شد و خودآزاما می‌گفت «speaks SOCKS5 but
+        // cannot reach the internet».
+        if self.backend == TransportBackend::PsiphonOnly {
+            args.push("--psiphon-only".into());
+            args.push("--psiphon-mode".into());
+            args.push("cdn".into());
+            return args;
+        }
 
         // ----- تور (هستهٔ ۲.۰.۰) ----------------------------------------
         //

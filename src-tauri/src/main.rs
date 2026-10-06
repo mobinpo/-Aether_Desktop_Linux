@@ -48,6 +48,12 @@ mod share;
 mod smart_auto;
 mod state;
 mod store;
+// مسیر داده روی هر سیستم‌عامل یک پیاده‌سازی دارد: WinINET در ویندوز و
+// GSettings در لینوکس. امضای هر دو یکی است، پس `state.rs` بی‌تغییر می‌ماند.
+#[cfg(windows)]
+mod sysproxy;
+#[cfg(target_os = "linux")]
+#[path = "sysproxy_linux.rs"]
 mod sysproxy;
 mod tor_bootstrap;
 // >>> AETHER-APP-PATCH tor-native-carrier
@@ -65,7 +71,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// The in-app updater was removed in 1.2.2; only a read-only link remains.
-pub const RELEASES_URL: &str = "https://github.com/QW-AI-Code/Aether_Desktop/releases";
+pub const RELEASES_URL: &str = "https://github.com/mobinpo/-Aether_Desktop_Linux/releases";
 
 /// How often the controller is stepped. Same ~5x/second cap as Android.
 const TICK: Duration = Duration::from_millis(200);
@@ -286,11 +292,9 @@ fn about_info() -> serde_json::Value {
 /// می‌شوند تا پنل پیشرفته آن‌ها را روی هستهٔ قدیمی‌تر خاکستری کند.
 #[tauri::command]
 fn core_caps() -> serde_json::Value {
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("engine").join("aether.exe")))
-        .unwrap_or_default();
-    let caps = engine::engine_caps(&exe);
+    // مسیرِ اشتباه اینجا همهٔ قابلیت‌ها را false برمی‌گرداند و رابط کاربری هر
+    // ورودی را غیرفعال می‌کند — پس از همان `bundled_engine_dir` می‌پرسیم.
+    let caps = engine::engine_caps(&engine::bundled_engine_exe());
     serde_json::json!({
         "zeroTrust": caps.zero_trust,
         "routing": caps.routing,
@@ -304,10 +308,9 @@ fn core_caps() -> serde_json::Value {
 }
 
 fn core_version() -> String {
-    // Placed next to aether.exe (equivalent of assets/CORE_VERSION on Android).
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("engine").join("CORE_VERSION")))
+    // کنارِ موتور گذاشته می‌شود (معادل assets/CORE_VERSION در اندروید).
+    engine::bundled_engine_dir()
+        .map(|d| d.join("CORE_VERSION"))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "unknown".to_string())
