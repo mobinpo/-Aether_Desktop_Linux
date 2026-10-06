@@ -140,7 +140,22 @@ jobs:
             aarch64) sleep 45 ;;
             armv7)   sleep 90 ;;
           esac
-          ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG"
+          # خروجی در فایل می‌رود و در خلاصهٔ جاب نوشته می‌شود، چون لاگِ قدم در
+          # رابط کاربری سه ساعت بعد از پاک شدنِ گران‌قیمت می‌شود و لاگِ خام هم
+          # برای خواندن نیاز به دسترسیِ مدیر دارد. این تنها قدمی است که به شبکهٔ
+          # بیرون وابسته است، پس پیامِ خطایش باید دیده شود.
+          if ! ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG" \
+               > /tmp/engine-fetch.log 2>&1; then
+            {
+              echo '## ✗ engine fetch failed'
+              echo '```'
+              tr '\r' '\n' < /tmp/engine-fetch.log | grep -vE '^ *[0-9]+ +[0-9]' | tail -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/engine-fetch.log
+            exit 1
+          fi
+          tr '\r' '\n' < /tmp/engine-fetch.log | grep -vE '^ *[0-9]+ +[0-9]' | tail -12
 
       - name: Engine is the right machine code
         run: |
