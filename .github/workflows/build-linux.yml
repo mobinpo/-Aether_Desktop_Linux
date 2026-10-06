@@ -140,22 +140,28 @@ jobs:
             aarch64) sleep 45 ;;
             armv7)   sleep 90 ;;
           esac
-          # خروجی در فایل می‌رود و در خلاصهٔ جاب نوشته می‌شود، چون لاگِ قدم در
-          # رابط کاربری سه ساعت بعد از پاک شدنِ گران‌قیمت می‌شود و لاگِ خام هم
-          # برای خواندن نیاز به دسترسیِ مدیر دارد. این تنها قدمی است که به شبکهٔ
-          # بیرون وابسته است، پس پیامِ خطایش باید دیده شود.
+          # خطا با `::error::` اعلام می‌شود، نه فقط با خروجِ ۱. حاشیه‌نویسی
+          # (annotation) از طریق API عمومی خوانده می‌شود، ولی لاگِ خامِ قدم
+          # نیاز به دسترسیِ مدیر دارد — و تنها چیزی که از این قدم بیرون می‌آید
+          # همین پیام است. پیامِ curl چند خطی است، پس به چند تکهٔ کوتاه شکسته
+          # می‌شود تا در یک خط جا شود.
           if ! ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG" \
                > /tmp/engine-fetch.log 2>&1; then
-            {
-              echo '## ✗ engine fetch failed'
-              echo '```'
-              tr '\r' '\n' < /tmp/engine-fetch.log | grep -vE '^ *[0-9]+ +[0-9]' | tail -40
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            reason="$(tr '\r' '\n' < /tmp/engine-fetch.log \
+                      | grep -vE '^ *[0-9]+ +[0-9]+ +[0-9]' \
+                      | grep -vE 'Dload +Upload|^ *$' | tail -6)"
+            echo "engine fetch failed for $ARCH_SLUG" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && echo "::error title=engine fetch ($ARCH_SLUG)::$line"
+            done <<< "$reason"
             cat /tmp/engine-fetch.log
             exit 1
           fi
-          tr '\r' '\n' < /tmp/engine-fetch.log | grep -vE '^ *[0-9]+ +[0-9]' | tail -12
+          tr '\r' '\n' < /tmp/engine-fetch.log \
+            | grep -vE '^ *[0-9]+ +[0-9]+ +[0-9]' | grep -vE '^ *$' | tail -12
 
       - name: Engine is the right machine code
         run: |
