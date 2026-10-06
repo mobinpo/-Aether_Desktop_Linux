@@ -39,7 +39,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/dist-engine"
 
 echo "==> [engine] v$VERSION / $SLUG"
-mkdir -p "$OUT"
+# هر دو پوشه ساخته می‌شوند، نه فقط ریشه: `dist-engine/` در `.gitignore` است و
+# روی یک چک‌اوت تازه اصلاً وجود ندارد. ساختنِ فقطِ ریشه باعث می‌شد `cp` روی
+# `pt/lyrebird` با «No such file or directory» بمیرد — و همین خطا بود که هر سه
+# معماری را در CI می‌کشت، بی‌آنکه پیامش کسی ببیند.
+mkdir -p "$OUT/pt"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
