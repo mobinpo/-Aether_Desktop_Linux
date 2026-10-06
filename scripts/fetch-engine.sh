@@ -46,9 +46,24 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Upstream publishes a .sha256 next to every asset. Verify: this is the core the
 # app ships and runs, so an unverified download is not acceptable.
+#
+# `--retry-all-errors` matters here: on CI the three architecture jobs start
+# together and each pulls ~24 MB at the same moment, which is exactly the shape
+# that gets a runner throttled with a 403/429. A plain `--retry 3` gives up on
+# those because it only retries transient transport errors, not HTTP status
+# codes. `-C -` resumes a partial file instead of starting over.
+fetch() {
+  curl -fL --retry 8 --retry-delay 10 --retry-all-errors --retry-max-time 600 \
+       --speed-limit 1024 --speed-time 60 \
+       -C - -o "$1" "$2"
+}
+
 echo "==> [engine] downloading $ASSET"
-curl -fL --retry 3 --retry-delay 5 -o "$tmp/core.tar.gz" "$URL"
-curl -fL --retry 3 --retry-delay 5 -o "$tmp/core.sha256" "$URL.sha256" || true
+if ! fetch "$tmp/core.tar.gz" "$URL"; then
+  echo "fetch-engine: could not download $URL" >&2
+  exit 1
+fi
+fetch "$tmp/core.sha256" "$URL.sha256" || true
 
 if [[ -s "$tmp/core.sha256" ]]; then
   # The .sha256 file is "<hash>  <filename>" or a bare "<hash>"; take field one.
@@ -66,6 +81,15 @@ else
 fi
 
 tar -xzf "$tmp/core.tar.gz" -C "$tmp"
+
+# یک بستهٔ نیم‌کاره از تلاشِ قطع‌شده، `tar` را با خطای مبهم می‌دهد و پیامش
+# هیچ اشاره‌ای به دانلود ندارد. اینجا صریح می‌گوییم مشکل از کجا بود.
+for want in aether pt/lyrebird pt/psiphon-tunnel-core; do
+  if [[ ! -f "$tmp/$want" ]]; then
+    echo "fetch-engine: $ASSET is missing '$want' — download incomplete?" >&2
+    exit 1
+  fi
+done
 
 # psiphon ships inside pt/ in the tarball but the app looks for it next to the
 # engine (it is a carrier, not a pluggable transport). Normalise the layout here
