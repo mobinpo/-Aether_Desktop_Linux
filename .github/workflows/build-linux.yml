@@ -208,19 +208,33 @@ jobs:
 
       # QEMU برای armv7: بدون آن نه کامپایلر نه لینکر (که هر دو برنامهٔ بومیِ
       # هستند) روی معماریِ غریبه اجرا نمی‌شوند.
+      #
+      # `dpkg --add-architecture armhf` اینجا عمداً نیست. یک بار امتحان شد و کار
+      # نکرد: با armhf فعال، apt بسته‌هایی را انتخاب می‌کند که روی رانر اجرا
+      # نمی‌شوند و مرحله با کدِ ۱۰۰ می‌میرد. آنچه لازم است فقط یک toolchainِ
+      # متقاطع است که خودش armhf را به‌عنوان وابستگی می‌آورد، بدون دست‌زدن به
+      # معماریِ APT.
       - name: QEMU user emulation (armv7 only)
         if: matrix.arch == 'armv7'
         run: |
           set -euo pipefail
-          sudo dpkg --add-architecture armhf
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-user-static gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+            qemu-user-static \
+            gcc-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross
           {
             echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc"
             echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
-            echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER=qemu-arm"
           } >> "$GITHUB_ENV"
+          # بدون QEMU_LD_PREFIX، لینکر پویا زیر `qemu-arm` کتابخانه‌های
+          # `/lib/arm-linux-gnueabihf` را پیدا نمی‌کند و بیلد با «cannot find
+          # -lgcc_s» می‌میرد.
+          echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf" >> "$GITHUB_ENV"
+          # خودِ curl و unzip هم زیر QEMU کند می‌شوند؛ بیلد armv7 چند برابر
+          # طول می‌کشد و `timeout-minutes` باید این را تحمل کند.
+          echo "should have gone to qemu-arm-static"
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -257,8 +271,29 @@ jobs:
         run: npm run web:build
 
       # ---- آزمون‌ها ----------------------------------------------------------
+      # `cargo test` برای سه معماری یک بار ساخته می‌شود و برای هر معماری، یک
+      # بار هم اجرا: باینریِ آزمون برای `armv7` باید زیر QEMU دوییده شود و این
+      # همان قدمی است که اگر ابزار نباشد می‌شکند — پس جدا از ساختن گرفته می‌شود.
+      # خروجی هم به حاشیه‌نویسی می‌رود، چون لاگِ خام بدون دسترسیِ مدیر خوانده
+      # نمی‌شود و `error: test failed` به‌تنهایی اسمِ آزمون را نمی‌گوید.
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          if ! cargo test --manifest-path src-tauri/Cargo.toml \
+               --target ${{ matrix.rust_target }} > /tmp/cargo-test.log 2>&1; then
+            reason="$(grep -E 'error(\[|:)|panicked at|FAILED|^failures:' /tmp/cargo-test.log \
+                      | head -12 || true)"
+            echo "cargo test failed on ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && echo "::error title=cargo test (${{ matrix.arch }})::$line"
+            done <<< "$reason"
+            tail -40 /tmp/cargo-test.log
+            exit 1
+          fi
+          grep -E '^test result' /tmp/cargo-test.log | tail -3
 
       # ---- بسته‌بندی ---------------------------------------------------------
       - name: Resolve version
