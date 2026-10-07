@@ -313,11 +313,18 @@ jobs:
           {
             echo "PKG_CONFIG_ALLOW_CROSS=1"
             echo "PKG_CONFIG_SYSROOT_DIR=/"
-            # فقط پوشهٔ lib نیست: `share/pkgconfig` هم هست و لازم است.
-            # تستِ محلی نشان داد webkit2gtk با LIBDIRِ تنها «Package xproto was not
-            # found» می‌دهد — آن `.pc`ها در share زندگی می‌کنند، نه در lib.
-            echo "PKG_CONFIG_PATH=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:/out/sysroot/usr/share/pkgconfig"
-            echo "PKG_CONFIG_LIBDIR=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:/out/sysroot/usr/share/pkgconfig"
+            # سه مسیر، نه دو: lib/pkgconfig عمومی، share/pkgconfig برای xproto و
+            # هم‌نوع، و خودِ glib/gio/gobject که در `lib/arm-linux-gnueabihf/
+            # pkgconfig` می‌نشینند. با حذفِ آخری، cargo می‌گوید «Package
+            # gobject-2.0 was not found» — همان‌طور که اگر `share` نبود webkit
+            # به xproto شکایت می‌کرد.
+            #
+            # مسیرها نسبت به ریشهٔ مخزن‌اند، نه ریشهٔ کانتینر: `/out` فقط در
+            # داخلِ کانتینر وجود دارد و بیرون از آن نیست. `$PWD` همان جایی است
+            # که کانتینر `/out` را به آن mount کرده.
+            echo "SYSROOT=$PWD/sysroot"
+            echo "PKG_CONFIG_PATH=$PWD/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:$PWD/sysroot/usr/share/pkgconfig:$PWD/sysroot/usr/lib/pkgconfig"
+            echo "PKG_CONFIG_LIBDIR=$PWD/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:$PWD/sysroot/usr/share/pkgconfig:$PWD/sysroot/usr/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
