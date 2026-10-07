@@ -473,7 +473,168 @@ jobs:
           retention-days: 3
 
   # ---------------------------------------------------------------------------
-  #  4) انتشار در GitHub Release
+  #  4) macOS — جابِ جدا، چون `runs-on` متفاوت است
+  #
+  #     این تنها جابی است که خروجی‌اش **امضا نشده** بیرون می‌آید. لینوکس و
+  #     ویندوز روی رانرهای گیت‌هاب بدون تنظیم کار می‌کنند، ولی روی مک
+  #     Gatekeeper هر اپی را که امضا نداشته باشد متوقف می‌کند.
+  #
+  #     آنچه می‌شود کرد: خروجی بی‌امضا را طوری بسازیم که Gatekeeper فقط یک
+  #     بار بپرسد و با یک کلیکِ راستِ Open باز شود. آنچه نمی‌شود کرد: نصبی که
+  #     بی‌صدا نصب شود — چون امضای Developer ID سالی ۹۹ دلار است و به هویتِ
+  #     حقوقیِ نام‌برده نیاز دارد. این را در متنِ ریلیز می‌گوییم به‌جای آنکه
+  #     کاربر فکر کند بسته خراب است.
+  #
+  #     TUN روی مک پیاده نشده — `tun.rs` یک `impl` خالی برای پلتفرم‌های بدون
+  #     TUN دارد و لاگ می‌نویسد. یعنی مک پروکسی می‌سازد نه تونلِ سراسری؛
+  #     برای فیلترِ SNI کافی است و در متنِ ریلیز هم نوشته می‌شود.
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: macos / ${{ matrix.arch }}
+    needs: preflight
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: macos-latest
+            rust_target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-latest
+            rust_target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the official engine
+        env:
+          ARCH_SLUG: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          case "$ARCH_SLUG" in
+            x86_64) sleep 0  ;;
+            aarch64) sleep 45 ;;
+          esac
+          if ! ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG" \
+               > /tmp/engine-fetch.log 2>&1; then
+            reason="$(tr '\r' '\n' < /tmp/engine-fetch.log \
+                      | grep -vE '^ *[0-9]+ +[0-9]+ +[0-9]' \
+                      | grep -vE 'Dload +Upload|^ *$' | tail -6)"
+            echo "::error title=engine fetch (macOS $ARCH_SLUG)::$reason"
+            cat /tmp/engine-fetch.log
+            exit 1
+          fi
+          tr '\r' '\n' < /tmp/engine-fetch.log \
+            | grep -vE '^ *[0-9]+ +[0-9]+ +[0-9]' | grep -vE '^ *$' | tail -8
+
+      - name: Engine is the right machine code
+        run: |
+          set -euo pipefail
+          file dist-engine/aether dist-engine/psiphon-tunnel-core
+          case "${{ matrix.arch }}" in
+            x86_64) file dist-engine/aether | grep -q 'x86-64' ;;
+            aarch64) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
+          esac
+
+      - name: Every declared bundle resource now exists
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys
+          conf_path = 'src-tauri/tauri.conf.json'
+          base = os.path.dirname(os.path.abspath(conf_path))
+          with open(conf_path) as fh:
+              conf = json.load(fh)
+          resources = list(conf['bundle']['resources'])
+          missing = [p for p in resources if not os.path.exists(os.path.join(base, p))]
+          if missing:
+              print('resource missing: ' + ', '.join(missing), file=sys.stderr)
+              sys.exit(1)
+          print(f'all {len(resources)} resources present')
+          PY
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: macos-${{ matrix.arch }}
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run web:build
+
+      - name: Rust tests
+        run: |
+          set -euo pipefail
+          if ! cargo test --manifest-path src-tauri/Cargo.toml \
+               --target ${{ matrix.rust_target }} > /tmp/t.log 2>&1; then
+            reason="$(grep -E -A2 'error(\[|:)|cannot find|panicked|FAILED' /tmp/t.log \
+                      | head -20 || true)"
+            [[ -n "$reason" ]] || reason="$(tail -15 /tmp/t.log)"
+            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
+            echo "::error title=cargo test (macOS ${{ matrix.arch }})::$reason"
+            tail -30 /tmp/t.log
+            exit 1
+          fi
+          grep -E '^test result' /tmp/t.log | tail -2
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building Aether $v (macOS ${{ matrix.arch }})"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          npm run tauri build \
+            -- --bundles app,dmg \
+               --target ${{ matrix.rust_target }}
+
+      - name: Collect artifacts
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.version }}"
+          out="dist-pkg"
+          mkdir -p "$out"
+          found=0
+          # `.app` یک پوشهٔ بسته‌بندی است، نه فایل، پس Tauri آن را فشرده
+          # می‌کند به `.app.tar.gz` تا قابلِ آپلود باشد.
+          for pkg in $(find src-tauri/target/${{ matrix.rust_target }}/release/bundle \
+                        -maxdepth 1 \( -name '*.dmg' -o -name '*.app.tar.gz' \) 2>/dev/null); do
+            base="$(basename "$pkg")"
+            cp "$pkg" "$out/Aether_${ver}_${{ matrix.arch }}_macos.${base##*.}"
+            found=1
+          done
+          [[ "$found" -eq 1 ]] || { echo "no macOS packages produced" >&2; exit 1; }
+          ( cd "$out" && sha256sum ./* > SHA256SUMS.txt && ls -la )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-macos-${{ matrix.arch }}
+          path: dist-pkg/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  #  5) انتشار در GitHub Release
   #
   #     `gh` روی هر رانر نصب است و به رانتایم پین نمی‌شود — برخلاف اکشن‌های
   #     شخص ثالث که با عوض شدن Node می‌میرند (همان بلایی که سرِ
@@ -484,7 +645,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, build-macos]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -493,7 +654,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: aether-linux-*
+          pattern: 'aether-*'
           # `merge-multiple` حیاتی است: بدون آن، هر آرتیفکت در زیرپوشهٔ خودش
           # می‌نشیند (`dist/aether-linux-x86_64/…`) و الگوی `dist/*.deb` هیچ‌چیز
           # پیدا نمی‌کند — که همان اتفاق افتاد و مرحلهٔ بعد با «خروجِ ۱» مُرد.
@@ -509,7 +670,8 @@ jobs:
           # بعد از دانلود یک دستور بزند، نه سه تا. `find` به‌جای الگو، تا
           # نبودِ یک قالب باعث شکستِ `sha256sum` نشود.
           find . -maxdepth 1 -type f \
-            \( -iname '*.deb' -o -iname '*.rpm' -o -iname '*.apk' -o -iname '*.AppImage' \) \
+            \( -iname '*.deb' -o -iname '*.rpm' -o -iname '*.apk' -o -iname '*.AppImage' \
+            -o -iname '*.dmg' -o -iname '*.app.tar.gz' \) \
             -printf '%P\n' | sort > "$RUNNER_TEMP/pkgs.txt"
           [[ -s "$RUNNER_TEMP/pkgs.txt" ]] || { echo 'no packages downloaded' >&2; exit 1; }
           xargs -a "$RUNNER_TEMP/pkgs.txt" sha256sum > SHA256SUMS.txt
@@ -562,9 +724,20 @@ jobs:
           | \`_x86_64.AppImage\` | هر لینوکسِ ۶۴ بیتی | **نه** |
           | \`_aarch64.deb\` | Raspberry Pi 4/5، موبایل با گوشی | بله |
           | \`_aarch64.rpm\` | فدورا/آرچو روی ARM | بله |
+          | \`_aarch64_macos.dmg\` | Apple Silicon | خیر |
+          | \`_x86_64_macos.dmg\` | مکِ اینتل | خیر |
 
           AppImage فقط برای \`x86_64\` است: ابزاری که Tauri برای ساختنش صدا
           می‌زند روی رانرِ ARM اجرا نمی‌شود.
+
+          ### روی مک
+
+          \`.dmg\` را باز کنید و برنامه را در \`Applications\` بکشید. اگر Gatekeeper
+          بست، روی آیکن راست‌کلیک و **Open** — یک‌بار، بعد برای همیشه باز می‌شود.
+          بسته **امضا نشده** است، چون امضای رسمی به گواهیِ سالانه نیاز دارد.
+
+          روی مک TUN پیاده نشده: ترافیک از **پروکسی** رد می‌شود، نه از کلِ سیستم.
+          برای عبور از فیلتر کافی است؛ برنامه‌هایی که پروکسی را نمی‌پذیرند رد نمی‌شوند.
 
           ### کدام حالت را انتخاب کنم
 
@@ -583,7 +756,14 @@ jobs:
             هنوز زیر QEMU اجرا نمی‌شود. بستهٔ نیم‌کار برای Raspberry Pi 2 بدتر از
             نبودنش است؛ وقتی سبز شد همین‌جا اضافه می‌شود.
           * **۳۲ بیتیِ x86 (i386) نیست** چون هستهٔ موتور برایش منتشر نشده.
-          * **macOS و Alpine (apk) نیستند.** اگر لازم دارید بگویید.
+          * **macOS:** بستهٔ \`.dmg\` برای Apple Silicon و Intel.
+            **بی‌امضا هستند** — اگر Gatekeeper جلوی باز شدن را گرفت، یک‌بار روی
+            آیکن راست‌کلیک کنید و **Open** را بزنید، بعد در پنجرهٔ بعدی هم **Open**.
+            آن یک‌بار برای همیشه می‌رود. امضای رسمی به گواهیِ سالانه و هویتِ حقوقیِ
+            نام‌برده نیاز دارد که در دسترسِ این مخزن نیست.
+          * روی مک **TUN نداریم**، یعنی فقط پروکسی. برای عبور از فیلترِ SNI کافی
+            است، ولی برنامه‌هایی که خودشان پروکسی را نمی‌پذیرند از تونل رد نمی‌شوند.
+          * **Alpine (apk) نیست.** اگر لازم دارید بگویید.
           EOF
 
           # به‌جای زنجیرهٔ `|| gh release upload …` که بر سرِ الگوهای ناموجود

@@ -48,12 +48,16 @@ mod share;
 mod smart_auto;
 mod state;
 mod store;
-// مسیر داده روی هر سیستم‌عامل یک پیاده‌سازی دارد: WinINET در ویندوز و
-// GSettings در لینوکس. امضای هر دو یکی است، پس `state.rs` بی‌تغییر می‌ماند.
+// مسیر داده روی هر سیستم‌عامل یک پیاده‌سازی دارد: WinINET در ویندوز،
+// GSettings در لینوکس و networksetup در مک. امضای هر سه یکی است، پس
+// `state.rs` بی‌تغییر می‌ماند.
 #[cfg(windows)]
 mod sysproxy;
 #[cfg(target_os = "linux")]
 #[path = "sysproxy_linux.rs"]
+mod sysproxy;
+#[cfg(target_os = "macos")]
+#[path = "sysproxy_macos.rs"]
 mod sysproxy;
 mod tor_bootstrap;
 // >>> AETHER-APP-PATCH tor-native-carrier

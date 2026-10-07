@@ -52,6 +52,17 @@ pub struct Tunnel {
     tx: Arc<AtomicU64>,
 }
 
+/// پلتفرم‌هایی که TUN ندارند — macOS و هر چیزِ آیندهٔ دیگر.
+///
+/// عمداً بدون هیچ میدانی: بدون TUN چیزی برای آمار و چیزی برای بستن نیست.
+/// `counters` صفر برمی‌گرداند و `close` کاری نمی‌کند، که هر دو در پایین‌تر
+/// مشترک‌اند و برای همین اینجا تکرار نشده‌اند.
+#[cfg(not(any(windows, target_os = "linux")))]
+pub struct Tunnel {
+    rx: Arc<AtomicU64>,
+    tx: Arc<AtomicU64>,
+}
+
 impl Tunnel {
     /// معادل `VpnService.Builder.establish()`.
     ///
@@ -142,6 +153,30 @@ impl Tunnel {
                 tx: Arc::new(AtomicU64::new(0)),
             })
         }
+    }
+
+    /// روی macOS هیچ TUN نداریم — و این یک محدودیت است، نه یک انتخاب.
+    ///
+    /// Tauri خودش برای کار کردن به TUN نیاز ندارد؛ TUN فقط یعنی «کلِ ترافیکِ
+    /// سیستم از تونل برود». بدون آن، تونل یک پروکسیِ SOCKS است.
+    ///
+    /// آیا این کافی است؟ برای فیلترِ SNI بله: WARP و MASQUE و Psiphon همه از
+    /// پروکسی رد می‌شوند و چیزی لازم ندارند که TUN باشد. آنچه از دست می‌رود
+    /// نشتیِ برنامه‌هایی است که خودشان پروکسی را نمی‌پذیرند.
+    ///
+    /// `not(any(windows, linux))` یعنی این `impl` روی مک و هر پلتفرمِ
+    /// آیندهٔ بی‌پشتیبان اجرا می‌شود؛ `Tunnel` خالی است و شمارنده‌ها صفر.
+    #[cfg(not(any(windows, target_os = "linux")))]
+    pub fn establish(_profile: &ConnectionProfile, _wintun_dll: &std::path::Path) -> Result<Self> {
+        DiagnosticsLog::w(
+            "tun",
+            "TUN is not implemented on this platform — traffic goes through the proxy \\
+             only, so apps that do not honour the system proxy will not tunnel.",
+        );
+        Ok(Self {
+            rx: Arc::new(AtomicU64::new(0)),
+            tx: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     /// معادل `addAddress` / `addRoute` / `addDnsServer` / `addDisallowedApplication`.
