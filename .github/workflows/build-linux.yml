@@ -263,6 +263,14 @@ jobs:
           # هیچ اشاره‌ای به نامِ بسته نداشت.
           if ! {
             sudo apt-get update
+            # کامنت ندارد، چون کامنتِ داخلِ فهرستِ بسته‌ها backslash را می‌شکند:
+            # apt بسته‌ها را می‌گیرد، بعد خط بعدی «فرمانِ ناشناخته» می‌شود و
+            # خطا جایِ واقعی‌اش را نشان نمی‌دهد.
+            #
+            # `libfuse2t64` همان FUSE2 است: `linuxdeploy` که Tauri برای AppImage
+            # صدا می‌زند به `libfuse.so.2` لینک می‌شود و اوبونتوی ۲۴.۰۴ دیگر
+            # `libfuse2` ندارد. تست شد در کانتینرِ ubuntu:24.04: `libfuse2` →
+            # «no candidate»، `libfuse2t64` → 2.9.9 و libfuse.so.2 را می‌دهد.
             sudo apt-get install -y --no-install-recommends \
               libwebkit2gtk-4.1-dev \
               libappindicator3-dev \
@@ -271,11 +279,6 @@ jobs:
               libssl-dev \
               file \
               fuse3 \
-              # `linuxdeploy` که Tauri برای AppImage صدا می‌زند، FUSE2 می‌خواهد
-              # نه FUSE3 — و اوبونتوی ۲۴.۰۴ آن را با نام `libfuse2t64` می‌دهد
-              # (`libfuse2` دیگر وجود ندارد و apt کلِ قدم را می‌کشد).
-              # تست شد در کانتینرِ ubuntu:24.04: `libfuse2` → «no candidate»،
-              # `libfuse2t64` → 2.9.9.
               libfuse2t64
           } > /tmp/apt.log 2>&1; then
             reason="$(grep -vE '^(Get:|Hit:|Reading|Building|Preparing|Unpacking|Selecting|Setting up)' \
