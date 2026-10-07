@@ -215,10 +215,9 @@ jobs:
       # armv7: نه کامپایلر نه لینکر روی معماریِ غریبه اجرا نمی‌شوند، چون هر دو
       # برنامهٔ بومیِ هستند. QEMU این را حل می‌کند.
       #
-      # `dpkg --add-architecture armhf` اینجا عمداً نیست. یک بار امتحان شد و کار
-      # نکرد: با armhf فعال، apt بسته‌هایی را انتخاب می‌کند که روی رانر اجرا
-      # نمی‌شوند و مرحله با کدِ ۱۰۰ می‌میرد. یک toolchainِ متقاطع، armhf را
-      # به‌عنوان وابستگی می‌آورد بدون دست‌زدن به معماریِ APT.
+      # این قدم فقط toolchain و شبیه‌ساز است، نه کتابخانه. کتابخانه‌های armhf
+      # در قدم بعد می‌آیند — آنجا که منبعِ درست (ports) هم تنظیم می‌شود. با
+      # armhf فعال ولی بدون منبعِ درست، apt بسته‌ای برمی‌داشت که نصب‌شدنی نبود.
       - name: QEMU user emulation (armv7 only)
         if: matrix.qemu
         run: |
@@ -264,9 +263,14 @@ jobs:
       # armv7: همان بسته‌ها، ولی نسخهٔ armhf.
       #
       # نکتهٔ اصلی: armhf روی `archive.ubuntu.com` و `security.ubuntu.com` نیست —
-      # روی `ports.ubuntu.com` است. بدون این منبع، apt چهار بار ۴۰۴ می‌گیرد و
-      # با کدِ ۱ می‌میرد. یک منبعِ جدا با برچسب `[arch=armhf]` اضافه می‌شود تا
-      # فقط armhf از ports برود و x86_64 همان جای قبلی بماند.
+      # روی `ports.ubuntu.com` است. بدون این کار، apt چهار بار ۴۰۴ می‌گیرد.
+      #
+      # اما برچسب `[arch=armhf]` روی منبعِ اضافه کافی نیست: ورودی‌های پیش‌فرضِ
+      # `sources.list` هم armhf را درخواست می‌کنند و همچنان ۴۰۴ می‌دهند. apt این
+      # را هشدار می‌شمارد و ادامه می‌دهد، ولی در انتها `apt-get install` با
+      # «Some index files failed to download» می‌میرد — که همان اتفاق افتاد.
+      # پس پیش‌فرض‌ها `[arch=amd64]` می‌گیرند تا هرگز armhf نخواهند، و armhf
+      # فقط از ports می‌آید.
       #
       # این یعنی «کامپایل متقاطع با کتابخانه‌های واقعیِ هدف» به‌جای sysrootِ
       # دست‌ساز: webkit2gtk برای armhf را خودِ اوبونتو می‌سازد و ما فقط نصبش
@@ -279,7 +283,19 @@ jobs:
           # پیام apt دقیق است و بدون این پوشش دیده نمی‌شود.
           if ! {
             sudo dpkg --add-architecture armhf
-            sudo tee /etc/apt/sources.list.d/armhf.list > /dev/null <<'EOF'
+            # پیش‌فرض‌های رانر کنار می‌روند و فهرستِ خودمان جایشان را می‌گیرد.
+            # دلیلش قالب است، نه سلیقه: اوبونتوی ۲۴.۰۴ از قالبِ deb822
+            # (`ubuntu.sources`) استفاده می‌کند، پس `sed` روی `sources.list` هیچ
+            # کاری نمی‌کند و armhf همچنان از آرشیوِ amd64 درخواست می‌شود.
+            # با نوشتنِ کاملِ فهرست، به قالبِ رانر وابسته نیستیم.
+            sudo mv /etc/apt/sources.list.d/ubuntu.sources \
+                    /etc/apt/sources.list.d/ubuntu.sources.off 2>/dev/null || true
+            sudo mv /etc/apt/sources.list \
+                    /etc/apt/sources.list.off 2>/dev/null || true
+            sudo tee /etc/apt/sources.list.d/aether.list > /dev/null <<'EOF'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
