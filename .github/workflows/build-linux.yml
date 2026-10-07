@@ -69,6 +69,7 @@ jobs:
                    src-tauri/tauri.conf.json src-tauri/build.rs \
                    src-tauri/src/main.rs \
                    scripts/fetch-engine.sh \
+                   scripts/build-armhf-sysroot.sh \
                    assets/psiphon/server_entries.txt; do
             [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 1; }
           done
@@ -260,80 +261,52 @@ jobs:
             file \
             fuse3
 
-      # armv7: همان بسته‌ها، ولی نسخهٔ armhf.
+      # armv7: کتابخانه‌های armhf در یک کانتینر نصب می‌شوند، نه روی خودِ رانر.
       #
-      # نکتهٔ اصلی: armhf روی `archive.ubuntu.com` و `security.ubuntu.com` نیست —
-      # روی `ports.ubuntu.com` است. بدون این کار، apt چهار بار ۴۰۴ می‌گیرد.
+      # چرا کانتینر: apt با multiarch روی رانرِ x86_64 یک کتابخانهٔ armhf را
+      # «نصب» می‌کند ولی هرگز اجرایش نمی‌کند — ۳۲۶ بسته و ۵۲۱ مگابایت — و بعد
+      # `pkg-config` می‌خواهد `glib-compile-schemas` و `ldconfig` را که armhf
+      # هستند اجرا کند و نمی‌تواند. این با sysroot حل نمی‌شود، چون مشکل اجراست
+      # نه مسیر.
       #
-      # اما برچسب `[arch=armhf]` روی منبعِ اضافه کافی نیست: ورودی‌های پیش‌فرضِ
-      # `sources.list` هم armhf را درخواست می‌کنند و همچنان ۴۰۴ می‌دهند. apt این
-      # را هشدار می‌شمارد و ادامه می‌دهد، ولی در انتها `apt-get install` با
-      # «Some index files failed to download» می‌میرد — که همان اتفاق افتاد.
-      # پس پیش‌فرض‌ها `[arch=amd64]` می‌گیرند تا هرگز armhf نخواهند، و armhf
-      # فقط از ports می‌آید.
+      # با کانتینر، dpkg واقعاً armhf را اجرا می‌کند، پس schemaها و cacheها درست
+      # ساخته می‌شوند؛ بعد فقط پوشهٔ کتابخانه‌ها بیرون کپی می‌شود. یعنی
+      # sysrootِ واقعی، ساخته‌شده توسط خودِ اوبونتو و نه دستی.
       #
-      # این یعنی «کامپایل متقاطع با کتابخانه‌های واقعیِ هدف» به‌جای sysrootِ
-      # دست‌ساز: webkit2gtk برای armhf را خودِ اوبونتو می‌سازد و ما فقط نصبش
-      # می‌کنیم. Sysroot ده‌روزه لازم نیست — و همین دلیلِ آن جملهٔ قبلی دربارهٔ
-      # «ساختن webkit برای armhf» غلط بود.
-      - name: armhf libraries via ports.ubuntu.com
+      # دسترسی به mirrorها در کانتینر: ubuntu:nole فقط `archive.ubuntu.com` را
+      # دارد و armhf آنجا نیست، پس `ports.ubuntu.com` دستی اضافه می��شود.
+      - name: armhf sysroot in a container
         if: matrix.qemu
         run: |
           set -euo pipefail
-          # پیام apt دقیق است و بدون این پوشش دیده نمی‌شود.
-          if ! {
-            sudo dpkg --add-architecture armhf
-            # پیش‌فرض‌های رانر کنار می‌روند و فهرستِ خودمان جایشان را می‌گیرد.
-            # دلیلش قالب است، نه سلیقه: اوبونتوی ۲۴.۰۴ از قالبِ deb822
-            # (`ubuntu.sources`) استفاده می‌کند، پس `sed` روی `sources.list` هیچ
-            # کاری نمی‌کند و armhf همچنان از آرشیوِ amd64 درخواست می‌شود.
-            # با نوشتنِ کاملِ فهرست، به قالبِ رانر وابسته نیستیم.
-            #
-            # فایل‌ها به `/tmp` منتقل می‌شوند، نه اینکه در همان پوشه rename شوند:
-            # apt هر فایلِ ناشناخته را می‌بیند و برای هر اجرا `N: Ignoring file …
-            # as it has an invalid filename extension` می‌نویسد — پنج بار، و
-            # همان چیزی شد که پیامِ واقعی را پشت خودش پنهان کرد.
-            sudo mv /etc/apt/sources.list.d/ubuntu.sources /tmp/ubuntu.sources.bak 2>/dev/null || true
-            sudo mv /etc/apt/sources.list /tmp/sources.list.bak 2>/dev/null || true
-            sudo tee /etc/apt/sources.list.d/aether.list > /dev/null <<'EOF'
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          EOF
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends \
-              libwebkit2gtk-4.1-dev:armhf \
-              libjavascriptcoregtk-4.1-dev:armhf \
-              libgtk-3-dev:armhf \
-              libappindicator3-dev:armhf \
-              librsvg2-dev:armhf \
-              libssl-dev:armhf
-          } > /tmp/apt-armhf.log 2>&1; then
-            # انتهای لاگ، نه یک الگوی دلخواه. apt خطایش را همیشه آخر می‌نویسد
-            # ولی همیشه با `E:` شروع نمی‌کند — یک بار الگو فقط یک خطِ بی‌ربط
-            # («Errors were encountered while processing:») گرفت و پیامِ واقعی
-            # گم شد. `tail` نمی‌تواند از قلم بیفتد.
-            reason="$(grep -vE '^(Get:|Hit:|Reading|Building|Preparing|Unpacking|Selecting|Setting up|Processing)' \
-                      /tmp/apt-armhf.log | tail -14)"
+          # اسکریپت جدا از ورک‌فلو، نه داخلش: `bash -c` با سه لایهٔ نقل‌قول
+          # جایی که یک آکولاد باید به تک‌گیومه تبدیل شود، غلط بیرون می‌دهد و
+          # خطایش شبیه بیلدِ خراب است. داخلِ فایل، همان متن ساده می‌ماند.
+          if ! docker run --rm \
+            -v /usr/bin/qemu-arm-static:/usr/bin/qemu-arm-static:ro \
+            -v "$PWD:/out" \
+            -v "$PWD/scripts:/scripts:ro" \
+            ubuntu:noble /bin/bash /scripts/build-armhf-sysroot.sh \
+            > /tmp/sysroot.log 2>&1; then
+            reason="$(tail -20 /tmp/sysroot.log)"
             reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
-            echo 'armhf multiarch install failed' >> "$GITHUB_STEP_SUMMARY"
+            echo 'armhf sysroot build failed' >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             echo "$reason" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=apt armhf::$reason"
-            tail -25 /tmp/apt-armhf.log
+            echo "::error title=armhf sysroot::$reason"
+            tail -30 /tmp/sysroot.log
             exit 1
           fi
-          # pkg-config بدون این‌ها یا حافظ armhf را نمی‌بیند یا از اجرا شکایت
-          # می‌کند چون روی معماریِ مبدأ نیست: «pkg-config has not been
-          # configured to support cross-compilation».
+          tail -3 /tmp/sysroot.log
+          # بدون این‌ها pkg-config یا sysroot را نمی‌بیند یا از اجرای armhf
+          # شکایت می‌کند: «pkg-config has not been configured to support
+          # cross-compilation».
           {
             echo "PKG_CONFIG_ALLOW_CROSS=1"
-            echo "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig"
             echo "PKG_CONFIG_SYSROOT_DIR=/"
+            echo "PKG_CONFIG_PATH=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig"
+            echo "PKG_CONFIG_LIBDIR=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig"
           } >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
