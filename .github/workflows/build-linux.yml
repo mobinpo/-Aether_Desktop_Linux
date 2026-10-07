@@ -229,7 +229,6 @@ jobs:
             gcc-arm-linux-gnueabihf \
             libc6-dev-armhf-cross
           {
-            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc"
             echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
             echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER=qemu-arm"
           } >> "$GITHUB_ENV"
@@ -335,6 +334,25 @@ jobs:
             echo "OPENSSL_INCLUDE_DIR=$PWD/sysroot/usr/include"
             echo "OPENSSL_STATIC=0"
           } >> "$GITHUB_ENV"
+          # لینکر باید sysroot را ببیند — و `-L` کافی نیست.
+          #
+          # `libc.so.6`، `libc_nonshared.a` و `ld-linux-armhf.so.3` با مسیرِ
+          # مطلق (`/lib/arm-linux-gnueabihf/…`) در `libc.so` نوشته شده‌اند، پس
+          # لینکر دنبالِ همان مسیرِ ریشه‌ای می‌گردد. با `--sysroot` پیشوند
+          # می‌خورد و داخلِ sysroot پیدا می‌شود؛ با `-L` هرگز پیدا نمی‌شود.
+          # فرقشان را تست کردم: با `-L` تنها خطا `cannot find /lib/…libc.so.6` است،
+          # و با `--sysroot` همان بیلد `ELF 32-bit ARM, EABI5` می‌دهد.
+          #
+          # فقط برای همین هدف: `RUSTFLAGS` سراسری روی بیلدِ مبدأ اثر می‌گذارد.
+          # نامِ هدف‌محورش فقط همان یکی را می‌گیرد.
+          SYSROOT_ABS="$PWD/sysroot"
+          {
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS=-L$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf -L$SYSROOT_ABS/lib/arm-linux-gnueabihf"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=$PWD/scripts/armv7-linker.sh"
+            echo "AETHER_SYSROOT=$SYSROOT_ABS"
+            echo "LIBRARY_PATH=$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf"
+            echo "CFLAGS=-I$SYSROOT_ABS/usr/include/glib-2.0 -I$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf/glib-2.0/include -I$SYSROOT_ABS/usr/include"
+          } >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -358,13 +376,11 @@ jobs:
           set -euo pipefail
           if ! cargo test --manifest-path src-tauri/Cargo.toml \
                --target ${{ matrix.rust_target }} > /tmp/cargo-test.log 2>&1; then
-            reason="$(grep -E 'error(\[|:)|panicked at|FAILED|^failures:' /tmp/cargo-test.log \
-                      | head -12 || true)"
-            # اگر الگوی بالا هیچ‌چیز پیدا نکرد، `|| true` خالی‌اش می‌کند و قدم
-            # فقط «خروجِ ۱» می‌گوید — همان اتفاقی که سه بار تکرار شد. پس در آن
-            # حالت، انتهای خودِ لاگ حرف می‌زند. تک‌خطی هم می‌شود چون یک
-            # annotationِ چندخطی بدشکل است و GitHub آن را یک پیامِ شکسته نشان
-            # می‌دهد، نه چند تا.
+            # خطای لینکر می‌گوید «ld returned 1» و هیچ‌چیز دیگر — نامِ کتابخانه
+            # و نمادها در خطوط قبلش است. `-A` بعد از هر پیام می‌گیرد تا خودِ
+            # «cannot find -l…»ها هم بیایند، نه فقط خط آخر.
+            reason="$(grep -E -A2 'error(\[|:)|cannot find|undefined (reference|symbol)|panicked at|FAILED|^failures:' \
+                      /tmp/cargo-test.log | head -25 || true)"
             [[ -n "$reason" ]] || reason="$(tail -15 /tmp/cargo-test.log)"
             reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
             echo "cargo test failed on ${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"

@@ -92,3 +92,14 @@ if [ "$count" -lt 100 ]; then
   echo "sysroot looks empty ($count files) — pkg-config would find nothing" >&2
   exit 1
 fi
+
+# لینکر دنبالِ `/lib/ld-linux-armhf.so.3` می‌گردد — یعنی مستقیم زیر `lib`، نه
+# زیر `lib/arm-linux-gnueabihf`. بستهٔ `libc6` آن را در زیرپوشهٔ معماری
+# می‌گذارد، پس این symlink را خودمان می‌سازیم. بدون آن لینکر می‌گوید
+# «cannot find /lib/ld-linux-armhf.so.3 inside <sysroot>».
+if [ -f /out/sysroot/lib/arm-linux-gnueabihf/ld-linux-armhf.so.3 ] \
+   && [ ! -e /out/sysroot/lib/ld-linux-armhf.so.3 ]; then
+  ln -s arm-linux-gnueabihf/ld-linux-armhf.so.3 \
+        /out/sysroot/lib/ld-linux-armhf.so.3
+  echo "loader symlinked into sysroot/lib/"
+fi
