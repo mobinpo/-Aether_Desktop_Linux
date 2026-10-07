@@ -10,12 +10,12 @@
 #      Aether_<ver>_<arch>.rpm        برای فدورا/آرچو/RHEL
 #      SHA256SUMS.txt
 #
-#  سه معماری، نه یکی: نسخهٔ منتشرشدهٔ قبلی فقط amd64 داشت. Raspberry Pi 4/5،
+#  دو معماری، نه یکی: نسخهٔ منتشرشدهٔ قبلی فقط amd64 داشت. Raspberry Pi 4/5،
 #  لپ‌تاپ‌های ARM و موبایل‌های اندرویدی با گوشی در ماتریس می‌آیند تا یک اجرا
 #  همه را پوشش دهد.
 #
-#  AppImage و Alpine/musl نیستند — دلیلِ هر دو پایین‌تر، کنارِ همان خانه، نوشته
-#  شده است.
+#  AppImage روی x86_64 هست و روی ARM نیست: `linuxdeploy` روی رانرِ ARM اجرا
+#  نمی‌شود. armv7 و Alpine/musl هم نیستند — دلیلشان کنارِ همان جاب نوشته شده.
 #
 #  هستهٔ موتور از ریلیز رسمی دانلود و با دایجستِ منتشرشدهٔ خودش تأیید می‌شود
 #  (`scripts/fetch-engine.sh`) — از سورس ساخته نمی‌شود، چون اسکریپت‌های ساختِ
@@ -97,8 +97,7 @@ jobs:
   #  2) بیلد گلیسک — یک جاب برای هر (رانر، معماری)
   #
   #     ARM64 روی رانرهای بومی گیت‌هاب (`ubuntu-24.04-arm`): برای مخازن عمومی
-  #     رایگان‌اند و چند برابر سریع‌تر از شبیه‌سازی. armv7 چنین رانری ندارد و
-  #     زیر QEMU ساخته می‌شود.
+  #     رایگان‌اند و چند برابر سریع‌تر از شبیه‌سازی.
   #
   #     ۳۲ بیتیِ x86 (i386) نیست و دلیلش این است که هستهٔ موتور آرشیوی به این
   #     نام منتشر نکرده (تست شد، ۴۰۴). webkit2gtk برای i386 هست، پس کتابخانه
@@ -124,11 +123,6 @@ jobs:
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             bundles: deb,rpm
-          - arch: armv7
-            runner: ubuntu-24.04
-            rust_target: armv7-unknown-linux-gnueabihf
-            bundles: deb
-            qemu: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -222,29 +216,6 @@ jobs:
       #
       # این قدم فقط toolchain و شبیه‌ساز است، نه کتابخانه. کتابخانه‌های armhf
       # در قدم بعد می‌آیند — آنجا که منبعِ درست (ports) هم تنظیم می‌شود. با
-      # armhf فعال ولی بدون منبعِ درست، apt بسته‌ای برمی‌داشت که نصب‌شدنی نبود.
-      - name: QEMU user emulation (armv7 only)
-        if: matrix.qemu
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-user-static \
-            gcc-arm-linux-gnueabihf \
-            libc6-dev-armhf-cross
-          {
-            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
-            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER=qemu-arm"
-          } >> "$GITHUB_ENV"
-          # `QEMU_LD_PREFIX` باید همان sysrootی باشد که لینکر از آن استفاده می‌کند.
-          #
-          # اینجا پیش‌فرضِ cross-gcc است چون هنوز sysrootی ساخته نشده — و قدمِ
-          # بعدی همین‌جا درستش می‌کند. یکی نگه‌داشتنشان لازم است: باینریِ آزمون
-          # که با یک مسیر لینک شده، با مسیر دیگر زیر QEMU اجرا نمی‌شود و cargo
-          # فقط می‌گوید «could not execute process … (never executed)» که هیچ
-          # اشاره‌ای به کتابخانه ندارد.
-          echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf" >> "$GITHUB_ENV"
-
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -305,91 +276,6 @@ jobs:
       # sysrootِ واقعی، ساخته‌شده توسط خودِ اوبونتو و نه دستی.
       #
       # دسترسی به mirrorها در کانتینر: ubuntu:nole فقط `archive.ubuntu.com` را
-      # دارد و armhf آنجا نیست، پس `ports.ubuntu.com` دستی اضافه می��شود.
-      - name: armhf sysroot in a container
-        if: matrix.qemu
-        run: |
-          set -euo pipefail
-          # اسکریپت جدا از ورک‌فلو، نه داخلش: `bash -c` با سه لایهٔ نقل‌قول
-          # جایی که یک آکولاد باید به تک‌گیومه تبدیل شود، غلط بیرون می‌دهد و
-          # خطایش شبیه بیلدِ خراب است. داخلِ فایل، همان متن ساده می‌ماند.
-          # binfmt یک بار ثبت می‌شود، بیرون از کانتینر. بدون این، dpkg اسکریپت‌های
-          # armhf را اجرا نمی‌کند و با «Exec format error» می‌میرد.
-          if ! docker run --rm --privileged tonistiigi/binfmt --install armhf \
-               > /tmp/binfmt.log 2>&1; then
-            reason="$(tail -10 /tmp/binfmt.log | tr '\n' ' ')"
-            echo "::error title=binfmt armhf::$reason"
-            cat /tmp/binfmt.log
-            exit 1
-          fi
-          if ! docker run --rm --privileged \
-            -v "$PWD:/out" \
-            -v "$PWD/scripts:/scripts:ro" \
-            ubuntu:noble /bin/bash /scripts/build-armhf-sysroot.sh \
-            > /tmp/sysroot.log 2>&1; then
-            reason="$(tail -20 /tmp/sysroot.log)"
-            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
-            echo 'armhf sysroot build failed' >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "::error title=armhf sysroot::$reason"
-            tail -30 /tmp/sysroot.log
-            exit 1
-          fi
-          tail -3 /tmp/sysroot.log
-          # بدون این‌ها pkg-config یا sysroot را نمی‌بیند یا از اجرای armhf
-          # شکایت می‌کند: «pkg-config has not been configured to support
-          # cross-compilation».
-          {
-            echo "PKG_CONFIG_ALLOW_CROSS=1"
-            echo "PKG_CONFIG_SYSROOT_DIR=/"
-            # سه مسیر، نه دو: lib/pkgconfig عمومی، share/pkgconfig برای xproto و
-            # هم‌نوع، و خودِ glib/gio/gobject که در `lib/arm-linux-gnueabihf/
-            # pkgconfig` می‌نشینند. با حذفِ آخری، cargo می‌گوید «Package
-            # gobject-2.0 was not found» — همان‌طور که اگر `share` نبود webkit
-            # به xproto شکایت می‌کرد.
-            #
-            # مسیرها نسبت به ریشهٔ مخزن‌اند، نه ریشهٔ کانتینر: `/out` فقط در
-            # داخلِ کانتینر وجود دارد و بیرون از آن نیست. `$PWD` همان جایی است
-            # که کانتینر `/out` را به آن mount کرده.
-            echo "SYSROOT=$PWD/sysroot"
-            echo "PKG_CONFIG_PATH=$PWD/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:$PWD/sysroot/usr/share/pkgconfig:$PWD/sysroot/usr/lib/pkgconfig"
-            echo "PKG_CONFIG_LIBDIR=$PWD/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:$PWD/sysroot/usr/share/pkgconfig:$PWD/sysroot/usr/lib/pkgconfig"
-          } >> "$GITHUB_ENV"
-          # openssl-sys مثل pkg-config سرِ متغیرهای خودش می‌رود و sysroot را
-          # نمی‌شناسد. بدون این، `/usr/include/openssl` میزبان را برمی‌دارد،
-          # `opensslconf.h` ندارد چون آن یکی armhf است، و می‌میرد.
-          {
-            echo "OPENSSL_DIR=$PWD/sysroot/usr"
-            echo "OPENSSL_LIB_DIR=$PWD/sysroot/usr/lib/arm-linux-gnueabihf"
-            echo "OPENSSL_INCLUDE_DIR=$PWD/sysroot/usr/include"
-            echo "OPENSSL_STATIC=0"
-          } >> "$GITHUB_ENV"
-          # لینکر باید sysroot را ببیند — و `-L` کافی نیست.
-          #
-          # `libc.so.6`، `libc_nonshared.a` و `ld-linux-armhf.so.3` با مسیرِ
-          # مطلق (`/lib/arm-linux-gnueabihf/…`) در `libc.so` نوشته شده‌اند، پس
-          # لینکر دنبالِ همان مسیرِ ریشه‌ای می‌گردد. با `--sysroot` پیشوند
-          # می‌خورد و داخلِ sysroot پیدا می‌شود؛ با `-L` هرگز پیدا نمی‌شود.
-          # فرقشان را تست کردم: با `-L` تنها خطا `cannot find /lib/…libc.so.6` است،
-          # و با `--sysroot` همان بیلد `ELF 32-bit ARM, EABI5` می‌دهد.
-          #
-          # فقط برای همین هدف: `RUSTFLAGS` سراسری روی بیلدِ مبدأ اثر می‌گذارد.
-          # نامِ هدف‌محورش فقط همان یکی را می‌گیرد.
-          SYSROOT_ABS="$PWD/sysroot"
-          {
-            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS=-L$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf -L$SYSROOT_ABS/lib/arm-linux-gnueabihf"
-            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=$PWD/scripts/armv7-linker.sh"
-            echo "AETHER_SYSROOT=$SYSROOT_ABS"
-            echo "LIBRARY_PATH=$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf"
-            # هم‌راستا با لینکر: حالا که sysroot وجود دارد، QEMU هم باید همان را
-            # ببیند. وگرنه بیلد کامپایل می‌شود ولی باینریِ آزمون زیر QEMU اجرا
-            # نمی‌شود.
-            echo "QEMU_LD_PREFIX=$SYSROOT_ABS"
-            echo "CFLAGS=-I$SYSROOT_ABS/usr/include/glib-2.0 -I$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf/glib-2.0/include -I$SYSROOT_ABS/usr/include"
-          } >> "$GITHUB_ENV"
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -481,6 +367,107 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
+  #  3) armv7 — آزمایشی، خارج از مسیر انتشار
+  #
+  #     بیش از ۲۰ تلاش شکست خورده. کامپایل می‌شود ولی باینریِ آزمون زیر QEMU
+  #     اجرا نمی‌شود. تا روزی که یک اجرای سبز بدهد، بسته‌ای منتشر نمی‌شود —
+  #     چون یک بستهٔ نیم‌کار برای Raspberry Pi 2 بدتر از نبودنش است.
+  #
+  #     چرا از ماتریسِ اصلی بیرون آمد: `release` به `build` وابسته است، و با یک
+  #     معماریِ شکسته، AppImage و هر دو معماریِ دیگر هم هرگز منتشر نمی‌شدند.
+  #     یعنی یک Raspberry Pi 2 که هرگز نخواسته، جلوی کاربرِ دسکتاپ را می‌گرفت.
+  # ---------------------------------------------------------------------------
+  build-armv7:
+    name: armv7 / deb (experimental)
+    needs: preflight
+    timeout-minutes: 90
+    # شکستش نباید وضعیتِ کلِ اجرا را قرمز کند.
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the official engine
+        run: ./scripts/fetch-engine.sh "$CORE_VERSION" armv7
+
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: QEMU user emulation
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-user-static gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          {
+            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER=qemu-arm"
+          } >> "$GITHUB_ENV"
+          echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf" >> "$GITHUB_ENV"
+
+      - name: System dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libssl-dev file fuse3 libfuse2t64
+
+      - name: armhf sysroot in a container
+        run: |
+          set -euo pipefail
+          docker run --rm --privileged tonistiigi/binfmt --install armhf
+          docker run --rm --privileged \
+            -v "$PWD:/out" -v "$PWD/scripts:/scripts:ro" \
+            ubuntu:noble /bin/bash /scripts/build-armhf-sysroot.sh
+          SYSROOT_ABS="$PWD/sysroot"
+          {
+            echo "PKG_CONFIG_ALLOW_CROSS=1"
+            echo "PKG_CONFIG_SYSROOT_DIR=/"
+            echo "PKG_CONFIG_PATH=$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf/pkgconfig:$SYSROOT_ABS/usr/share/pkgconfig:$SYSROOT_ABS/usr/lib/pkgconfig"
+            echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_PATH"
+            echo "OPENSSL_DIR=$SYSROOT_ABS/usr"
+            echo "OPENSSL_LIB_DIR=$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf"
+            echo "OPENSSL_INCLUDE_DIR=$SYSROOT_ABS/usr/include"
+            echo "OPENSSL_STATIC=0"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=$PWD/scripts/armv7-linker.sh"
+            echo "AETHER_SYSROOT=$SYSROOT_ABS"
+            echo "QEMU_LD_PREFIX=$SYSROOT_ABS"
+            echo "LIBRARY_PATH=$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf"
+            echo "CFLAGS=-I$SYSROOT_ABS/usr/include/glib-2.0 -I$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf/glib-2.0/include -I$SYSROOT_ABS/usr/include"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run web:build
+
+      - name: Rust tests
+        run: |
+          set -euo pipefail
+          if ! cargo test --manifest-path src-tauri/Cargo.toml \
+               --target armv7-unknown-linux-gnueabihf > /tmp/t.log 2>&1; then
+            echo "::error title=armv7::$(grep -E -A2 'error|cannot find|panicked' /tmp/t.log | tr '\n' ' ' | tr -s ' ' | head -c 600)"
+            tail -25 /tmp/t.log
+            exit 1
+          fi
+          grep -E '^test result' /tmp/t.log | tail -2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-linux-armv7-UNVERIFIED
+          path: src-tauri/target/armv7-unknown-linux-gnueabihf/release/bundle/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # ---------------------------------------------------------------------------
   #  4) انتشار در GitHub Release
   #
   #     `gh` روی هر رانر نصب است و به رانتایم پین نمی‌شود — برخلاف اکشن‌های
@@ -548,7 +535,8 @@ jobs:
           cat > "$notes" <<EOF
           ## Aether Desktop $VERSION — Linux
 
-          چهار معماری، سه خانوادهٔ توزیع. نصب:
+          سه قالب، دو معماری. اگر دسترسیِ root ندارید یا نمی‌خواهید چیزی نصب
+          کنید، **AppImage** را بگیرید: یک فایل، \`chmod +x\`، اجرا.
 
           \`\`\`bash
           # Debian / Ubuntu / Mint
@@ -556,13 +544,22 @@ jobs:
 
           # Fedora / RHEL / openSUSE
           sudo dnf install ./Aether_${VERSION}_x86_64.rpm
+
+          # پورتیبل — بدون نصب و بدون sudo
+          chmod +x Aether_${VERSION}_x86_64.AppImage
+          ./Aether_${VERSION}_x86_64.AppImage
           \`\`\`
 
-          | معماری | چه کسی | فایل |
+          | فایل | چه کسی | نصب می‌خواهد؟ |
           |---|---|---|
-          | \`amd64\` | لپ‌تاپ و دسکتاپ | \`_amd64.deb\` / \`_amd64.rpm\` |
-          | \`aarch64\` | Raspberry Pi 4/5، موبایل با گوشی | \`_aarch64.deb\` / \`_aarch64.rpm\` |
-          | \`armv7\` | Raspberry Pi 2/3، ۳۲ بیتی ARM | \`_armv7.deb\` |
+          | \`_amd64.deb\` | لپ‌تاپ و دسکتاپ، Debian/Ubuntu | بله |
+          | \`_amd64.rpm\` | فدورا / RHEL / openSUSE | بله |
+          | \`_x86_64.AppImage\` | هر لینوکسِ ۶۴ بیتی | **نه** |
+          | \`_aarch64.deb\` | Raspberry Pi 4/5، موبایل با گوشی | بله |
+          | \`_aarch64.rpm\` | فدورا/آرچو روی ARM | بله |
+
+          AppImage فقط برای \`x86_64\` است: ابزاری که Tauri برای ساختنش صدا
+          می‌زند روی رانرِ ARM اجرا نمی‌شود.
 
           ### کدام حالت را انتخاب کنم
 
@@ -575,14 +572,13 @@ jobs:
           * WebRTC روی لینوکس قابل مهار نیست؛ در مرورگر خودتان خاموشش کنید.
           * پروکسیِ سیستمی از راه GSettings نوشته می‌شود، نه رجیستری ویندوز.
           * TUN به \`CAP_NET_ADMIN\` نیاز دارد؛ بستهٔ deb آن را می‌دهد.
-          * **۳۲ بیتیِ x86 (i386) نیست.** هستهٔ موتور برایش منتشر نشده، پس بستهٔ
-            برنامه به‌تنهایی کاری نمی‌کند. اگر لازمش دارید بگویید تا با همان
-            هسته ساخته شود.
-          * **AppImage و Alpine (apk) در ریلیز نیستند.** برای AppImage، Tauri به
-            \`linuxdeploy\` نیاز دارد که روی رانر ARM کار نمی‌کند. برای Alpine،
-            بیلد باید داخل کانتینر انجام شود و GitHub اکشن‌های JavaScript را در
-            کانتینر Alpine روی رانر ARM اجرا نمی‌کند. اگر یکی از این دو را
-            لازم دارید بگویید تا راه دیگری پیدا شود.
+          * **AppImage بدون دسترسیِ ریشه TUN ندارد** و فقط پروکسی می‌سازد — برای
+            فیلترِ SNI کافی است، ولی اگر به TUN نیاز دارید، بستهٔ deb را نصب کنید.
+          * **armv7 (۳۲ بیتی ARM) در ریلیز نیست.** بیلدِ آزمایشی‌اش در CI هست و
+            هنوز زیر QEMU اجرا نمی‌شود. بستهٔ نیم‌کار برای Raspberry Pi 2 بدتر از
+            نبودنش است؛ وقتی سبز شد همین‌جا اضافه می‌شود.
+          * **۳۲ بیتیِ x86 (i386) نیست** چون هستهٔ موتور برایش منتشر نشده.
+          * **macOS و Alpine (apk) نیستند.** اگر لازم دارید بگویید.
           EOF
 
           # به‌جای زنجیرهٔ `|| gh release upload …` که بر سرِ الگوهای ناموجود
