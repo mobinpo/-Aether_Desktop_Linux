@@ -855,10 +855,22 @@ mod tests {
                                  aether::tor::with_tor] [*] tor reaching the network: 15%: \
                                  connecting successfully; directory is fetching a consensus";
 
-    fn at_15() {
+    /// تست‌ها یک وضعیت جهانی مشترک دارند و `cargo test` نخ‌ها را موازی اجرا
+    /// می‌کند، پس این‌ها روی هم می‌افتند: یکی `reset()` می‌کند، دیگری درصد را
+    /// می‌خواند و `None` می‌بیند.
+    ///
+    /// قفل، همان قفلِ `tor_bootstrap` است و نه یکیِ جدا — چون هر دو روی یک
+    /// `static STATE` می‌نویسند. قفلِ جدا یعنی این سه تست با تست‌های خودِ
+    /// `tor_bootstrap` هم‌زمان می‌شدند و همان تداخل برمی‌گشت.
+    ///
+    /// قفلِ `parking_lot` برمی‌گردد و `Mutex` استاندارد نیست، پس نگهبان را
+    /// دستی نگه می‌داریم تا پایانِ تست آزاد شود.
+    fn at_15<'a>() -> crate::tor_bootstrap::SERIAL_LOCK_GUARD<'a> {
+        let guard = crate::tor_bootstrap::SERIAL.lock();
         crate::tor_bootstrap::reset();
         crate::tor_bootstrap::ingest(FIELD_LINE_15);
         assert_eq!(crate::tor_bootstrap::snapshot().percent, Some(15));
+        guard
     }
 
     /// بی تور، همان پیام قدیمی — این مسیر عوض نشده.
@@ -874,7 +886,7 @@ mod tests {
     /// چون تنها چیزی است که کاربر می‌تواند گزارش کند.
     #[test]
     fn tor_inside_the_tunnel_never_advises_bridges() {
-        at_15();
+        let _guard = at_15();
         let msg = stage_failure_message(Some(TorShape::ThroughTunnel));
         assert!(msg.contains("15%"), "{msg}");
         assert!(msg.contains("tunnel is up"), "{msg}");
@@ -887,7 +899,7 @@ mod tests {
     /// پیشنهاد می‌دهد.
     #[test]
     fn tor_facing_the_network_with_a_transport_advises_bridges() {
-        at_15();
+        let _guard = at_15();
         let msg = stage_failure_message(Some(TorShape::FacingNetwork {
             bridges_allowed: true,
             transport_installed: true,
@@ -901,7 +913,7 @@ mod tests {
     /// پیام باید بگوید فقط پلِ ساده می‌ماند و راهِ واقعی کدام است.
     #[test]
     fn tor_without_a_transport_says_bridges_cannot_run_properly() {
-        at_15();
+        let _guard = at_15();
         let msg = stage_failure_message(Some(TorShape::FacingNetwork {
             bridges_allowed: true,
             transport_installed: false,
