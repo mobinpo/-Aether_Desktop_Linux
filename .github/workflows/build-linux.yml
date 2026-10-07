@@ -309,9 +309,12 @@ jobs:
               librsvg2-dev:armhf \
               libssl-dev:armhf
           } > /tmp/apt-armhf.log 2>&1; then
-            reason="$(grep -E '^E:|Unable to locate|has no installation|Errors were encountered' \
-                      /tmp/apt-armhf.log | head -8 || true)"
-            [[ -n "$reason" ]] || reason="$(tail -10 /tmp/apt-armhf.log)"
+            # انتهای لاگ، نه یک الگوی دلخواه. apt خطایش را همیشه آخر می‌نویسد
+            # ولی همیشه با `E:` شروع نمی‌کند — یک بار الگو فقط یک خطِ بی‌ربط
+            # («Errors were encountered while processing:») گرفت و پیامِ واقعی
+            # گم شد. `tail` نمی‌تواند از قلم بیفتد.
+            reason="$(grep -vE '^(Get:|Hit:|Reading|Building|Preparing|Unpacking|Selecting|Setting up|Processing)' \
+                      /tmp/apt-armhf.log | tail -14)"
             reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
             echo 'armhf multiarch install failed' >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
