@@ -71,17 +71,18 @@ dpkg-query -W -f='${Package} ${Architecture}\n' \
       [ -e "$f" ] && cp -a --parents "$f" /out/sysroot 2>/dev/null || true
     done
 
-# `opensslconf.h` در include عمومی نیست: openssl آن را در مسیرِ مخصوصِ معماری
-# می‌گذارد (`/usr/include/arm-linux-gnueabihf/openssl/` — با بستهٔ armhf تست شد).
-# فیلترِ بالا آن را کپی می‌کند، ولی `openssl-sys` دنبالِ
-# `<include>/openssl/opensslconf.h` می‌گردد. پس یک کپیِ دیگر همان‌جا می‌گذاریم
-# تا هر دو مسیر جواب بدهد.
-if [ -f /out/sysroot/usr/include/arm-linux-gnueabihf/openssl/opensslconf.h ]; then
-  cp -f /out/sysroot/usr/include/arm-linux-gnueabihf/openssl/opensslconf.h \
-        /out/sysroot/usr/include/openssl/opensslconf.h
-  echo "opensslconf.h also staged at usr/include/openssl/"
+# `opensslconf.h` و `configuration.h` در include عمومی نیستند: openssl آن‌ها را
+# در مسیرِ مخصوصِ معماری می‌گذارد (`usr/include/arm-linux-gnueabihf/openssl/` —
+# با بستهٔ armhf تست شد و فهرستش همین دو را نشان می‌دهد). فیلترِ بالا آن‌ها را
+# کپی می‌کند، ولی `openssl-sys` دنبالِ `<include>/openssl/…` می‌گردد. پس کلِ
+# پوشه کپی می‌شود، نه یک فایل — اول فقط opensslconf.h را آورده بودم و همان‌جا
+# به `configuration.h` خورد.
+ARCH_OPENSSL=/out/sysroot/usr/include/arm-linux-gnueabihf/openssl
+if [ -d "$ARCH_OPENSSL" ]; then
+  cp -f "$ARCH_OPENSSL"/*.h /out/sysroot/usr/include/openssl/
+  echo "openssl arch headers staged: $(ls /out/sysroot/usr/include/openssl/ | wc -l) files"
 else
-  echo "ERROR: opensslconf.h missing — openssl-sys will fail on the host header" >&2
+  echo "ERROR: $ARCH_OPENSSL missing — openssl-sys will fail on the host headers" >&2
   exit 1
 fi
 
