@@ -288,10 +288,13 @@ jobs:
             # (`ubuntu.sources`) استفاده می‌کند، پس `sed` روی `sources.list` هیچ
             # کاری نمی‌کند و armhf همچنان از آرشیوِ amd64 درخواست می‌شود.
             # با نوشتنِ کاملِ فهرست، به قالبِ رانر وابسته نیستیم.
-            sudo mv /etc/apt/sources.list.d/ubuntu.sources \
-                    /etc/apt/sources.list.d/ubuntu.sources.off 2>/dev/null || true
-            sudo mv /etc/apt/sources.list \
-                    /etc/apt/sources.list.off 2>/dev/null || true
+            #
+            # فایل‌ها به `/tmp` منتقل می‌شوند، نه اینکه در همان پوشه rename شوند:
+            # apt هر فایلِ ناشناخته را می‌بیند و برای هر اجرا `N: Ignoring file …
+            # as it has an invalid filename extension` می‌نویسد — پنج بار، و
+            # همان چیزی شد که پیامِ واقعی را پشت خودش پنهان کرد.
+            sudo mv /etc/apt/sources.list.d/ubuntu.sources /tmp/ubuntu.sources.bak 2>/dev/null || true
+            sudo mv /etc/apt/sources.list /tmp/sources.list.bak 2>/dev/null || true
             sudo tee /etc/apt/sources.list.d/aether.list > /dev/null <<'EOF'
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse

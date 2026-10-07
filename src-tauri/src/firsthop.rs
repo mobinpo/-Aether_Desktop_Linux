@@ -58,18 +58,33 @@ pub fn get() -> Option<String> {
     HOP.lock().ok().and_then(|hop| hop.clone())
 }
 
+/// قفلِ آزمون‌ها.
+///
+/// `HOP` یک `static` سراسری است و `cargo test` نخ‌ها را موازی اجرا می‌کند، پس
+/// آزمون‌های این ماژول روی هم می‌افتند: یکی `reset()` می‌کند، دیگری می‌خواند و
+/// `None` می‌بیند. این یک بار روی aarch64 رخ داد — روی x86_64 همان ۲۵۷ آزمون
+/// پشت‌سرهم سبز می‌ماند، چون زمان‌بندیِ نخ‌ها فرق می‌کند.
+///
+/// راه درست این است که هر آزمون روی یک قفلِ سراسری بیفتد، نه اینکه آزمون‌ها
+/// serial شوند: قفل فقط در `#\[cfg(test)\]` وجود دارد و در بیلدِ واقعی هیچ
+/// هزینه‌ای ندارد.
+#[cfg(test)]
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fresh() {
+    fn fresh() -> std::sync::MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         assert_eq!(get(), None);
+        guard
     }
 
     #[test]
     fn takes_the_warp_edge_from_the_engine_line() {
-        fresh();
+        let _guard = fresh();
         ingest(
             "1789627203863 D/engine: [2026-09-17T06:40:03.863Z INFO  aether] \
              [+] using cloudflare edge 162.159.195.224:908",
@@ -79,7 +94,7 @@ mod tests {
 
     #[test]
     fn takes_the_bridge_from_the_tor_line() {
-        fresh();
+        let _guard = fresh();
         ingest("[+] tor first hop: 212.83.43.74:80 via obfs4");
         assert_eq!(get().as_deref(), Some("212.83.43.74:80"));
     }
@@ -87,7 +102,7 @@ mod tests {
     /// سطرِ بی‌ربط چیزی را عوض نمی‌کند — و مهم‌تر، سطرِ نزدیک‌ولی‌بی‌پورت هم نه.
     #[test]
     fn a_line_without_a_port_is_not_an_endpoint() {
-        fresh();
+        let _guard = fresh();
         ingest("[tor] new bridge descriptor 'torfnase' (fresh): $3956… at 212.83.43.74");
         ingest("[+] socks5 server listening on 127.0.0.1:1819");
         assert_eq!(get(), None);
@@ -96,7 +111,7 @@ mod tests {
     /// نشستِ بعدی نشانیِ نشستِ قبلی را به ارث نمی‌برد.
     #[test]
     fn reset_forgets_the_previous_session() {
-        fresh();
+        let _guard = fresh();
         ingest("[+] using cloudflare edge 162.159.192.163:859");
         assert!(get().is_some());
         reset();
