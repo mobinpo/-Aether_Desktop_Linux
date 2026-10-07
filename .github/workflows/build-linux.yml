@@ -282,8 +282,16 @@ jobs:
           # اسکریپت جدا از ورک‌فلو، نه داخلش: `bash -c` با سه لایهٔ نقل‌قول
           # جایی که یک آکولاد باید به تک‌گیومه تبدیل شود، غلط بیرون می‌دهد و
           # خطایش شبیه بیلدِ خراب است. داخلِ فایل، همان متن ساده می‌ماند.
-          if ! docker run --rm \
-            -v /usr/bin/qemu-arm-static:/usr/bin/qemu-arm-static:ro \
+          # binfmt یک بار ثبت می‌شود، بیرون از کانتینر. بدون این، dpkg اسکریپت‌های
+          # armhf را اجرا نمی‌کند و با «Exec format error» می‌میرد.
+          if ! docker run --rm --privileged tonistiigi/binfmt --install armhf \
+               > /tmp/binfmt.log 2>&1; then
+            reason="$(tail -10 /tmp/binfmt.log | tr '\n' ' ')"
+            echo "::error title=binfmt armhf::$reason"
+            cat /tmp/binfmt.log
+            exit 1
+          fi
+          if ! docker run --rm --privileged \
             -v "$PWD:/out" \
             -v "$PWD/scripts:/scripts:ro" \
             ubuntu:noble /bin/bash /scripts/build-armhf-sysroot.sh \
@@ -305,8 +313,11 @@ jobs:
           {
             echo "PKG_CONFIG_ALLOW_CROSS=1"
             echo "PKG_CONFIG_SYSROOT_DIR=/"
-            echo "PKG_CONFIG_PATH=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig"
-            echo "PKG_CONFIG_LIBDIR=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig"
+            # فقط پوشهٔ lib نیست: `share/pkgconfig` هم هست و لازم است.
+            # تستِ محلی نشان داد webkit2gtk با LIBDIRِ تنها «Package xproto was not
+            # found» می‌دهد — آن `.pc`ها در share زندگی می‌کنند، نه در lib.
+            echo "PKG_CONFIG_PATH=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:/out/sysroot/usr/share/pkgconfig"
+            echo "PKG_CONFIG_LIBDIR=/out/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:/out/sysroot/usr/share/pkgconfig"
           } >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4

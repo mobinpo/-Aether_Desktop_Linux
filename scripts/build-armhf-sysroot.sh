@@ -19,22 +19,35 @@
 # =============================================================================
 set -euo pipefail
 
-# armhf lives on ports.ubuntu.com, not archive.ubuntu.com. Restricting the
-# default list to amd64 keeps apt from requesting armhf from a mirror that 404s
-# it — those 404s are tolerated during update and then fail the install.
-{
-  echo 'deb http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse'
-  echo 'deb http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse'
-  echo 'deb http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse'
-} > /etc/apt/sources.list.d/armhf.list
-sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+# armhf lives on ports.ubuntu.com, not archive.ubuntu.com — and only there.
+# هر دو طرف باید برچسب داشته باشد: `ports` نباید amd64 بدهد (۴۰۴ می‌دهد) و
+# `archive` هم نباید armhf بخواهد (۴۰۴ می‌دهد). برچسبِ یک‌طرفه کافی نیست.
+#
+# فهرستِ پیش‌فرض کامل جایگزین می‌شود، نه وصله‌اش. دلیلش قالب است: ubuntu:nole
+# از deb822 (`ubuntu.sources`) استفاده می‌کند و `sed` روی `sources.list` آن
+# بی‌اثر است — یعنی پیش‌فرض‌ها همچنان armhf می‌خواستند و همین‌طور ۴۰۴ دادند.
+# این اسکریپت در یک چک‌اوت تازه اجرا می‌شود، پس چیزی برای از دست دادن نیست.
+rm -f /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list
+cat > /etc/apt/sources.list <<'EOF'
+deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+EOF
 
 apt-get update
-# binfmt must be registered before dpkg runs anything armhf, or the first
-# maintainer script dies on "Exec format error".
 apt-get install -y --no-install-recommends qemu-user-static
-update-binfmts --enable armhf || true
 
+# binfmt ثبت می‌شود تا dpkg بتواند اسکریپت‌های armhf را اجرا کند. این کار را
+# `tonistiigi/binfmt` می‌کند — یک بار، بیرون از کانتینر.
+#
+# چرا دستی نه: نوشتنِ ورودیِ binfmt باینری است (بایت‌های 0x7F و 0xFF)، و
+# `printf` در dash آن‌ها را نمی‌نویسد ("Invalid argument"). تستِ محلی نشان داد
+# نام‌های `qemu-arm` و حتی طول‌های مختلفِ mask رفتار یکسانی ندارند و
+# بازخوردِ کرنل فقط EINVAL است. این ابزار همان کار را در یک خط می‌کند و
+# تست‌شده است.
 dpkg --add-architecture armhf
 apt-get update
 apt-get install -y --no-install-recommends \
@@ -46,14 +59,13 @@ apt-get install -y --no-install-recommends \
   libssl-dev:armhf
 
 # Keep only what the linker needs: libraries, headers, pkgconfig and runtime
-# data. The armhf apt and libc6-dev would add hundreds of megabytes and pull in
-# an armhf dynamic loader, which we do not want at link time — the cross gcc
-# brings its own.
+# data. The armhf apt itself would add hundreds of megabytes and pull in an armhf
+# dpkg we never want to run.
 mkdir -p /out/sysroot
 dpkg-query -W -f='${Package} ${Architecture}\n' \
   | awk '$2 == "armhf" { print $1 }' \
   | xargs -r dpkg-query -L \
-  | grep -E '^/usr/(lib|include|share)' \
+  | grep -E '^/(usr/(lib|include|share)|lib)/' \
   | while read -r f; do
       # Symlinks and directories are included; a dangling one is not an error.
       [ -e "$f" ] && cp -a --parents "$f" /out/sysroot 2>/dev/null || true
