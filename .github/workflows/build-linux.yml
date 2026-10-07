@@ -258,20 +258,36 @@ jobs:
       - name: System dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev \
-            file \
-            fuse3 \
-            # `linuxdeploy` که Tauri برای AppImage صدا می‌زند، FUSE2 می‌خواهد
-            # نه FUSE3 — و اوبونتوی ۲۴.۰۴ دیگر آن را نصب نمی‌کند. بدون این،
-            # قدمِ بسته‌بندی با «libfuse.so.2: cannot open shared object
-            # file» می‌میرد.
-            libfuse2
+          # پیام apt باید دیده شود: یک بستهٔ غلط کلِ سه معماری را می‌کُشد و
+          # پیش از این فقط «خروجِ ۱۲۷» می‌داد که یعنی «فرمان یافت نشد» و
+          # هیچ اشاره‌ای به نامِ بسته نداشت.
+          if ! {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              libssl-dev \
+              file \
+              fuse3 \
+              # `linuxdeploy` که Tauri برای AppImage صدا می‌زند، FUSE2 می‌خواهد
+              # نه FUSE3 — و اوبونتوی ۲۴.۰۴ آن را با نام `libfuse2t64` می‌دهد
+              # (`libfuse2` دیگر وجود ندارد و apt کلِ قدم را می‌کشد).
+              # تست شد در کانتینرِ ubuntu:24.04: `libfuse2` → «no candidate»،
+              # `libfuse2t64` → 2.9.9.
+              libfuse2t64
+          } > /tmp/apt.log 2>&1; then
+            reason="$(grep -vE '^(Get:|Hit:|Reading|Building|Preparing|Unpacking|Selecting|Setting up)' \
+                      /tmp/apt.log | tail -14)"
+            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
+            echo "::error title=apt deps (${{ matrix.arch }})::$reason"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -20 /tmp/apt.log
+            exit 1
+          fi
 
       # armv7: کتابخانه‌های armhf در یک کانتینر نصب می‌شوند، نه روی خودِ رانر.
       #
