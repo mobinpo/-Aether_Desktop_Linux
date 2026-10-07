@@ -70,6 +70,7 @@ jobs:
                    src-tauri/src/main.rs \
                    scripts/fetch-engine.sh \
                    scripts/build-armhf-sysroot.sh \
+                   scripts/apt-retry.sh \
                    assets/psiphon/server_entries.txt; do
             [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 1; }
           done
@@ -233,7 +234,7 @@ jobs:
           # پیش از این فقط «خروجِ ۱۲۷» می‌داد که یعنی «فرمان یافت نشد» و
           # هیچ اشاره‌ای به نامِ بسته نداشت.
           if ! {
-            sudo apt-get update
+            ./scripts/apt-retry.sh update
             # کامنت ندارد، چون کامنتِ داخلِ فهرستِ بسته‌ها backslash را می‌شکند:
             # apt بسته‌ها را می‌گیرد، بعد خط بعدی «فرمانِ ناشناخته» می‌شود و
             # خطا جایِ واقعی‌اش را نشان نمی‌دهد.
@@ -242,7 +243,7 @@ jobs:
             # صدا می‌زند به `libfuse.so.2` لینک می‌شود و اوبونتوی ۲۴.۰۴ دیگر
             # `libfuse2` ندارد. تست شد در کانتینرِ ubuntu:24.04: `libfuse2` →
             # «no candidate»، `libfuse2t64` → 2.9.9 و libfuse.so.2 را می‌دهد.
-            sudo apt-get install -y --no-install-recommends \
+            ./scripts/apt-retry.sh install \
               libwebkit2gtk-4.1-dev \
               libappindicator3-dev \
               librsvg2-dev \
