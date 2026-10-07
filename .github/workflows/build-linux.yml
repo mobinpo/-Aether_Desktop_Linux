@@ -348,9 +348,13 @@ jobs:
           # تغییر کوچک در Tauri نباید بیلد را بشکند.
           found=0
           for pkg in $(find src-tauri/target/${{ matrix.rust_target }}/release/bundle \
-                        -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) 2>/dev/null); do
+                        -type f \( -iname '*.deb' -o -iname '*.rpm' -o -iname '*.AppImage' \) 2>/dev/null); do
             base="$(basename "$pkg")"
-            ext="$(echo "${base##*.}" | tr '[:upper:]' '[:lower:]')"
+            # پسوند **بدون** کوچک‌کردنِ حروف. اینجا `tr` بود و نتیجه
+            # `appimage` می‌شد، ولی فیلترِ مرحلهٔ انتشار `*.AppImage` است — یعنی
+            # بسته ساخته و آپلود می‌شد و بعد در ریلیز گم می‌شد، بی‌آنکه کدام‌یک
+            # قرمز شود. هر دو `find` پایین `-iname` شده‌اند تا فرقِ حرف بی‌اثر باشد.
+            ext="${base##*.}"
             cp "$pkg" "$out/Aether_${ver}_${{ matrix.arch }}.${ext}"
             found=1
           done
@@ -505,7 +509,7 @@ jobs:
           # بعد از دانلود یک دستور بزند، نه سه تا. `find` به‌جای الگو، تا
           # نبودِ یک قالب باعث شکستِ `sha256sum` نشود.
           find . -maxdepth 1 -type f \
-            \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.AppImage' \) \
+            \( -iname '*.deb' -o -iname '*.rpm' -o -iname '*.apk' -o -iname '*.AppImage' \) \
             -printf '%P\n' | sort > "$RUNNER_TEMP/pkgs.txt"
           [[ -s "$RUNNER_TEMP/pkgs.txt" ]] || { echo 'no packages downloaded' >&2; exit 1; }
           xargs -a "$RUNNER_TEMP/pkgs.txt" sha256sum > SHA256SUMS.txt
