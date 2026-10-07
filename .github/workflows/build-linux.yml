@@ -282,15 +282,29 @@ jobs:
         if: matrix.qemu
         run: |
           set -euo pipefail
-          sudo dpkg --add-architecture armhf
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev:armhf \
-            libjavascriptcoregtk-4.1-dev:armhf \
-            libgtk-3-dev:armhf \
-            libappindicator3-dev:armhf \
-            librsvg2-dev:armhf \
-            libssl-dev:armhf
+          # پیام apt دقیق است و بدون این پوشش دیده نمی‌شود. یک بستهٔ غلط یا یک
+          # قوسِ جاافتاده یعنی یک اصلاحِ کوچک، نه یک اجرای بیست‌دقیقه‌ای.
+          if ! { sudo dpkg --add-architecture armhf
+                  sudo apt-get update
+                  sudo apt-get install -y --no-install-recommends \
+                    libwebkit2gtk-4.1-dev:armhf \
+                    libjavascriptcoregtk-4.1-dev:armhf \
+                    libgtk-3-dev:armhf \
+                    libappindicator3-dev:armhf \
+                    librsvg2-dev:armhf \
+                    libssl-dev:armhf ; } > /tmp/apt-armhf.log 2>&1; then
+            reason="$(grep -E '^E:|Unable to locate|has no installation|Errors were encountered' \
+                      /tmp/apt-armhf.log | head -8 || true)"
+            [[ -n "$reason" ]] || reason="$(tail -10 /tmp/apt-armhf.log)"
+            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
+            echo 'armhf multiarch install failed' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=apt armhf::$reason"
+            tail -25 /tmp/apt-armhf.log
+            exit 1
+          fi
           {
             # بدون این سه، pkg-config یا حافظ armhf را نمی‌بیند یا از اجرا
             # شکایت می‌کند چون روی معماریِ مبدأ نیست. خطایی که می‌داد:
@@ -432,7 +446,7 @@ jobs:
           if ! apk add --no-cache \
                nodejs npm \
                webkit2gtk-4.1 \
-               gtkmm3.0 \
+               gtkmm3-dev \
                libayatana-appindicator \
                librsvg \
                patchelf \
