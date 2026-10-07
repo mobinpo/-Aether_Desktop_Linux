@@ -232,9 +232,13 @@ jobs:
             echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
             echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER=qemu-arm"
           } >> "$GITHUB_ENV"
-          # بدون QEMU_LD_PREFIX، لینکرِ پویا زیر qemu-arm کتابخانه‌های
-          # `/lib/arm-linux-gnueabihf` را پیدا نمی‌کند و با «cannot find -lgcc_s»
-          # می‌میرد.
+          # `QEMU_LD_PREFIX` باید همان sysrootی باشد که لینکر از آن استفاده می‌کند.
+          #
+          # اینجا پیش‌فرضِ cross-gcc است چون هنوز sysrootی ساخته نشده — و قدمِ
+          # بعدی همین‌جا درستش می‌کند. یکی نگه‌داشتنشان لازم است: باینریِ آزمون
+          # که با یک مسیر لینک شده، با مسیر دیگر زیر QEMU اجرا نمی‌شود و cargo
+          # فقط می‌گوید «could not execute process … (never executed)» که هیچ
+          # اشاره‌ای به کتابخانه ندارد.
           echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf" >> "$GITHUB_ENV"
 
       - name: Cache Rust build
@@ -351,6 +355,10 @@ jobs:
             echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=$PWD/scripts/armv7-linker.sh"
             echo "AETHER_SYSROOT=$SYSROOT_ABS"
             echo "LIBRARY_PATH=$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf"
+            # هم‌راستا با لینکر: حالا که sysroot وجود دارد، QEMU هم باید همان را
+            # ببیند. وگرنه بیلد کامپایل می‌شود ولی باینریِ آزمون زیر QEMU اجرا
+            # نمی‌شود.
+            echo "QEMU_LD_PREFIX=$SYSROOT_ABS"
             echo "CFLAGS=-I$SYSROOT_ABS/usr/include/glib-2.0 -I$SYSROOT_ABS/usr/lib/arm-linux-gnueabihf/glib-2.0/include -I$SYSROOT_ABS/usr/include"
           } >> "$GITHUB_ENV"
 
