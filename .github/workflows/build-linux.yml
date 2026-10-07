@@ -99,9 +99,9 @@ jobs:
   #     رایگان‌اند و چند برابر سریع‌تر از شبیه‌سازی. armv7 چنین رانری ندارد و
   #     زیر QEMU ساخته می‌شود.
   #
-  #     ۳۲ بیتیِ x86 (i386) نیست و شدنی هم نیست: هستهٔ موتور آرشیوی به این نام
-  #     منتشر نکرده (تست شد، ۴۰۴). webkit2gtk برای i386 هست، ولی بدون موتور
-  #     بسته بی‌معنی است.
+  #     ۳۲ بیتیِ x86 (i386) نیست و دلیلش این است که هستهٔ موتور آرشیوی به این
+  #     نام منتشر نکرده (تست شد، ۴۰۴). webkit2gtk برای i386 هست، پس کتابخانه
+  #     مشکل نیست — ولی بسته‌ای بدون موتور بی‌معنی است.
   # ---------------------------------------------------------------------------
   build:
     name: ${{ matrix.arch }} / ${{ matrix.bundles }}
@@ -269,6 +269,37 @@ jobs:
             file \
             fuse3
 
+      # armv7: همان بسته‌ها، ولی نسخهٔ armhf. این‌بار `--add-architecture` لازم
+      # است، ولی فقط برای بسته‌هایی که پسوند `:armhf` صریح دارند — مشکلِ اجرای
+      # قبلی این بود که apt خودش معماری را انتخاب می‌کرد و بسته‌ای برمی‌داشت که
+      # روی رانر اجرا نمی‌شود.
+      #
+      # این یعنی «کامپایل متقاطع با کتابخانه‌های واقعیِ هدف» به‌جای sysrootِ
+      # دست‌ساز: webkit2gtk برای armhf را خودِ اوبونتو می‌سازد و ما فقط نصبش
+      # می‌کنیم. Sysroot ده‌روزه دیگر لازم نیست — و همین دلیلِ آن جملهٔ قبلی
+      # دربارهٔ «ساختن webkit برای armhf» غلط بود.
+      - name: armhf libraries via multiarch
+        if: matrix.qemu
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev:armhf \
+            libjavascriptcoregtk-4.1-dev:armhf \
+            libgtk-3-dev:armhf \
+            libappindicator3-dev:armhf \
+            librsvg2-dev:armhf \
+            libssl-dev:armhf
+          {
+            # بدون این سه، pkg-config یا حافظ armhf را نمی‌بیند یا از اجرا
+            # شکایت می‌کند چون روی معماریِ مبدأ نیست. خطایی که می‌داد:
+            # «pkg-config has not been configured to support cross-compilation».
+            echo "PKG_CONFIG_ALLOW_CROSS=1"
+            echo "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig"
+            echo "PKG_CONFIG_SYSROOT_DIR=/"
+          } >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -395,21 +426,34 @@ jobs:
       - name: Alpine packages
         run: |
           set -euo pipefail
-          apk add --no-cache \
-            nodejs npm \
-            webkit2gtk-4.1 \
-            gtkmm3.0 \
-            libayatana-appindicator \
-            librsvg \
-            patchelf \
-            openssl-dev \
-            build-base \
-            file \
-            curl \
-            tar \
-            git \
-            xz \
-            fuse3
+          # پیام apk دقیق است، ولی بدون این پوشش فقط «خروجِ ۱» دیده می‌شد و
+          # همین قدم سه بار پشت‌سرهم همین‌طور مُرد. یک بستهٔ غلط یعنی یک
+          # `apk add` دیگر، نه یک اجرای ۲۰ دقیقه‌ای.
+          if ! apk add --no-cache \
+               nodejs npm \
+               webkit2gtk-4.1 \
+               gtkmm3.0 \
+               libayatana-appindicator \
+               librsvg \
+               patchelf \
+               openssl-dev \
+               build-base \
+               file \
+               curl \
+               tar \
+               git \
+               xz \
+               fuse3 > /tmp/apk.log 2>&1; then
+            reason="$(tail -12 /tmp/apk.log)"
+            echo 'alpine packages failed' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            printf '::error title=apk add (%s)::%s\n' \
+              "$ARCH_SLUG" "$(printf '%s' "$reason" | tr '\n' ' ')"
+            cat /tmp/apk.log
+            exit 1
+          fi
 
       - uses: actions/checkout@v4
 
