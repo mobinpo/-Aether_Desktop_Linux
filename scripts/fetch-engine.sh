@@ -24,18 +24,28 @@ set -euo pipefail
 VERSION="${1:-${CORE_VERSION:-2.3.0}}"
 ARCH="${2:-$(uname -m)}"
 
-# نامِ معماری بین `uname` و نامِ آرشیوِ بالادست یکی نیست:
-#   uname:   x86_64  aarch64  arm64  armv7l
-#   upstream: x86_64   arm64   arm64    armv7
+# نامِ معماری بین `uname` و نامِ آرشیوِ بالادست یکی نیست، و musl هم پسوندِ
+# جدا دارد:
+#   uname:     x86_64   aarch64   armv7l
+#   glibc:     x86_64    arm64     armv7
+#   musl:   x86_64-musl aarch64-musl armv7-musl
 # نگاشت صریح است تا یک معماریِ ناشناخته بی‌صدا به x86_64 نیفتد و باینریِ
 # ۶۴ بیتی را در بستهٔ ۳۲ بیتی جا بزند. (`aarch64` نامِ آرشیو نیست — تست شد
 # و ۴۰۴ داد؛ `arm64` است.)
+#
+# ۳۲ بیتیِ x86 عمداً نیست: آرشیوی به این نام منتشر نشده (تست شد، ۴۰۴). بدون
+# موتور، بستهٔ برنامه بی‌معنی است — پس ساختنش فقط وقتِ بیلد را می‌سوزاند.
 case "$ARCH" in
-  x86_64)                 SLUG="x86_64" ;;
-  aarch64|arm64)          SLUG="arm64"   ;;
-  armv7l|armv7)           SLUG="armv7"   ;;
-  i386|i686)              SLUG="x86"     ;;
-  *) echo "fetch-engine: unsupported arch: $ARCH" >&2; exit 1 ;;
+  x86_64)                  SLUG="x86_64"      ;;
+  aarch64|arm64)           SLUG="arm64"       ;;
+  armv7l|armv7)            SLUG="armv7"       ;;
+  x86_64-musl)             SLUG="x86_64-musl" ;;
+  aarch64-musl|arm64-musl) SLUG="aarch64-musl" ;;
+  armv7l-musl|armv7-musl)  SLUG="armv7-musl"  ;;
+  *) echo "fetch-engine: unsupported arch: $ARCH" >&2
+     echo "  glibc:  x86_64 aarch64 armv7"               >&2
+     echo "  musl:   x86_64-musl aarch64-musl armv7-musl" >&2
+     exit 1 ;;
 esac
 
 ASSET="aether-linux-${SLUG}.tar.gz"

@@ -93,10 +93,15 @@ jobs:
           npm test
 
   # ---------------------------------------------------------------------------
-  #  2) بیلد — یک جاب برای هر (رانر، معماری)
+  #  2) بیلد گلیسک — یک جاب برای هر (رانر، معماری)
   #
   #     ARM64 روی رانرهای بومی گیت‌هاب (`ubuntu-24.04-arm`): برای مخازن عمومی
-  #     رایگان‌اند و چند برابر سریع‌تر از شبیه‌سازی.
+  #     رایگان‌اند و چند برابر سریع‌تر از شبیه‌سازی. armv7 چنین رانری ندارد و
+  #     زیر QEMU ساخته می‌شود.
+  #
+  #     ۳۲ بیتیِ x86 (i386) نیست و شدنی هم نیست: هستهٔ موتور آرشیوی به این نام
+  #     منتشر نکرده (تست شد، ۴۰۴). webkit2gtk برای i386 هست، ولی بدون موتور
+  #     بسته بی‌معنی است.
   # ---------------------------------------------------------------------------
   build:
     name: ${{ matrix.arch }} / ${{ matrix.bundles }}
@@ -114,23 +119,11 @@ jobs:
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             bundles: deb,rpm
-          # armv7 در ماتریس نیست و دلیلش یک باگ نیست: Tauri به
-          # `libwebkit2gtk-4.1` وصل می‌شود و هیچ توزیعی آن را برای armhf
-          # نمی‌سازد — نه اوبونتو، نه دبیان. پس برای armv7 نه deb ساخته می‌شود
-          # نه AppImage، و این محدودیتِ کتابخانه است نه معماری. راه‌حل یعنی
-          # ساختنِ خودِ webkit برای armhf (Sysroot ده‌روزه یا rootshool)، که
-          # بیرون از این مخزن است.
-          #
-          # هستهٔ موتور برای armv7 موجود است — `scripts/fetch-engine.sh armv7`
-          # کار می‌کند — و همین در `engine.rs` و `psiphon.rs` هم پشتیبانی می‌شود.
-          # آنچه کم است بستهٔ برنامه است.
-          #
-          # برای برگرداندنش، خانهٔ زیر را برگردان و QEMU را نگه دار:
-          #
-          #   - arch: armv7
-          #     runner: ubuntu-24.04
-          #     rust_target: armv7-unknown-linux-gnueabihf
-          #     bundles: deb
+          - arch: armv7
+            runner: ubuntu-24.04
+            rust_target: armv7-unknown-linux-gnueabihf
+            bundles: deb
+            qemu: true
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -149,9 +142,11 @@ jobs:
         run: |
           set -euo pipefail
           case "$ARCH_SLUG" in
-            x86_64)  sleep 0  ;;
-            aarch64) sleep 45 ;;
-            *)       sleep 90 ;;
+            x86_64)        sleep 0  ;;
+            aarch64)       sleep 30 ;;
+            x86_64-musl)   sleep 60 ;;
+            aarch64-musl)  sleep 90 ;;
+            *)             sleep 120 ;;
           esac
           # خطا با `::error::` اعلام می‌شود، نه فقط با خروجِ ۱. حاشیه‌نویسی
           # (annotation) از طریق API عمومی خوانده می‌شود، ولی لاگِ خامِ قدم
@@ -181,9 +176,15 @@ jobs:
           set -euo pipefail
           file dist-engine/aether dist-engine/psiphon-tunnel-core
           case "${{ matrix.arch }}" in
-            x86_64) file dist-engine/aether | grep -q 'x86-64' ;;
-            aarch64) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
+            x86_64|x86_64-musl) file dist-engine/aether | grep -q 'x86-64' ;;
+            aarch64|aarch64-musl) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
             armv7)   file dist-engine/aether | grep -qE 'ARM' ;;
+          esac
+          # یک آرشیوِ musl باید به musl لینک شده باشد. اگر این را نگیریم،
+          # بستهٔ Alpine یک برنامهٔ glibc است که روی سیستمِ musl اجرا نمی‌شود —
+          # و خطای آن موقعی است که کاربر نصبش کرده، نه موقع بیلد.
+          case "${{ matrix.arch }}" in
+            *-musl) file dist-engine/aether | grep -qE 'static|musl' ;;
           esac
 
       # اینجا، نه در preflight: `dist-engine/` در `.gitignore` است و روی یک
@@ -218,6 +219,32 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
+
+      # armv7: نه کامپایلر نه لینکر روی معماریِ غریبه اجرا نمی‌شوند، چون هر دو
+      # برنامهٔ بومیِ هستند. QEMU این را حل می‌کند.
+      #
+      # `dpkg --add-architecture armhf` اینجا عمداً نیست. یک بار امتحان شد و کار
+      # نکرد: با armhf فعال، apt بسته‌هایی را انتخاب می‌کند که روی رانر اجرا
+      # نمی‌شوند و مرحله با کدِ ۱۰۰ می‌میرد. یک toolchainِ متقاطع، armhf را
+      # به‌عنوان وابستگی می‌آورد بدون دست‌زدن به معماریِ APT.
+      - name: QEMU user emulation (armv7 only)
+        if: matrix.qemu
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-user-static \
+            gcc-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross
+          {
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc"
+            echo "CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc"
+            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER=qemu-arm"
+          } >> "$GITHUB_ENV"
+          # بدون QEMU_LD_PREFIX، لینکرِ پویا زیر qemu-arm کتابخانه‌های
+          # `/lib/arm-linux-gnueabihf` را پیدا نمی‌کند و با «cannot find -lgcc_s»
+          # می‌میرد.
+          echo "QEMU_LD_PREFIX=/usr/arm-linux-gnueabihf" >> "$GITHUB_ENV"
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -334,7 +361,116 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
-  #  3) انتشار در GitHub Release
+  #  3) بیلد musl — جابِ جدا، چون Alpine سیستمِ فایل و کتابخانه‌های خودش را دارد
+  #
+  #     یک قدم در جابِ گلیسک جواب نمی‌دهد: Tauri برای لینک کردن به musl هم
+  #     headers می‌خواهد هم pkgconfig، و هیچ‌کدام با `apt` نصب‌شدنی نیستند. یعنی
+  #     کلِ بیلد باید داخل Alpine انجام شود، نه فقط یک مرحله از آن.
+  #
+  #     تصویر `rust:alpine` خودش Rust و musl را دارد. webkit2gtk هم در
+  #     edge/community هست (`webkit2gtk-4.1-2.48.7-r0`) — تست شد، نه از روی
+  #     حافظه. خروجی یک `apk` است، نه deb.
+  # ---------------------------------------------------------------------------
+  build-musl:
+    name: ${{ matrix.arch }} / apk
+    needs: preflight
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64-musl
+            runner: ubuntu-24.04
+            rust_target: x86_64-unknown-linux-musl
+          - arch: aarch64-musl
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: rust:alpine
+    env:
+      ARCH_SLUG: ${{ matrix.arch }}
+      RUST_TARGET: ${{ matrix.rust_target }}
+    steps:
+      - name: Alpine packages
+        run: |
+          set -euo pipefail
+          apk add --no-cache \
+            nodejs npm \
+            webkit2gtk-4.1 \
+            gtkmm3.0 \
+            libayatana-appindicator \
+            librsvg \
+            patchelf \
+            openssl-dev \
+            build-base \
+            file \
+            curl \
+            tar \
+            git \
+            xz \
+            fuse3
+
+      - uses: actions/checkout@v4
+
+      - name: Stage the official engine
+        run: |
+          set -euo pipefail
+          ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG"
+
+      - name: Engine really is a musl binary
+        run: |
+          set -euo pipefail
+          file dist-engine/aether
+          # یک باینریِ glibc روی Alpine اجرا نمی‌شود، و خطای آن موقعی است که
+          # کاربر نصب کرده — پس باید همین‌جا گرفته شود نه بعد از انتشار.
+          file dist-engine/aether | grep -qE 'static|musl'
+
+      - name: Rust target and linker
+        run: |
+          set -euo pipefail
+          rustup target add "$RUST_TARGET"
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<EOF
+          [target.$RUST_TARGET]
+          linker = "cc"
+          EOF
+
+      - name: Frontend deps and build
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npm run web:build
+
+      - name: Build the app
+        run: |
+          set -euo pipefail
+          npm run tauri build -- --bundles apk --target "$RUST_TARGET"
+
+      - name: Collect the apk
+        run: |
+          set -euo pipefail
+          ver="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          out="dist-pkg"
+          mkdir -p "$out"
+          found=0
+          for pkg in $(find src-tauri/target/"$RUST_TARGET"/release/bundle \
+                        -type f -name '*.apk' 2>/dev/null); do
+            cp "$pkg" "$out/Aether_${ver}_$ARCH_SLUG.apk"
+            found=1
+          done
+          [[ "$found" -eq 1 ]] || { echo "no apk produced" >&2; exit 1; }
+          ( cd "$out" && sha256sum ./* > SHA256SUMS.txt && ls -la )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-linux-${{ matrix.arch }}
+          path: dist-pkg/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  #  4) انتشار در GitHub Release
   #
   #     `gh` روی هر رانر نصب است و به رانتایم پین نمی‌شود — برخلاف اکشن‌های
   #     شخص ثالث که با عوض شدن Node می‌میرند (همان بلایی که سرِ
@@ -345,7 +481,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, build-musl]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -369,7 +505,8 @@ jobs:
           # یک SHA256SUMS برای کلِ ریلیز، نه یکی به‌ازای هر معماری: کاربر باید
           # بعد از دانلود یک دستور بزند، نه سه تا. `find` به‌جای الگو، تا
           # نبودِ یک قالب باعث شکستِ `sha256sum` نشود.
-          find . -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
+          find . -maxdepth 1 -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' -o -name '*.AppImage' \) \
             -printf '%P\n' | sort > "$RUNNER_TEMP/pkgs.txt"
           [[ -s "$RUNNER_TEMP/pkgs.txt" ]] || { echo 'no packages downloaded' >&2; exit 1; }
           xargs -a "$RUNNER_TEMP/pkgs.txt" sha256sum > SHA256SUMS.txt
@@ -400,7 +537,7 @@ jobs:
           cat > "$notes" <<EOF
           ## Aether Desktop $VERSION — Linux
 
-          بسته برای دو معماری و دو قالب. نصب:
+          چهار معماری، سه خانوادهٔ توزیع. نصب:
 
           \`\`\`bash
           # Debian / Ubuntu / Mint
@@ -408,9 +545,18 @@ jobs:
 
           # Fedora / RHEL / openSUSE
           sudo dnf install ./Aether_${VERSION}_x86_64.rpm
+
+          # Alpine (musl)
+          apk add --allow-untrusted ./Aether_${VERSION}_x86_64-musl.apk
           \`\`\`
 
-          روی Raspberry Pi و گوشی‌های اندرویدی، به‌جای \`_amd64\` از \`_aarch64\` بگیرید.
+          | معماری | چه کسی | فایل |
+          |---|---|---|
+          | \`amd64\` | لپ‌تاپ و دسکتاپ | \`_amd64.deb\` / \`_amd64.rpm\` |
+          | \`aarch64\` | Raspberry Pi 4/5، موبایل با گوشی | \`_aarch64.deb\` / \`_aarch64.rpm\` |
+          | \`armv7\` | Raspberry Pi 2/3، ۳۲ بیتی | \`_armv7.deb\` |
+          | \`x86_64-musl\` | Alpine روی دسکتاپ | \`_x86_64-musl.apk\` |
+          | \`aarch64-musl\` | Alpine روی Raspberry Pi | \`_aarch64-musl.apk\` |
 
           ### کدام حالت را انتخاب کنم
 
@@ -423,11 +569,11 @@ jobs:
           * WebRTC روی لینوکس قابل مهار نیست؛ در مرورگر خودتان خاموشش کنید.
           * پروکسیِ سیستمی از راه GSettings نوشته می‌شود، نه رجیستری ویندوز.
           * TUN به \`CAP_NET_ADMIN\` نیاز دارد؛ بستهٔ deb آن را می‌دهد.
-          * برای armv7 بسته‌ای نیست: Tauri به \`libwebkit2gtk\` وصل است و هیچ
-            توزیعی آن را برای armhf نمی‌سازد. هستهٔ موتور برای armv7 موجود است
-            ولی بستهٔ برنامه نه.
-          * AppImage هم هست ولی هنوز در ریلیز نیست — Tauri برای ساختنش به
-            \`linuxdeploy\` نیاز دارد که روی رانر ARM کار نمی‌کند.
+          * **۳۲ بیتیِ x86 (i386) نیست.** هستهٔ موتور برایش منتشر نشده، پس بستهٔ
+            برنامه به‌تنهایی کاری نمی‌کند. اگر لازمش دارید بگویید تا با همان
+            هسته ساخته شود.
+          * AppImage در ریلیز نیست: Tauri برای ساختنش به \`linuxdeploy\` نیاز
+            دارد که روی رانر ARM کار نمی‌کند.
           EOF
 
           # به‌جای زنجیرهٔ `|| gh release upload …` که بر سرِ الگوهای ناموجود
