@@ -326,6 +326,15 @@ jobs:
             echo "PKG_CONFIG_PATH=$PWD/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:$PWD/sysroot/usr/share/pkgconfig:$PWD/sysroot/usr/lib/pkgconfig"
             echo "PKG_CONFIG_LIBDIR=$PWD/sysroot/usr/lib/arm-linux-gnueabihf/pkgconfig:$PWD/sysroot/usr/share/pkgconfig:$PWD/sysroot/usr/lib/pkgconfig"
           } >> "$GITHUB_ENV"
+          # openssl-sys مثل pkg-config سرِ متغیرهای خودش می‌رود و sysroot را
+          # نمی‌شناسد. بدون این، `/usr/include/openssl` میزبان را برمی‌دارد،
+          # `opensslconf.h` ندارد چون آن یکی armhf است، و می‌میرد.
+          {
+            echo "OPENSSL_DIR=$PWD/sysroot/usr"
+            echo "OPENSSL_LIB_DIR=$PWD/sysroot/usr/lib/arm-linux-gnueabihf"
+            echo "OPENSSL_INCLUDE_DIR=$PWD/sysroot/usr/include"
+            echo "OPENSSL_STATIC=0"
+          } >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
