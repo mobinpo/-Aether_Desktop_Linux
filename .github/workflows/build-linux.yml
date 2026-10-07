@@ -10,11 +10,11 @@
 #      Aether_<ver>_<arch>.rpm        برای فدورا/آرچو/RHEL
 #      SHA256SUMS.txt
 #
-#  دو معماری، نه یکی: نسخهٔ منتشرشدهٔ قبلی فقط amd64 داشت. Raspberry Pi 4/5،
+#  سه معماری، نه یکی: نسخهٔ منتشرشدهٔ قبلی فقط amd64 داشت. Raspberry Pi 4/5،
 #  لپ‌تاپ‌های ARM و موبایل‌های اندرویدی با گوشی در ماتریس می‌آیند تا یک اجرا
 #  همه را پوشش دهد.
 #
-#  armv7 نیست و AppImage هم نه — دلیلِ هر دو پایین‌تر، کنارِ همان خانه، نوشته
+#  AppImage و Alpine/musl نیستند — دلیلِ هر دو پایین‌تر، کنارِ همان خانه، نوشته
 #  شده است.
 #
 #  هستهٔ موتور از ریلیز رسمی دانلود و با دایجستِ منتشرشدهٔ خودش تأیید می‌شود
@@ -142,11 +142,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$ARCH_SLUG" in
-            x86_64)        sleep 0  ;;
-            aarch64)       sleep 30 ;;
-            x86_64-musl)   sleep 60 ;;
-            aarch64-musl)  sleep 90 ;;
-            *)             sleep 120 ;;
+            x86_64)  sleep 0  ;;
+            aarch64) sleep 45 ;;
+            *)       sleep 90 ;;
           esac
           # خطا با `::error::` اعلام می‌شود، نه فقط با خروجِ ۱. حاشیه‌نویسی
           # (annotation) از طریق API عمومی خوانده می‌شود، ولی لاگِ خامِ قدم
@@ -176,15 +174,9 @@ jobs:
           set -euo pipefail
           file dist-engine/aether dist-engine/psiphon-tunnel-core
           case "${{ matrix.arch }}" in
-            x86_64|x86_64-musl) file dist-engine/aether | grep -q 'x86-64' ;;
-            aarch64|aarch64-musl) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
+            x86_64) file dist-engine/aether | grep -q 'x86-64' ;;
+            aarch64) file dist-engine/aether | grep -qE 'ARM aarch64' ;;
             armv7)   file dist-engine/aether | grep -qE 'ARM' ;;
-          esac
-          # یک آرشیوِ musl باید به musl لینک شده باشد. اگر این را نگیریم،
-          # بستهٔ Alpine یک برنامهٔ glibc است که روی سیستمِ musl اجرا نمی‌شود —
-          # و خطای آن موقعی است که کاربر نصبش کرده، نه موقع بیلد.
-          case "${{ matrix.arch }}" in
-            *-musl) file dist-engine/aether | grep -qE 'static|musl' ;;
           esac
 
       # اینجا، نه در preflight: `dist-engine/` در `.gitignore` است و روی یک
@@ -269,30 +261,38 @@ jobs:
             file \
             fuse3
 
-      # armv7: همان بسته‌ها، ولی نسخهٔ armhf. این‌بار `--add-architecture` لازم
-      # است، ولی فقط برای بسته‌هایی که پسوند `:armhf` صریح دارند — مشکلِ اجرای
-      # قبلی این بود که apt خودش معماری را انتخاب می‌کرد و بسته‌ای برمی‌داشت که
-      # روی رانر اجرا نمی‌شود.
+      # armv7: همان بسته‌ها، ولی نسخهٔ armhf.
+      #
+      # نکتهٔ اصلی: armhf روی `archive.ubuntu.com` و `security.ubuntu.com` نیست —
+      # روی `ports.ubuntu.com` است. بدون این منبع، apt چهار بار ۴۰۴ می‌گیرد و
+      # با کدِ ۱ می‌میرد. یک منبعِ جدا با برچسب `[arch=armhf]` اضافه می‌شود تا
+      # فقط armhf از ports برود و x86_64 همان جای قبلی بماند.
       #
       # این یعنی «کامپایل متقاطع با کتابخانه‌های واقعیِ هدف» به‌جای sysrootِ
       # دست‌ساز: webkit2gtk برای armhf را خودِ اوبونتو می‌سازد و ما فقط نصبش
-      # می‌کنیم. Sysroot ده‌روزه دیگر لازم نیست — و همین دلیلِ آن جملهٔ قبلی
-      # دربارهٔ «ساختن webkit برای armhf» غلط بود.
-      - name: armhf libraries via multiarch
+      # می‌کنیم. Sysroot ده‌روزه لازم نیست — و همین دلیلِ آن جملهٔ قبلی دربارهٔ
+      # «ساختن webkit برای armhf» غلط بود.
+      - name: armhf libraries via ports.ubuntu.com
         if: matrix.qemu
         run: |
           set -euo pipefail
-          # پیام apt دقیق است و بدون این پوشش دیده نمی‌شود. یک بستهٔ غلط یا یک
-          # قوسِ جاافتاده یعنی یک اصلاحِ کوچک، نه یک اجرای بیست‌دقیقه‌ای.
-          if ! { sudo dpkg --add-architecture armhf
-                  sudo apt-get update
-                  sudo apt-get install -y --no-install-recommends \
-                    libwebkit2gtk-4.1-dev:armhf \
-                    libjavascriptcoregtk-4.1-dev:armhf \
-                    libgtk-3-dev:armhf \
-                    libappindicator3-dev:armhf \
-                    librsvg2-dev:armhf \
-                    libssl-dev:armhf ; } > /tmp/apt-armhf.log 2>&1; then
+          # پیام apt دقیق است و بدون این پوشش دیده نمی‌شود.
+          if ! {
+            sudo dpkg --add-architecture armhf
+            sudo tee /etc/apt/sources.list.d/armhf.list > /dev/null <<'EOF'
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libwebkit2gtk-4.1-dev:armhf \
+              libjavascriptcoregtk-4.1-dev:armhf \
+              libgtk-3-dev:armhf \
+              libappindicator3-dev:armhf \
+              librsvg2-dev:armhf \
+              libssl-dev:armhf
+          } > /tmp/apt-armhf.log 2>&1; then
             reason="$(grep -E '^E:|Unable to locate|has no installation|Errors were encountered' \
                       /tmp/apt-armhf.log | head -8 || true)"
             [[ -n "$reason" ]] || reason="$(tail -10 /tmp/apt-armhf.log)"
@@ -305,10 +305,10 @@ jobs:
             tail -25 /tmp/apt-armhf.log
             exit 1
           fi
+          # pkg-config بدون این‌ها یا حافظ armhf را نمی‌بیند یا از اجرا شکایت
+          # می‌کند چون روی معماریِ مبدأ نیست: «pkg-config has not been
+          # configured to support cross-compilation».
           {
-            # بدون این سه، pkg-config یا حافظ armhf را نمی‌بیند یا از اجرا
-            # شکایت می‌کند چون روی معماریِ مبدأ نیست. خطایی که می‌داد:
-            # «pkg-config has not been configured to support cross-compilation».
             echo "PKG_CONFIG_ALLOW_CROSS=1"
             echo "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig"
             echo "PKG_CONFIG_SYSROOT_DIR=/"
@@ -405,127 +405,6 @@ jobs:
           # نگه‌داشتنِ این فقط سهمیهٔ فضای پلن Free را می‌خورد.
           retention-days: 7
 
-  # ---------------------------------------------------------------------------
-  #  3) بیلد musl — جابِ جدا، چون Alpine سیستمِ فایل و کتابخانه‌های خودش را دارد
-  #
-  #     یک قدم در جابِ گلیسک جواب نمی‌دهد: Tauri برای لینک کردن به musl هم
-  #     headers می‌خواهد هم pkgconfig، و هیچ‌کدام با `apt` نصب‌شدنی نیستند. یعنی
-  #     کلِ بیلد باید داخل Alpine انجام شود، نه فقط یک مرحله از آن.
-  #
-  #     تصویر `rust:alpine` خودش Rust و musl را دارد. webkit2gtk هم در
-  #     edge/community هست (`webkit2gtk-4.1-2.48.7-r0`) — تست شد، نه از روی
-  #     حافظه. خروجی یک `apk` است، نه deb.
-  # ---------------------------------------------------------------------------
-  build-musl:
-    name: ${{ matrix.arch }} / apk
-    needs: preflight
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64-musl
-            runner: ubuntu-24.04
-            rust_target: x86_64-unknown-linux-musl
-          - arch: aarch64-musl
-            runner: ubuntu-24.04-arm
-            rust_target: aarch64-unknown-linux-musl
-    runs-on: ${{ matrix.runner }}
-    container:
-      image: rust:alpine
-    env:
-      ARCH_SLUG: ${{ matrix.arch }}
-      RUST_TARGET: ${{ matrix.rust_target }}
-    steps:
-      - name: Alpine packages
-        run: |
-          set -euo pipefail
-          # پیام apk دقیق است، ولی بدون این پوشش فقط «خروجِ ۱» دیده می‌شد و
-          # همین قدم سه بار پشت‌سرهم همین‌طور مُرد. یک بستهٔ غلط یعنی یک
-          # `apk add` دیگر، نه یک اجرای ۲۰ دقیقه‌ای.
-          if ! apk add --no-cache \
-               nodejs npm \
-               webkit2gtk-4.1 \
-               gtkmm3-dev \
-               libayatana-appindicator \
-               librsvg \
-               patchelf \
-               openssl-dev \
-               build-base \
-               file \
-               curl \
-               tar \
-               git \
-               xz \
-               fuse3 > /tmp/apk.log 2>&1; then
-            reason="$(tail -12 /tmp/apk.log)"
-            echo 'alpine packages failed' >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            printf '::error title=apk add (%s)::%s\n' \
-              "$ARCH_SLUG" "$(printf '%s' "$reason" | tr '\n' ' ')"
-            cat /tmp/apk.log
-            exit 1
-          fi
-
-      - uses: actions/checkout@v4
-
-      - name: Stage the official engine
-        run: |
-          set -euo pipefail
-          ./scripts/fetch-engine.sh "$CORE_VERSION" "$ARCH_SLUG"
-
-      - name: Engine really is a musl binary
-        run: |
-          set -euo pipefail
-          file dist-engine/aether
-          # یک باینریِ glibc روی Alpine اجرا نمی‌شود، و خطای آن موقعی است که
-          # کاربر نصب کرده — پس باید همین‌جا گرفته شود نه بعد از انتشار.
-          file dist-engine/aether | grep -qE 'static|musl'
-
-      - name: Rust target and linker
-        run: |
-          set -euo pipefail
-          rustup target add "$RUST_TARGET"
-          mkdir -p .cargo
-          cat > .cargo/config.toml <<EOF
-          [target.$RUST_TARGET]
-          linker = "cc"
-          EOF
-
-      - name: Frontend deps and build
-        run: |
-          set -euo pipefail
-          npm install --no-audit --no-fund
-          npm run web:build
-
-      - name: Build the app
-        run: |
-          set -euo pipefail
-          npm run tauri build -- --bundles apk --target "$RUST_TARGET"
-
-      - name: Collect the apk
-        run: |
-          set -euo pipefail
-          ver="$(node -p "require('./src-tauri/tauri.conf.json').version")"
-          out="dist-pkg"
-          mkdir -p "$out"
-          found=0
-          for pkg in $(find src-tauri/target/"$RUST_TARGET"/release/bundle \
-                        -type f -name '*.apk' 2>/dev/null); do
-            cp "$pkg" "$out/Aether_${ver}_$ARCH_SLUG.apk"
-            found=1
-          done
-          [[ "$found" -eq 1 ]] || { echo "no apk produced" >&2; exit 1; }
-          ( cd "$out" && sha256sum ./* > SHA256SUMS.txt && ls -la )
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aether-linux-${{ matrix.arch }}
-          path: dist-pkg/
-          if-no-files-found: error
-          retention-days: 7
 
   # ---------------------------------------------------------------------------
   #  4) انتشار در GitHub Release
@@ -539,7 +418,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [build, build-musl]
+    needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -603,18 +482,13 @@ jobs:
 
           # Fedora / RHEL / openSUSE
           sudo dnf install ./Aether_${VERSION}_x86_64.rpm
-
-          # Alpine (musl)
-          apk add --allow-untrusted ./Aether_${VERSION}_x86_64-musl.apk
           \`\`\`
 
           | معماری | چه کسی | فایل |
           |---|---|---|
           | \`amd64\` | لپ‌تاپ و دسکتاپ | \`_amd64.deb\` / \`_amd64.rpm\` |
           | \`aarch64\` | Raspberry Pi 4/5، موبایل با گوشی | \`_aarch64.deb\` / \`_aarch64.rpm\` |
-          | \`armv7\` | Raspberry Pi 2/3، ۳۲ بیتی | \`_armv7.deb\` |
-          | \`x86_64-musl\` | Alpine روی دسکتاپ | \`_x86_64-musl.apk\` |
-          | \`aarch64-musl\` | Alpine روی Raspberry Pi | \`_aarch64-musl.apk\` |
+          | \`armv7\` | Raspberry Pi 2/3، ۳۲ بیتی ARM | \`_armv7.deb\` |
 
           ### کدام حالت را انتخاب کنم
 
@@ -630,8 +504,11 @@ jobs:
           * **۳۲ بیتیِ x86 (i386) نیست.** هستهٔ موتور برایش منتشر نشده، پس بستهٔ
             برنامه به‌تنهایی کاری نمی‌کند. اگر لازمش دارید بگویید تا با همان
             هسته ساخته شود.
-          * AppImage در ریلیز نیست: Tauri برای ساختنش به \`linuxdeploy\` نیاز
-            دارد که روی رانر ARM کار نمی‌کند.
+          * **AppImage و Alpine (apk) در ریلیز نیستند.** برای AppImage، Tauri به
+            \`linuxdeploy\` نیاز دارد که روی رانر ARM کار نمی‌کند. برای Alpine،
+            بیلد باید داخل کانتینر انجام شود و GitHub اکشن‌های JavaScript را در
+            کانتینر Alpine روی رانر ARM اجرا نمی‌کند. اگر یکی از این دو را
+            لازم دارید بگویید تا راه دیگری پیدا شود.
           EOF
 
           # به‌جای زنجیرهٔ `|| gh release upload …` که بر سرِ الگوهای ناموجود
