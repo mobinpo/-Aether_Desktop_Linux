@@ -115,7 +115,11 @@ jobs:
           - arch: x86_64
             runner: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
-            bundles: deb,rpm
+            # AppImage فقط اینجا: `linuxdeploy` که Tauri برای ساختنش صدا
+            # می‌زند روی رانرِ ARM اجرا نمی‌شود. روی x86_64 کار می‌کند و
+            # نتیجه‌اش یک فایلِ پورتیبل است که بدون نصب و بدون ریشه اجرا
+            # می‌شود — همان چیزی که برای کاربرِ بدون دسترسیِ sudo لازم است.
+            bundles: deb,rpm,appimage
           - arch: aarch64
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
@@ -262,7 +266,12 @@ jobs:
             patchelf \
             libssl-dev \
             file \
-            fuse3
+            fuse3 \
+            # `linuxdeploy` که Tauri برای AppImage صدا می‌زند، FUSE2 می‌خواهد
+            # نه FUSE3 — و اوبونتوی ۲۴.۰۴ دیگر آن را نصب نمی‌کند. بدون این،
+            # قدمِ بسته‌بندی با «libfuse.so.2: cannot open shared object
+            # file» می‌میرد.
+            libfuse2
 
       # armv7: کتابخانه‌های armhf در یک کانتینر نصب می‌شوند، نه روی خودِ رانر.
       #
