@@ -102,6 +102,11 @@ jobs:
           AETHER_PLATFORM: windows
         run: |
           set -euo pipefail
+          # پوشه پاک می‌شود چون `dist-engine/` در `.gitignore` است و روی یک رانرِ
+          # استفاده‌شده ممکن است از اجرای قبلی چیزی در آن مانده باشد. آن چیز
+          # `dist-engine/aether` بدونِ پسوند بود — همان نامی که لینوکس می‌گذارد —
+          # و گاردِ پایین‌تر همین را گرفت، در حالی که `aether.exe` درست کنارش بود.
+          rm -rf dist-engine
           if ! ./scripts/fetch-engine.sh "$CORE_VERSION" x86_64 \
                > /tmp/engine-fetch.log 2>&1; then
             reason="$(tr '\r' '\n' < /tmp/engine-fetch.log \
