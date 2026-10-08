@@ -132,7 +132,25 @@ if [ "$PLATFORM" = "windows" ]; then
   # چیدمانِ zip با لینوکس فرق دارد: هر دو کمکی داخل `pt/` هستند
   # (`pt/psiphon-tunnel-core.exe` و `pt/lyrebird.exe`) و تنها موتور در ریشه.
   # فهرستِ واقعی از خودِ آرشیو خوانده شد، نه حدس زده.
-  unzip -q "$tmp/core" -d "$tmp/x"
+  # روی ویندوز `unzip` در PATH نیست؛ Git Bash آن را ندارد. PowerShell هست و
+  # بی‌دردسر — ولی مسیرِ ویندوز می‌خواهد، نه POSIX. `cygpath` همان تبدیل را
+  # می‌کند و روی لینوکس وجود ندارد، پس این شاخه فقط وقتی اجرا می‌شود که
+  # واقعاً روی ویندوز باشیم.
+  #
+  # بی‌صدا رد شدنِ باز کردنِ zip بدترین حالت بود: بعداً نبودِ `aether.exe`
+  # گزارش می‌شد و علتش یک قدمِ شکست‌خوردهٔ سه قدم قبل بود.
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$tmp/core" -d "$tmp/x"
+  else
+    # `mktemp` در Git Bash مسیرِ POSIX می‌دهد، ولی PowerShell مسیرِ ویندوز
+    # می‌خواهد. `cygpath` تبدیلش می‌کند؛ اگر نبود، خودِ `tmp` یک مسیرِ
+    # قابل‌قبول است و نیازی به تبدیل نیست — هر دو حالت پوشش داده شده‌اند.
+    win_tmp="$tmp"
+    command -v cygpath >/dev/null 2>&1 && win_tmp="$(cygpath -w "$tmp")"
+    powershell -NoProfile -Command \
+      "Expand-Archive -Path '$win_tmp\\core' -DestinationPath '$win_tmp\\x' -Force" \
+      || { echo "fetch-engine: could not expand the archive" >&2; exit 1; }
+  fi
   cp -f "$tmp/x/aether.exe" "$OUT/aether.exe"
   # این دو اختیاری‌اند: نبودنشان خطا نیست، همان‌طور که در لینوکس هم نیست.
   cp -f "$tmp/x/pt/lyrebird.exe" "$OUT/pt/lyrebird.exe" 2>/dev/null || true

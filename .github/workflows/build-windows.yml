@@ -130,14 +130,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # اول وجود، بعد محتوا. `set -e` با `file` روی مسیرِ ناموجود می‌میرد
+          # و پیامش فقط «exit 1» است — در حالی که مشکل نبودِ فایل است، نه
+          # اینکه نوعش غلط است. این ترتیب هر دو را جدا می‌کند.
+          if [ ! -f dist-engine/aether.exe ]; then
+            echo "::error::aether.exe was not staged. Directory:"
+            ls -laR dist-engine/ 2>/dev/null || echo "  (dist-engine does not exist)"
+            exit 1
+          fi
           file dist-engine/aether.exe
-          file dist-engine/aether.exe | grep -qiE 'PE32|x86-64|Microsoft'
+          file dist-engine/aether.exe | grep -qiE 'PE32|x86-64|Microsoft' \
+            || { echo "::error::aether.exe is not a Windows x86_64 binary"; exit 1; }
           # نامِ بدونِ پسوند نباید وجود داشته باشد: `EXE_NAME` روی ویندوز
           # `aether.exe` را می‌خواهد و اگر هر دو باشند، کدام برنده شود مبهم
           # می‌ماند.
           if [ -f dist-engine/aether ]; then
-            echo "::error::dist-engine/aether exists — on Windows the app looks for aether.exe"
-            echo "::error::directory contents:"
+            echo "::error::dist-engine/aether exists alongside aether.exe"
             ls -la dist-engine/
             exit 1
           fi
