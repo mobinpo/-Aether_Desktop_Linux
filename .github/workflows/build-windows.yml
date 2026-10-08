@@ -103,10 +103,17 @@ jobs:
         run: |
           set -euo pipefail
           # پوشه پاک می‌شود چون `dist-engine/` در `.gitignore` است و روی یک رانرِ
-          # استفاده‌شده ممکن است از اجرای قبلی چیزی در آن مانده باشد. آن چیز
-          # `dist-engine/aether` بدونِ پسوند بود — همان نامی که لینوکس می‌گذارد —
-          # و گاردِ پایین‌تر همین را گرفت، در حالی که `aether.exe` درست کنارش بود.
-          rm -rf dist-engine
+          # استفاده‌شده ممکن است از اجرای قبلی چیزی در آن مانده باشد.
+          #
+          # `rm -rf dist-engine` **کافی نبود** و همین‌طور شکست خورد: در
+          # Git Bash مسیرها با `/` کار می‌کنند ولی روی رانرِ ویندوز گاهی
+          # `dist-engine` به شکلِ `C:\...\dist-engine` تفسیر می‌شود. کاراکترِ
+          # اضافه یعنی «چیزی که باید پاک شد نمانده» و گارد پایین‌تر همان فایلِ
+          # لینوکسی را دوباره دید. مسیرِ مطلق و `cmd`-این حالا به‌جای حدس
+          # استفاده می‌شود.
+          cmd //c rmdir /s /q dist-engine 2>/dev/null || true
+          rm -rf "$GITHUB_WORKSPACE/dist-engine"
+          echo "stale engine cleared: $(ls -A dist-engine 2>/dev/null | wc -l) files remain"
           if ! ./scripts/fetch-engine.sh "$CORE_VERSION" x86_64 \
                > /tmp/engine-fetch.log 2>&1; then
             reason="$(tr '\r' '\n' < /tmp/engine-fetch.log \
@@ -130,6 +137,8 @@ jobs:
           # می‌ماند.
           if [ -f dist-engine/aether ]; then
             echo "::error::dist-engine/aether exists — on Windows the app looks for aether.exe"
+            echo "::error::directory contents:"
+            ls -la dist-engine/
             exit 1
           fi
 
