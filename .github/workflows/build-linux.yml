@@ -711,9 +711,9 @@ jobs:
           set -euo pipefail
           notes="$(mktemp)"
           cat > "$notes" <<EOF
-          ## Aether Desktop $VERSION — Linux
+          ## Aether Desktop $VERSION — Linux + macOS
 
-          سه قالب، دو معماری. اگر دسترسیِ root ندارید یا نمی‌خواهید چیزی نصب
+          پنج بسته، چهار معماری — لینوکس و مک. اگر دسترسیِ root ندارید یا نمی‌خواهید چیزی نصب
           کنید، **AppImage** را بگیرید: یک فایل، \`chmod +x\`، اجرا.
 
           \`\`\`bash
@@ -789,7 +789,7 @@ jobs:
             echo "updated $TAG"
           else
             gh release create "$TAG" \
-              --title "Aether $VERSION (Linux)" \
+              --title "Aether $VERSION (Linux + macOS)" \
               --notes-file "$notes" \
               --target "$GITHUB_SHA" \
               "${ASSETS[@]}"
