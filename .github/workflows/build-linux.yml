@@ -615,12 +615,23 @@ jobs:
           out="dist-pkg"
           mkdir -p "$out"
           found=0
-          # `.app` یک پوشهٔ بسته‌بندی است، نه فایل، پس Tauri آن را فشرده
-          # می‌کند به `.app.tar.gz` تا قابلِ آپلود باشد.
+          # Tauri زیرِ `bundle/` پوشهٔ جداگانه می‌سازد: `bundle/macos/…` و
+          # `bundle/dmg/…`. جست‌وجوی `-maxdepth 1` هیچ‌چیز پیدا نمی‌کرد و این قدم
+          # با «no macOS packages produced» می‌مرد، در حالی که `Package` سبز شده
+          # بود و بسته‌ها ساخته شده بودند.
+          #
+          # مسیرها را اول نشان می‌دهیم تا اگر باز هم پیدا نشد، خروجیِ خودِ Tauri
+          # دیده شود — به‌جای پیامی که نمی‌گوید چه چیزی ساخته شده.
+          ls -la src-tauri/target/${{ matrix.rust_target }}/release/bundle/ || true
           for pkg in $(find src-tauri/target/${{ matrix.rust_target }}/release/bundle \
-                        -maxdepth 1 \( -name '*.dmg' -o -name '*.app.tar.gz' \) 2>/dev/null); do
+                        \( -iname '*.dmg' -o -iname '*.app.tar.gz' \) 2>/dev/null); do
             base="$(basename "$pkg")"
-            cp "$pkg" "$out/Aether_${ver}_${{ matrix.arch }}_macos.${base##*.}"
+            case "$base" in
+              *.dmg)    ext="dmg" ;;
+              *.tar.gz) ext="app.tar.gz" ;;
+              *)        continue ;;
+            esac
+            cp "$pkg" "$out/Aether_${ver}_${{ matrix.arch }}_macos.${ext}"
             found=1
           done
           [[ "$found" -eq 1 ]] || { echo "no macOS packages produced" >&2; exit 1; }
