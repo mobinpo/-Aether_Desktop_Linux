@@ -1,0 +1,281 @@
+# =============================================================================
+#  Aether Desktop — Windows build / package / release
+# -----------------------------------------------------------------------------
+#  ورک‌فلوی جدا از `build-linux.yml`, چون `runs-on` متفاوت است: ویندوز روی
+#  `windows-latest` ساخته می‌شود و با لینوکس قابل‌اشتراک نیست.
+#
+#  تفاوتِ مهم با لینوکس: **فقط یک معماری**. بالادست تنها `aether-windows-x86_64`
+#  منتشر می‌کند (تست شد — `aarch64` ۴۰۴ داد)، پس ماتریس یک خانه دارد. برای
+#  ARM و ۳۲ بیتی باید خودِ بالادست منتشر کند.
+#
+#  خروجی:
+#      Aether-<ver>-x64-setup.exe      نصب‌کننده (NSIS — Tauri خودش می‌سازد)
+#      SHA256SUMS.txt
+#
+#  موتور از ریلیز رسمی دانلود و با دیجست تأیید می‌شود
+#  (`scripts/fetch-engine.sh` با `AETHER_PLATFORM=windows`) — نه از سورس. بیلدِ
+#  هسته از سورس همان کاری بود که ورک‌فلوی قبلی همیشه انجام می‌داد و هرگز سبز نشد.
+# =============================================================================
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CORE_VERSION: '2.3.0'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  #  1) Sanity checks
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Every file this pipeline needs exists
+        run: |
+          set -euo pipefail
+          for f in package.json package-lock.json vite.config.js \
+                   src-tauri/Cargo.toml src-tauri/Cargo.lock \
+                   src-tauri/tauri.conf.json src-tauri/build.rs \
+                   src-tauri/src/main.rs \
+                   scripts/fetch-engine.sh \
+                   scripts/apt-retry.sh \
+                   assets/psiphon/server_entries.txt; do
+            [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 1; }
+          done
+          # نمادِ پنجره اینجا ضروری است — بدون `icon.ico` بیلد نمی‌شود.
+          for i in 32x32.png 128x128.png 128x128@2x.png icon.ico; do
+            [[ -f "src-tauri/icons/$i" ]] || { echo "MISSING icon: $i" >&2; exit 1; }
+          done
+
+      - name: Config and JSON must parse
+        run: |
+          set -euo pipefail
+          node -e "
+            const c = require('./src-tauri/tauri.conf.json');
+            if (c.bundle.targets.indexOf('nsis') < 0) throw new Error('nsis target missing');
+            console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources declared');
+          "
+          node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json ok')"
+
+      - name: Frontend unit tests
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+
+  # ---------------------------------------------------------------------------
+  #  2) Build — x86_64 only, because that is all the upstream core publishes
+  # ---------------------------------------------------------------------------
+  build:
+    name: windows / x86_64
+    needs: preflight
+    timeout-minutes: 90
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- هسته --------------------------------------------------------------
+      # باینریِ از پیش ساخته + تأیید دایجست. آرشیورِ ویندوز **zip** است و
+      # باینری‌اش `aether.exe` دارد — هر دو در `fetch-engine.sh` هست.
+      - name: Stage the official engine
+        shell: bash
+        env:
+          AETHER_PLATFORM: windows
+        run: |
+          set -euo pipefail
+          if ! ./scripts/fetch-engine.sh "$CORE_VERSION" x86_64 \
+               > /tmp/engine-fetch.log 2>&1; then
+            reason="$(tr '\r' '\n' < /tmp/engine-fetch.log \
+                      | grep -vE '^ *[0-9]+ +[0-9]+ +[0-9]' \
+                      | grep -vE 'Dload +Upload|^ *$' | tail -6)"
+            echo "::error title=engine fetch (windows)::$reason"
+            cat /tmp/engine-fetch.log
+            exit 1
+          fi
+          tr '\r' '\n' < /tmp/engine-fetch.log \
+            | grep -vE '^ *[0-9]+ +[0-9]+ +[0-9]' | grep -vE '^ *$' | tail -12
+
+      - name: Engine really is a Windows binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          file dist-engine/aether.exe
+          file dist-engine/aether.exe | grep -qiE 'PE32|x86-64|Microsoft'
+          # نامِ بدونِ پسوند نباید وجود داشته باشد: `EXE_NAME` روی ویندوز
+          # `aether.exe` را می‌خواهد و اگر هر دو باشند، کدام برنده شود مبهم
+          # می‌ماند.
+          if [ -f dist-engine/aether ]; then
+            echo "::error::dist-engine/aether exists — on Windows the app looks for aether.exe"
+            exit 1
+          fi
+
+      - name: Every declared bundle resource now exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, sys
+          conf_path = 'src-tauri/tauri.conf.json'
+          base = os.path.dirname(os.path.abspath(conf_path))
+          with open(conf_path) as fh:
+              conf = json.load(fh)
+          resources = list(conf['bundle']['resources'])
+          missing = [p for p in resources if not os.path.exists(os.path.join(base, p))]
+          if missing:
+              print('resource missing: ' + ', '.join(missing), file=sys.stderr)
+              sys.exit(1)
+          print(f'all {len(resources)} resources present')
+          PY
+
+      # ---- Rust ---------------------------------------------------------------
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: windows-x86_64
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Frontend deps and build
+        run: |
+          npm ci --no-audit --no-fund
+          npm run web:build
+
+      - name: Rust tests
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Building Aether $v (windows x86_64)"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          npm run tauri build -- --bundles nsis --target x86_64-pc-windows-msvc
+
+      - name: Collect artifacts and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.version }}"
+          out="dist-pkg"
+          mkdir -p "$out"
+          found=0
+          for pkg in $(find src-tauri/target/x86_64-pc-windows-msvc/release/bundle \
+                        -iname '*.exe' 2>/dev/null); do
+            cp "$pkg" "$out/Aether-${ver}-x64-setup.exe"
+            found=1
+          done
+          [[ "$found" -eq 1 ]] || { echo "no installer produced" >&2; exit 1; }
+          ( cd "$out" && sha256sum ./* > SHA256SUMS.txt && ls -la )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-windows-x86_64
+          path: dist-pkg/
+          if-no-files-found: error
+          # پیش‌فرض ۹۰ روز؛ نسخهٔ ماندگار در Release منتشر می‌شود.
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  #  3) Publish to the GitHub Release
+  #
+  #     `gh` روی هر رانر نصب است و به رانتایم پین نمی‌شود. روند idempotent
+  #     است: اگر تگ باشد، همان را تازه می‌کند.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release (Windows)
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: aether-windows-*
+          # بدون این، هر آرتیفکت در زیرپوشهٔ خودش می‌نشیند و الگوی
+          # `dist/*` چیزی پیدا نمی‌کند.
+          merge-multiple: true
+          path: dist
+
+      - name: Resolve version and tag
+        id: meta
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF#refs/tags/v}"
+            TAG="$GITHUB_REF"
+          else
+            V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+            TAG="v$V"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"    >> "$GITHUB_OUTPUT"
+
+      - name: Add the Windows installer to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dist
+          # دیجستِ جدا برای ویندوز: هر دو ورک‌فلو یک تگ می‌سازند و اگر یکی
+          # فایل `SHA256SUMS.txt` مشترک بگذارد، دیگری آن را overwrite می‌کند
+          # و یکی از سکوها در فهرستِ ریلیز گم می‌شود.
+          sha256sum ./*.exe > SHA256SUMS-windows.txt
+          cat SHA256SUMS-windows.txt
+
+          mapfile -t ASSETS < <(find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -printf '%P\n')
+          ASSETS+=("SHA256SUMS-windows.txt")
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            echo "uploaded windows assets to $TAG"
+          else
+            gh release create "$TAG" \
+              --title "Aether ${{ steps.meta.outputs.version }} (Windows)" \
+              --notes "Windows x86_64 installer. Unsigned — SmartScreen will warn once; choose More info → Run anyway." \
+              --target "$GITHUB_SHA" \
+              "${ASSETS[@]}"
+            echo "created $TAG"
+          fi

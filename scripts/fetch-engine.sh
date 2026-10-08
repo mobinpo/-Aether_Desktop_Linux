@@ -7,57 +7,83 @@
 #  safer than rebuilding it, and rebuilding would drag in the Windows-only
 #  build scripts.
 #
-#  The tarball contains exactly three files:
-#      aether                  the engine
-#      pt/lyrebird             Tor pluggable transport (obfs4 / meek / webtunnel)
-#      pt/psiphon-tunnel-core  the psiphon carrier (stage 2)
+#  Per platform, all from the same official release (v2.3.0, names verified):
 #
-#  Two files are NOT in it and must come from this repo:
+#      linux    aether-linux-<arch>.tar.gz     aether, pt/lyrebird, pt/psiphon-tunnel-core
+#      windows  aether-windows-x86_64.zip      aether.exe, pt/…
+#      macos    aether-macos-<arch>.tar.gz     aether, pt/…
+#
+#  Windows and macOS differ from Linux in ways that are easy to get wrong:
+#  Windows ships a zip rather than a tar.gz, and its binary carries a `.exe`
+#  extension. Both are handled below rather than assumed — `engine.rs` looks
+#  the binary up through `EXE_NAME`, so the name has to be exactly right.
+#
+#  Two files are NOT in the archives and come from this repo:
 #      server_entries.txt      tracked at assets/psiphon/server_entries.txt
-#      CORE_VERSION            derived from the release tag
+#      CORE_VERSION            the release tag
 #
-#  Usage:  scripts/fetch-engine.sh [version] [arch]
-#          defaults: version 2.3.0, arch from `uname -m`
+#  Usage:  AETHER_PLATFORM=linux   scripts/fetch-engine.sh [version] [arch]
+#          AETHER_PLATFORM=windows scripts/fetch-engine.sh 2.3.0 x86_64
 # =============================================================================
 set -euo pipefail
 
 VERSION="${1:-${CORE_VERSION:-2.3.0}}"
 ARCH="${2:-$(uname -m)}"
 
-# نامِ معماری بین `uname` و نامِ آرشیوِ بالادست یکی نیست، و musl هم پسوندِ
-# جدا دارد:
-#   uname:     x86_64   aarch64   armv7l
-#   glibc:     x86_64    arm64     armv7
-#   musl:   x86_64-musl aarch64-musl armv7-musl
-# نگاشت صریح است تا یک معماریِ ناشناخته بی‌صدا به x86_64 نیفتد و باینریِ
-# ۶۴ بیتی را در بستهٔ ۳۲ بیتی جا بزند. (`aarch64` نامِ آرشیو نیست — تست شد
-# و ۴۰۴ داد؛ `arm64` است.)
-#
-# ۳۲ بیتیِ x86 عمداً نیست: آرشیوی به این نام منتشر نشده (تست شد، ۴۰۴). بدون
-# موتور، بستهٔ برنامه بی‌معنی است — پس ساختنش فقط وقتِ بیلد را می‌سوزاند.
-case "$ARCH" in
-  x86_64)                  SLUG="x86_64"      ;;
-  aarch64|arm64)           SLUG="arm64"       ;;
-  armv7l|armv7)            SLUG="armv7"       ;;
-  x86_64-musl)             SLUG="x86_64-musl" ;;
-  aarch64-musl|arm64-musl) SLUG="aarch64-musl" ;;
-  armv7l-musl|armv7-musl)  SLUG="armv7-musl"  ;;
-  *) echo "fetch-engine: unsupported arch: $ARCH" >&2
-     echo "  glibc:  x86_64 aarch64 armv7"               >&2
-     echo "  musl:   x86_64-musl aarch64-musl armv7-musl" >&2
+# سکو را صریح می‌گیریم، از `uname` حدس نمی‌زنیم: روی رانرِ `windows-latest`
+# هم `uname -m` جواب می‌دهد و `MINGW64_NT-10.0…` می‌دهد که در هیچ فهرستی نیست.
+PLATFORM="${AETHER_PLATFORM:-linux}"
+case "$PLATFORM" in
+  linux|windows|macos) ;;
+  *) echo "fetch-engine: unknown platform '$PLATFORM' (want linux|windows|macos)" >&2
      exit 1 ;;
 esac
 
-ASSET="aether-linux-${SLUG}.tar.gz"
+# نامِ معماری بین `uname` و نامِ آرشیورِ بالادست یکی نیست، و musl هم پسوندِ
+# جدا دارد:
+#   uname:     x86_64   aarch64   armv7l
+#   linux:     x86_64    arm64     armv7
+#   musl:   x86_64-musl aarch64-musl armv7-musl
+#
+# نگاشت صریح است تا یک معماریِ ناشناخته بی‌صدا به x86_64 نیفتد و باینریِ
+# ۶۴ بیتی را در بستهٔ ۳۲ بیتی جا بزند. (`aarch64` نامِ آرشیورِ لینوکس نیست —
+# تست شد و ۴۰۴ داد؛ `arm64` است. در مک هم `arm64` است.)
+#
+# ۳۲ بیتیِ x86 عمداً نیست: آرشیوری به این نام منتشر نشده (تست شد، ۴۰۴). بدون
+# موتور، بستهٔ برنامه بی‌معنی است — پس ساختنش فقط وقتِ بیلد را می‌سوزاند.
+# ویندوزِ ۳۲ بیتی هم ندارد: تنها آرشیورِ موجود `windows-x86_64` است.
+case "$ARCH" in
+  x86_64|amd64)             SLUG="x86_64"      ;;
+  aarch64|arm64)           SLUG="arm64"       ;;
+  armv7l|armv7)            SLUG="armv7"       ;;
+  x86_64-musl|amd64-musl)  SLUG="x86_64-musl" ;;
+  aarch64-musl|arm64-musl) SLUG="aarch64-musl" ;;
+  armv7l-musl|armv7-musl)  SLUG="armv7-musl"  ;;
+  *)
+    echo "fetch-engine: unsupported arch: $ARCH" >&2
+    echo "  linux glibc: x86_64 aarch64 armv7"                 >&2
+    echo "  linux musl:  x86_64-musl aarch64-musl armv7-musl"  >&2
+    echo "  windows:     x86_64"                              >&2
+    echo "  macos:       x86_64 aarch64"                      >&2
+    exit 1 ;;
+esac
+
+# ویندوز تنها سکویی است که zip دارد؛ بقیه tar.gz.
+if [ "$PLATFORM" = "windows" ]; then
+  ASSET="aether-${PLATFORM}-${SLUG}.zip"
+else
+  ASSET="aether-${PLATFORM}-${SLUG}.tar.gz"
+fi
+
 URL="https://github.com/CluvexStudio/Aether/releases/download/v${VERSION}/${ASSET}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/dist-engine"
 
-echo "==> [engine] v$VERSION / $SLUG"
+echo "==> [engine] $PLATFORM v$VERSION / $SLUG"
 # هر دو پوشه ساخته می‌شوند، نه فقط ریشه: `dist-engine/` در `.gitignore` است و
 # روی یک چک‌اوت تازه اصلاً وجود ندارد. ساختنِ فقطِ ریشه باعث می‌شد `cp` روی
 # `pt/lyrebird` با «No such file or directory» بمیرد — و همین خطا بود که هر سه
-# معماری را در CI می‌کشت، بی‌آنکه پیامش کسی ببیند.
+# معماریِ لینوکس را در CI می‌کشت، بی‌آنکه پیامش کسی ببیند.
 mkdir -p "$OUT/pt"
 
 tmp="$(mktemp -d)"
@@ -66,11 +92,11 @@ trap 'rm -rf "$tmp"' EXIT
 # Upstream publishes a .sha256 next to every asset. Verify: this is the core the
 # app ships and runs, so an unverified download is not acceptable.
 #
-# `--retry-all-errors` matters here: on CI the three architecture jobs start
-# together and each pulls ~24 MB at the same moment, which is exactly the shape
-# that gets a runner throttled with a 403/429. A plain `--retry 3` gives up on
-# those because it only retries transient transport errors, not HTTP status
-# codes. `-C -` resumes a partial file instead of starting over.
+# `--retry-all-errors` matters here: on CI the architecture jobs start together
+# and each pulls ~25 MB at the same moment, which is exactly the shape that gets
+# a runner throttled with a 403/429. A plain `--retry 3` gives up on those
+# because it only retries transient transport errors, not HTTP status codes.
+# `-C -` resumes a partial file instead of starting over.
 fetch() {
   curl -fL --retry 8 --retry-delay 10 --retry-all-errors --retry-max-time 600 \
        --speed-limit 1024 --speed-time 60 \
@@ -78,17 +104,17 @@ fetch() {
 }
 
 echo "==> [engine] downloading $ASSET"
-if ! fetch "$tmp/core.tar.gz" "$URL"; then
+if ! fetch "$tmp/core" "$URL"; then
   echo "fetch-engine: could not download $URL" >&2
   exit 1
 fi
 fetch "$tmp/core.sha256" "$URL.sha256" || true
 
-if [[ -s "$tmp/core.sha256" ]]; then
+if [ -s "$tmp/core.sha256" ]; then
   # The .sha256 file is "<hash>  <filename>" or a bare "<hash>"; take field one.
   want="$(awk '{print $1; exit}' "$tmp/core.sha256")"
-  got="$(sha256sum "$tmp/core.tar.gz" | awk '{print $1}')"
-  if [[ "$want" != "$got" ]]; then
+  got="$(sha256sum "$tmp/core" | awk '{print $1}')"
+  if [ "$want" != "$got" ]; then
     echo "fetch-engine: DIGEST MISMATCH for $ASSET" >&2
     echo "  expected $want" >&2
     echo "  got      $got" >&2
@@ -99,26 +125,32 @@ else
   echo "    WARNING: no .sha256 published for $ASSET — continuing unverified" >&2
 fi
 
-tar -xzf "$tmp/core.tar.gz" -C "$tmp"
+if [ "$PLATFORM" = "windows" ]; then
+  # `unzip` نه `tar`: آرشیورِ ویندوز zip است. نامِ داخلی هم `aether.exe` دارد،
+  # نه `aether` — و `engine.rs` با `EXE_NAME` دقیقاً همین را می‌خواهد.
+  unzip -q "$tmp/core" -d "$tmp/x"
+  cp -f "$tmp/x/aether.exe" "$OUT/aether.exe"
+  # این دو ممکن است در بسته نباشند؛ نبودنشان خطا نیست، همان‌طور که در لینوکس
+  # نیست. `PtOnly` روی ویندوز کار می‌کند چون هر دو نام را می‌پرسد.
+  cp -f "$tmp/x/pt/lyrebird.exe" "$OUT/pt/lyrebird.exe" 2>/dev/null || true
+  cp -f "$tmp/x/psiphon-tunnel-core.exe" "$OUT/psiphon-tunnel-core.exe" 2>/dev/null || true
+else
+  tar -xzf "$tmp/core" -C "$tmp"
 
-# یک بستهٔ نیم‌کاره از تلاشِ قطع‌شده، `tar` را با خطای مبهم می‌دهد و پیامش
-# هیچ اشاره‌ای به دانلود ندارد. اینجا صریح می‌گوییم مشکل از کجا بود.
-for want in aether pt/lyrebird pt/psiphon-tunnel-core; do
-  if [[ ! -f "$tmp/$want" ]]; then
-    echo "fetch-engine: $ASSET is missing '$want' — download incomplete?" >&2
-    exit 1
-  fi
-done
+  # psiphon ships inside pt/ in the tarball but the app looks for it next to the
+  # engine (it is a carrier, not a pluggable transport). Normalise the layout
+  # here so tauri.conf.json resources stay platform-independent.
+  cp -f "$tmp/aether" "$OUT/aether"
+  cp -f "$tmp/pt/lyrebird" "$OUT/pt/lyrebird"
+  cp -f "$tmp/pt/psiphon-tunnel-core" "$OUT/psiphon-tunnel-core"
+fi
 
-# psiphon ships inside pt/ in the tarball but the app looks for it next to the
-# engine (it is a carrier, not a pluggable transport). Normalise the layout here
-# so tauri.conf.json resources stay arch-independent.
-cp -f "$tmp/aether"                 "$OUT/aether"
-cp -f "$tmp/pt/lyrebird"            "$OUT/pt/lyrebird"
-cp -f "$tmp/pt/psiphon-tunnel-core" "$OUT/psiphon-tunnel-core"
 cp -f "$ROOT/assets/psiphon/server_entries.txt" "$OUT/server_entries.txt"
 printf '%s' "$VERSION" > "$OUT/CORE_VERSION"
-chmod +x "$OUT/aether" "$OUT/pt/lyrebird" "$OUT/psiphon-tunnel-core"
+
+# Windows needs the binary executable; on Unix the bit has to be set explicitly
+# because neither tar nor zip is guaranteed to carry it.
+chmod +x "$OUT"/aether* "$OUT"/psiphon-tunnel-core* "$OUT"/pt/lyrebird* 2>/dev/null || true
 
 echo "==> [engine] staged:"
-( cd "$OUT" && ls -1 aether psiphon-tunnel-core server_entries.txt CORE_VERSION pt/lyrebird )
+( cd "$OUT" && ls -1 aether* psiphon-tunnel-core* server_entries.txt CORE_VERSION pt/lyrebird* )

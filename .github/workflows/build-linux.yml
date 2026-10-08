@@ -1,9 +1,9 @@
 # =============================================================================
 #  Aether Desktop — Linux build / package / release
 # -----------------------------------------------------------------------------
-#  ورک‌فلوی جدا از `build.yml` (که ویندوز است). دلیلِ جدا بودن یک کلمه است:
-#  `runs-on`. آن ورک‌فلو `windows-latest` است و هیچ‌کدام از قدم‌هایش روی لینوکس
-#  معنا ندارد — Inno Setup، Wintun، `.exe`.
+#  ورک‌فلوی جدا از `build-windows.yml` (که ویندوز است). دلیلِ جدا بودن یک کلمه
+#  است: `runs-on`. آن ورک‌فلو `windows-latest` است و هیچ‌کدام از قدم‌هایش روی
+#  لینوکس معنا ندارد — MSVC، Wintun، `.exe`.
 #
 #  خروجی هر اجرا (به ازای هر خانهٔ ماتریس):
 #      Aether_<ver>_<arch>.deb        Tauri خودش deb می‌سازد
@@ -85,6 +85,7 @@ jobs:
           node -e "
             const c = require('./src-tauri/tauri.conf.json');
             if (c.bundle.targets.indexOf('deb') < 0) throw new Error('deb target missing');
+            if (c.bundle.targets.indexOf('appimage') < 0) throw new Error('appimage target missing');
             console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources declared');
           "
           node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json ok')"
