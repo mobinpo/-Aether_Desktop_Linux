@@ -54,10 +54,14 @@ fn active_services() -> Vec<String> {
         if let Some(rest) = line.strip_prefix("Network interfaces: ") {
             for iface in rest.split_whitespace() {
                 // نامِ رابط به نامِ سرویسِ قابل‌قبولِ networksetup نگاشت می‌شود.
-                services.push(match *iface {
+                //
+                // `split_whitespace()` یک `&str` می‌دهد. با `match *iface` الگوی
+                // `"en0"` یک `str` می‌شد و بازوهای دیگر `&str` — کامپایلر
+                // ناسازگاری نوع می‌داد (E0308 و E0277 برای `str` ناشناخته).
+                services.push(match iface {
                     "en0" => "Wi-Fi".to_string(),
                     "en1" => "Ethernet".to_string(),
-                    other => other.to_string(),
+                    other => (*other).to_string(),
                 });
             }
         }

@@ -153,9 +153,42 @@ impl Tunnel {
                 tx: Arc::new(AtomicU64::new(0)),
             })
         }
+
+        // هیچ TUN اینجا پیاده نشده — macOS و هر پلتفرمِ آیندهٔ دیگر.
+        //
+        // Tauri خودش برای کار کردن به TUN نیاز ندارد؛ TUN فقط یعنی «کلِ ترافیکِ
+        // سیستم از تونل برود». بدون آن، تونل یک پروکسیِ SOCKS است.
+        //
+        // برای فیلترِ SNI کافی است: WARP و MASQUE و Psiphon همه از پروکسی رد
+        // می‌شوند و هیچ‌کدام TUN نمی‌خواهند. آنچه از دست می‌رود نشتیِ
+        // برنامه‌هایی است که خودشان پروکسی را نمی‌پذیرند.
+        //
+        // این شاخه باید آخرین باشد: هر پلتفرمی که شاخهٔ خودش را نداشته باشد
+        // به این می‌افتد، پس `Ok` برمی‌گرداند نه اینکه کامپایل نشکند.
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let _ = (profile, wintun_dll);
+            DiagnosticsLog::w(
+                "tun",
+                "TUN is not implemented on this platform — traffic goes through the proxy \
+                 only, so apps that do not honour the system proxy will not tunnel.",
+            );
+            Ok(Self {
+                rx: Arc::new(AtomicU64::new(0)),
+                tx: Arc::new(AtomicU64::new(0)),
+            })
+        }
     }
 
     /// روی macOS هیچ TUN نداریم — و این یک محدودیت است، نه یک انتخاب.
+    ///
+    /// `not(any(windows, linux))` یعنی این `impl` روی مک و هر پلتفرمِ
+    /// آیندهٔ بی‌پشتیبان اجرا می‌شود؛ `Tunnel` خالی است و شمارنده‌ها صفر.
+    ///
+    /// این `establish` قبلاً یک `impl` جدا بود و روی مک خطای
+    /// «duplicate definitions with name establish» می‌داد: `establish` عمومیِ
+    /// بالا هم روی هر پلتفرمی کامپایل می‌شود و `#[cfg]` فقط داخلِ بدنه‌اش بود.
+    /// یعنی شاخهٔ مک در همان `impl` بالا زندگی می‌کرد — این بلوک اضافه بود.
     ///
     /// Tauri خودش برای کار کردن به TUN نیاز ندارد؛ TUN فقط یعنی «کلِ ترافیکِ
     /// سیستم از تونل برود». بدون آن، تونل یک پروکسیِ SOCKS است.
@@ -163,21 +196,6 @@ impl Tunnel {
     /// آیا این کافی است؟ برای فیلترِ SNI بله: WARP و MASQUE و Psiphon همه از
     /// پروکسی رد می‌شوند و چیزی لازم ندارند که TUN باشد. آنچه از دست می‌رود
     /// نشتیِ برنامه‌هایی است که خودشان پروکسی را نمی‌پذیرند.
-    ///
-    /// `not(any(windows, linux))` یعنی این `impl` روی مک و هر پلتفرمِ
-    /// آیندهٔ بی‌پشتیبان اجرا می‌شود؛ `Tunnel` خالی است و شمارنده‌ها صفر.
-    #[cfg(not(any(windows, target_os = "linux")))]
-    pub fn establish(_profile: &ConnectionProfile, _wintun_dll: &std::path::Path) -> Result<Self> {
-        DiagnosticsLog::w(
-            "tun",
-            "TUN is not implemented on this platform — traffic goes through the proxy \\
-             only, so apps that do not honour the system proxy will not tunnel.",
-        );
-        Ok(Self {
-            rx: Arc::new(AtomicU64::new(0)),
-            tx: Arc::new(AtomicU64::new(0)),
-        })
-    }
 
     /// معادل `addAddress` / `addRoute` / `addDnsServer` / `addDisallowedApplication`.
     #[cfg(windows)]
