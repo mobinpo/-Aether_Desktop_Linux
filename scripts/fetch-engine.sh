@@ -128,12 +128,15 @@ fi
 if [ "$PLATFORM" = "windows" ]; then
   # `unzip` نه `tar`: آرشیورِ ویندوز zip است. نامِ داخلی هم `aether.exe` دارد،
   # نه `aether` — و `engine.rs` با `EXE_NAME` دقیقاً همین را می‌خواهد.
+  #
+  # چیدمانِ zip با لینوکس فرق دارد: هر دو کمکی داخل `pt/` هستند
+  # (`pt/psiphon-tunnel-core.exe` و `pt/lyrebird.exe`) و تنها موتور در ریشه.
+  # فهرستِ واقعی از خودِ آرشیو خوانده شد، نه حدس زده.
   unzip -q "$tmp/core" -d "$tmp/x"
   cp -f "$tmp/x/aether.exe" "$OUT/aether.exe"
-  # این دو ممکن است در بسته نباشند؛ نبودنشان خطا نیست، همان‌طور که در لینوکس
-  # نیست. `PtOnly` روی ویندوز کار می‌کند چون هر دو نام را می‌پرسد.
+  # این دو اختیاری‌اند: نبودنشان خطا نیست، همان‌طور که در لینوکس هم نیست.
   cp -f "$tmp/x/pt/lyrebird.exe" "$OUT/pt/lyrebird.exe" 2>/dev/null || true
-  cp -f "$tmp/x/psiphon-tunnel-core.exe" "$OUT/psiphon-tunnel-core.exe" 2>/dev/null || true
+  cp -f "$tmp/x/pt/psiphon-tunnel-core.exe" "$OUT/psiphon-tunnel-core.exe" 2>/dev/null || true
 else
   tar -xzf "$tmp/core" -C "$tmp"
 
@@ -153,4 +156,16 @@ printf '%s' "$VERSION" > "$OUT/CORE_VERSION"
 chmod +x "$OUT"/aether* "$OUT"/psiphon-tunnel-core* "$OUT"/pt/lyrebird* 2>/dev/null || true
 
 echo "==> [engine] staged:"
-( cd "$OUT" && ls -1 aether* psiphon-tunnel-core* server_entries.txt CORE_VERSION pt/lyrebird* )
+# `|| true` لازم است: نبودنِ یکی از این فایل‌ها اختیاری است (بستهٔ ویندوز
+# ممکن است psiphon نداشته باشد) و `ls` روی الگوی ناتمام خطا می‌دهد. بدون این،
+# مرحلهٔ آخر اسکریپت شکست می‌خورد و کل بیلد می‌میرد در حالی که همه‌چیز درست
+# آماده شده — همان اتفاقی که در ویندوز افتاد.
+( cd "$OUT" && ls -1 aether* psiphon-tunnel-core* server_entries.txt CORE_VERSION pt/lyrebird* 2>/dev/null ) || true
+
+# و بعد، به‌جای اعتماد به `ls`، خودِ فایلِ اصلی را چک می‌کنیم: بدون موتور،
+# بستهٔ برنامه بی‌معنی است.
+if [ "$PLATFORM" = "windows" ]; then
+  [ -f "$OUT/aether.exe" ] || { echo "fetch-engine: aether.exe missing after unzip" >&2; exit 1; }
+else
+  [ -f "$OUT/aether" ] || { echo "fetch-engine: aether missing after extract" >&2; exit 1; }
+fi
