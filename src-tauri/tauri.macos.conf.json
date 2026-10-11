@@ -1,0 +1,12 @@
+{
+  "//": "macOS-specific bundle resources. Tauri merges this over tauri.conf.json, so the resource map here replaces the base one rather than adding to it — that is why every key is listed again. macOS ships the engine without an extension, like Linux, but it is listed separately so a future rename does not have to remember that two platforms happen to agree today.",
+  "bundle": {
+    "resources": {
+      "../dist-engine/aether": "engine/aether",
+      "../dist-engine/psiphon-tunnel-core": "engine/psiphon-tunnel-core",
+      "../dist-engine/server_entries.txt": "engine/server_entries.txt",
+      "../dist-engine/pt/lyrebird": "engine/pt/lyrebird",
+      "../dist-engine/CORE_VERSION": "engine/CORE_VERSION"
+    }
+  }
+}

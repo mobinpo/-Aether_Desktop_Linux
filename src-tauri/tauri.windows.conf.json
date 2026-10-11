@@ -1,0 +1,12 @@
+{
+  "//": "Windows-specific bundle resources. Tauri merges this over tauri.conf.json, so the resource map here replaces the base one rather than adding to it — that is why every key is listed again. The engine ships as aether.exe on Windows and without an extension everywhere else, and engine.rs resolves it through EXE_NAME, so the names must match exactly.",
+  "bundle": {
+    "resources": {
+      "../dist-engine/aether.exe": "engine/aether.exe",
+      "../dist-engine/psiphon-tunnel-core.exe": "engine/psiphon-tunnel-core.exe",
+      "../dist-engine/server_entries.txt": "engine/server_entries.txt",
+      "../dist-engine/pt/lyrebird.exe": "engine/pt/lyrebird.exe",
+      "../dist-engine/CORE_VERSION": "engine/CORE_VERSION"
+    }
+  }
+}
