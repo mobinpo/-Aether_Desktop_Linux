@@ -59,6 +59,7 @@ jobs:
                    src-tauri/src/main.rs \
                    scripts/fetch-engine.sh \
                    scripts/apt-retry.sh \
+                   scripts/check-bundle-resources.py \
                    assets/psiphon/server_entries.txt; do
             [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 1; }
           done
@@ -156,26 +157,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! python - <<'PY' > /tmp/res.log 2>&1
-          import json, os, sys
-          conf_path = 'src-tauri/tauri.conf.json'
-          base = os.path.dirname(os.path.abspath(conf_path))
-          with open(conf_path) as fh:
-              conf = json.load(fh)
-          resources = list(conf['bundle']['resources'])
-          missing = [p for p in resources if not os.path.exists(os.path.join(base, p))]
-          if missing:
-              print('missing: ' + ', '.join(missing))
-              for p in resources:
-                  mark = 'OK     ' if os.path.exists(os.path.join(base, p)) else 'ABSENT '
-                  print('  ' + mark + p)
-              sys.exit(1)
-          print(f'all {len(resources)} resources present')
-          PY
-          then
-            # پیام به حاشیه‌نویسی هم می‌رود. بدون آن یک «خروجِ ۱» بی‌صدا
-            # می‌ماند و معلوم نیست کدام منبع نبوده — که در ویندوز همین اتفاق
-            # افتاد و سه قدم طول کشید تا فهمیده شود.
+          # نامِ منابع پلتفرم‌محور است و اسکریپت خودش آن‌ها را از همان
+          # `tauri.windows.conf.json` می‌خواند که Tauri ادغام می‌کند — نه از
+          # یک کپی که باید با آن هماهنگ بماند.
+          if ! python scripts/check-bundle-resources.py windows > /tmp/res.log 2>&1; then
             while IFS= read -r line; do
               [ -n "$line" ] && echo "::error title=bundle resources::$line"
             done < /tmp/res.log
@@ -184,7 +169,6 @@ jobs:
           fi
           cat /tmp/res.log
 
-      # ---- Rust ---------------------------------------------------------------
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc

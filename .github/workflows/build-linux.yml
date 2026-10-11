@@ -71,6 +71,7 @@ jobs:
                    scripts/fetch-engine.sh \
                    scripts/build-armhf-sysroot.sh \
                    scripts/apt-retry.sh \
+                   scripts/check-bundle-resources.py \
                    assets/psiphon/server_entries.txt; do
             [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 1; }
           done
@@ -114,6 +115,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
+            platform: linux
             runner: ubuntu-24.04
             rust_target: x86_64-unknown-linux-gnu
             # AppImage فقط اینجا: `linuxdeploy` که Tauri برای ساختنش صدا
@@ -122,6 +124,7 @@ jobs:
             # می‌شود — همان چیزی که برای کاربرِ بدون دسترسیِ sudo لازم است.
             bundles: deb,rpm,appimage
           - arch: aarch64
+            platform: linux
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
             bundles: deb,rpm
@@ -189,23 +192,9 @@ jobs:
       - name: Every declared bundle resource now exists
         run: |
           set -euo pipefail
-          if ! python3 - <<'PY' > /tmp/res.log 2>&1
-          import json, os, sys
-          conf_path = 'src-tauri/tauri.conf.json'
-          base = os.path.dirname(os.path.abspath(conf_path))
-          with open(conf_path) as fh:
-              conf = json.load(fh)
-          resources = list(conf['bundle']['resources'])
-          missing = [p for p in resources if not os.path.exists(os.path.join(base, p))]
-          if missing:
-              print('missing: ' + ', '.join(missing))
-              for p in resources:
-                  mark = 'OK     ' if os.path.exists(os.path.join(base, p)) else 'ABSENT '
-                  print('  ' + mark + p)
-              sys.exit(1)
-          print(f'all {len(resources)} resources present')
-          PY
-          then
+          # نامِ منابع پلتفرم‌محور است، پس پلتفرم را می‌دهیم و اسکریپت خودش
+          # از همان فایل‌هایی می‌خواند که Tauri ادغام می‌کند.
+          if ! python3 scripts/check-bundle-resources.py "${{ matrix.platform }}" > /tmp/res.log 2>&1; then
             while IFS= read -r line; do
               [ -n "$line" ] && echo "::error title=bundle resources::$line"
             done < /tmp/res.log
@@ -214,77 +203,6 @@ jobs:
           fi
           cat /tmp/res.log
 
-      # ---- Rust ---------------------------------------------------------------
-      - name: Toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
-
-      # armv7: نه کامپایلر نه لینکر روی معماریِ غریبه اجرا نمی‌شوند، چون هر دو
-      # برنامهٔ بومیِ هستند. QEMU این را حل می‌کند.
-      #
-      # این قدم فقط toolchain و شبیه‌ساز است، نه کتابخانه. کتابخانه‌های armhf
-      # در قدم بعد می‌آیند — آنجا که منبعِ درست (ports) هم تنظیم می‌شود. با
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          key: ${{ matrix.arch }}
-          cache-on-failure: true
-
-      # ---- وابستگی‌های سیستمی ------------------------------------------------
-      # `libwebkit2gtk-4.1-dev` برای Tauri v2 است؛ نسخهٔ `4.0` مالِ v1 بود و
-      # روی اوبونتوی جدید وجود ندارد.
-      - name: System dependencies
-        run: |
-          set -euo pipefail
-          # پیام apt باید دیده شود: یک بستهٔ غلط کلِ سه معماری را می‌کُشد و
-          # پیش از این فقط «خروجِ ۱۲۷» می‌داد که یعنی «فرمان یافت نشد» و
-          # هیچ اشاره‌ای به نامِ بسته نداشت.
-          if ! {
-            ./scripts/apt-retry.sh update
-            # کامنت ندارد، چون کامنتِ داخلِ فهرستِ بسته‌ها backslash را می‌شکند:
-            # apt بسته‌ها را می‌گیرد، بعد خط بعدی «فرمانِ ناشناخته» می‌شود و
-            # خطا جایِ واقعی‌اش را نشان نمی‌دهد.
-            #
-            # `libfuse2t64` همان FUSE2 است: `linuxdeploy` که Tauri برای AppImage
-            # صدا می‌زند به `libfuse.so.2` لینک می‌شود و اوبونتوی ۲۴.۰۴ دیگر
-            # `libfuse2` ندارد. تست شد در کانتینرِ ubuntu:24.04: `libfuse2` →
-            # «no candidate»، `libfuse2t64` → 2.9.9 و libfuse.so.2 را می‌دهد.
-            ./scripts/apt-retry.sh install \
-              libwebkit2gtk-4.1-dev \
-              libappindicator3-dev \
-              librsvg2-dev \
-              patchelf \
-              libssl-dev \
-              file \
-              fuse3 \
-              libfuse2t64
-          } > /tmp/apt.log 2>&1; then
-            reason="$(grep -vE '^(Get:|Hit:|Reading|Building|Preparing|Unpacking|Selecting|Setting up)' \
-                      /tmp/apt.log | tail -14)"
-            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
-            echo "::error title=apt deps (${{ matrix.arch }})::$reason"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            tail -20 /tmp/apt.log
-            exit 1
-          fi
-
-      # armv7: کتابخانه‌های armhf در یک کانتینر نصب می‌شوند، نه روی خودِ رانر.
-      #
-      # چرا کانتینر: apt با multiarch روی رانرِ x86_64 یک کتابخانهٔ armhf را
-      # «نصب» می‌کند ولی هرگز اجرایش نمی‌کند — ۳۲۶ بسته و ۵۲۱ مگابایت — و بعد
-      # `pkg-config` می‌خواهد `glib-compile-schemas` و `ldconfig` را که armhf
-      # هستند اجرا کند و نمی‌تواند. این با sysroot حل نمی‌شود، چون مشکل اجراست
-      # نه مسیر.
-      #
-      # با کانتینر، dpkg واقعاً armhf را اجرا می‌کند، پس schemaها و cacheها درست
-      # ساخته می‌شوند؛ بعد فقط پوشهٔ کتابخانه‌ها بیرون کپی می‌شود. یعنی
-      # sysrootِ واقعی، ساخته‌شده توسط خودِ اوبونتو و نه دستی.
-      #
-      # دسترسی به mirrorها در کانتینر: ubuntu:nole فقط `archive.ubuntu.com` را
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -506,9 +424,11 @@ jobs:
       matrix:
         include:
           - arch: aarch64
+            platform: macos
             runner: macos-latest
             rust_target: aarch64-apple-darwin
           - arch: x86_64
+            platform: macos
             runner: macos-latest
             rust_target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
