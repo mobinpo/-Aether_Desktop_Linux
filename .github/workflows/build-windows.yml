@@ -191,10 +191,24 @@ jobs:
           npm run web:build
 
       - name: Rust tests
-        shell: pwsh
+        shell: bash
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          set -euo pipefail
+          # پیام به حاشیه‌نویسی می‌رود، مثل بقیهٔ قدم‌ها. `cargo test` فقط
+          # «exit 1» می‌دهد و لاگِ خام بدون دسترسیِ مدیر خوانده نمی‌شود —
+          # یعنی شکستِ کامپایلِ ویندوز بدون هیچ سرنخی، که دقیقاً همان
+          # اتفاقی است که برای AppImage و برای منابع افتاد.
+          if ! cargo test --manifest-path src-tauri/Cargo.toml \
+               --target x86_64-pc-windows-msvc > /tmp/t.log 2>&1; then
+            reason="$(grep -E -A2 'error(\[|:)|cannot find|panicked|FAILED' /tmp/t.log \
+                      | head -25 || true)"
+            [[ -n "$reason" ]] || reason="$(tail -20 /tmp/t.log)"
+            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
+            echo "::error title=cargo test (windows)::$reason"
+            tail -35 /tmp/t.log
+            exit 1
+          fi
+          grep -E '^test result' /tmp/t.log | tail -2
 
       - name: Resolve version
         id: ver
