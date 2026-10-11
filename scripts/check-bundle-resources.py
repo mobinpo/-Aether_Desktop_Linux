@@ -30,10 +30,10 @@ OVERRIDES = {
 def resources_for(platform: str) -> dict:
     """The resource map Tauri will use for this platform.
 
-    The override replaces the map rather than merging into it — json_patch's
-    object merge is per-key, but a resource map is a whole unit here: listing
-    the Linux names on Windows would put a file in the package that does not
-    exist and miss the one that does.
+    json_patch merges per key, so the override cannot replace the map — it
+    only overwrites keys it names. The platform files therefore set the base
+    keys to "" to drop them (Tauri resolves an empty target to nothing) and
+    add their own. This mirrors that exactly: merge, then drop the empties.
     """
     with open(os.path.join(CONFIG_DIR, "tauri.conf.json")) as fh:
         config = json.load(fh)
@@ -43,8 +43,8 @@ def resources_for(platform: str) -> dict:
         path = os.path.join(CONFIG_DIR, override)
         if os.path.exists(path):
             with open(path) as fh:
-                resources = dict(json.load(fh)["bundle"]["resources"])
-    return resources
+                resources.update(json.load(fh)["bundle"]["resources"])
+    return {src: dst for src, dst in resources.items() if dst}
 
 
 def main() -> int:
@@ -54,18 +54,24 @@ def main() -> int:
         return 2
 
     resources = resources_for(platform)
+    # فقط منابعی که واقعاً در نقشهٔ نهایی‌اند — کلیدهای خالی که یک پلتفرم
+    # برای حذفِ نام‌های پایه گذاشته، در `resources_for` حذف شده‌اند و اینجا هم
+    # نباید دیده شوند.
+    sources = sorted(resources)
     missing = [
-        p for p in resources if not os.path.exists(os.path.join(CONFIG_DIR, p))
+        p for p in sources if not os.path.exists(os.path.join(CONFIG_DIR, p))
     ]
 
     if missing:
-        print(f"missing ({platform}): " + ", ".join(sorted(missing)))
-        for p in sorted(resources):
+        print(f"missing ({platform}): " + ", ".join(missing))
+        for p in sources:
             exists = os.path.exists(os.path.join(CONFIG_DIR, p))
             print(f"  {'OK     ' if exists else 'ABSENT '} {p}")
         return 1
 
-    print(f"all {len(resources)} resources present ({platform} names)")
+    print(f"all {len(sources)} resources present ({platform} names)")
+    for p in sources:
+        print(f"  {p} -> {resources[p]}")
     return 0
 
 
