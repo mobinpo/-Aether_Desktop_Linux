@@ -48,13 +48,7 @@
       "icons/icon.ico",
       "icons/icon.icns"
     ],
-    "resources": {
-      "../dist-engine/aether": "engine/aether",
-      "../dist-engine/psiphon-tunnel-core": "engine/psiphon-tunnel-core",
-      "../dist-engine/server_entries.txt": "engine/server_entries.txt",
-      "../dist-engine/pt/lyrebird": "engine/pt/lyrebird",
-      "../dist-engine/CORE_VERSION": "engine/CORE_VERSION"
-    },
+    "resources": {},
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper",
