@@ -2,6 +2,11 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "bundle": {
     "resources": {
+      "../dist-engine/aether": "",
+      "../dist-engine/psiphon-tunnel-core": "",
+      "../dist-engine/server_entries.txt": "",
+      "../dist-engine/pt/lyrebird": "",
+      "../dist-engine/CORE_VERSION": "",
       "../dist-engine/aether.exe": "engine/aether.exe",
       "../dist-engine/psiphon-tunnel-core.exe": "engine/psiphon-tunnel-core.exe",
       "../dist-engine/server_entries.txt": "engine/server_entries.txt",
