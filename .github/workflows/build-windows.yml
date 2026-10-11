@@ -313,12 +313,16 @@ jobs:
           ASSETS+=("SHA256SUMS-windows.txt")
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if ! gh release upload "$TAG" "${ASSETS[@]}" --clobber; then
+              echo "::error::upload to $TAG failed"
+              exit 1
+            fi
             echo "uploaded windows assets to $TAG"
           else
             gh release create "$TAG" \
               --title "Aether ${{ steps.meta.outputs.version }} (Windows)" \
-              --notes "Windows x86_64 installer. Unsigned — SmartScreen will warn once; choose More info → Run anyway." \
+              --notes "Windows x86_64 installer. Unsigned - SmartScreen will warn once; choose More info then Run anyway." \
               --target "$GITHUB_SHA" \
               "${ASSETS[@]}"
             echo "created $TAG"
