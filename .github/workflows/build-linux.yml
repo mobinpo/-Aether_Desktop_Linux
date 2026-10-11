@@ -87,7 +87,13 @@ jobs:
             const c = require('./src-tauri/tauri.conf.json');
             if (c.bundle.targets.indexOf('deb') < 0) throw new Error('deb target missing');
             if (c.bundle.targets.indexOf('appimage') < 0) throw new Error('appimage target missing');
-            console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources declared');
+            // نقشهٔ منابع هر پلتفرم در `tauri.<platform>.conf.json` است و پایه
+            // خالی — merge کلیدِ اضافه را حذف نمی‌کند. وجودشان اینجا بررسی
+            // می‌شود، نه در `bundle.resources`.
+            for (const p of ['linux', 'macos']) {
+              require('fs').accessSync('src-tauri/tauri.' + p + '.conf.json');
+            }
+            console.log('tauri.conf.json ok, platform resource maps present');
           "
           node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json ok')"
 
@@ -641,7 +647,7 @@ jobs:
           cat > "$notes" <<EOF
           ## Aether Desktop $VERSION — Linux + macOS
 
-          پنج بسته، چهار معماری — لینوکس و مک. اگر دسترسیِ root ندارید یا نمی‌خواهید چیزی نصب
+          هشت بسته، چهار معماری — لینوکس، مک و ویندوز. اگر دسترسیِ root ندارید یا نمی‌خواهید چیزی نصب
           کنید، **AppImage** را بگیرید: یک فایل، \`chmod +x\`، اجرا.
 
           \`\`\`bash
@@ -658,6 +664,7 @@ jobs:
 
           | فایل | چه کسی | نصب می‌خواهد؟ |
           |---|---|---|
+          | \`Aether-<ver>-x64-setup.exe\` | ویندوز ۶۴ بیتی | بله |
           | \`_amd64.deb\` | لپ‌تاپ و دسکتاپ، Debian/Ubuntu | بله |
           | \`_amd64.rpm\` | فدورا / RHEL / openSUSE | بله |
           | \`_x86_64.AppImage\` | هر لینوکسِ ۶۴ بیتی | **نه** |
@@ -665,6 +672,12 @@ jobs:
           | \`_aarch64.rpm\` | فدورا/آرچو روی ARM | بله |
           | \`_aarch64_macos.dmg\` | Apple Silicon | خیر |
           | \`_x86_64_macos.dmg\` | مکِ اینتل | خیر |
+
+          ### روی ویندوز
+
+          نصب‌کننده \`Aether-${VERSION}-x64-setup.exe\` است. **بی‌امضا** است: بارِ
+          اول SmartScreen اخطار می‌دهد — روی **More info → Run anyway** بزنید.
+          این یک‌بار برای همیشه می‌رود.
 
           AppImage فقط برای \`x86_64\` است: ابزاری که Tauri برای ساختنش صدا
           می‌زند روی رانرِ ARM اجرا نمی‌شود.
@@ -713,11 +726,15 @@ jobs:
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            # عنوان به‌روز می‌شود چون اکنون سه سکو در یک ریلیز هستند — «Linux»
+            # دیگر درست نیست. متن دست‌نخورده می‌ماند چون هر ورک‌فلو متنِ خودش را
+            # دارد و نوشتنِ یکی، دیگری را پاک می‌کند.
+            gh release edit "$TAG" --title "Aether $VERSION (Linux + macOS + Windows)" || true
             gh release edit "$TAG" --notes-file "$notes"
             echo "updated $TAG"
           else
             gh release create "$TAG" \
-              --title "Aether $VERSION (Linux + macOS)" \
+              --title "Aether $VERSION (Linux + macOS + Windows)" \
               --notes-file "$notes" \
               --target "$GITHUB_SHA" \
               "${ASSETS[@]}"

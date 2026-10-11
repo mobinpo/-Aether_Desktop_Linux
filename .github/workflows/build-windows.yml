@@ -74,7 +74,10 @@ jobs:
           node -e "
             const c = require('./src-tauri/tauri.conf.json');
             if (c.bundle.targets.indexOf('nsis') < 0) throw new Error('nsis target missing');
-            console.log('tauri.conf.json ok, ' + Object.keys(c.bundle.resources).length + ' resources declared');
+            // نقشهٔ منابعِ ویندوز در `tauri.windows.conf.json` است؛ پایه خالی
+            // است چون merge کلیدِ اضافه را حذف نمی‌کند.
+            require('fs').accessSync('src-tauri/tauri.windows.conf.json');
+            console.log('tauri.conf.json ok, windows resource map present');
           "
           node -e "JSON.parse(require('fs').readFileSync('package.json')); console.log('package.json ok')"
 
