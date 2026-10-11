@@ -96,24 +96,28 @@ jobs:
       # ---- هسته --------------------------------------------------------------
       # باینریِ از پیش ساخته + تأیید دایجست. آرشیورِ ویندوز **zip** است و
       # باینری‌اش `aether.exe` دارد — هر دو در `fetch-engine.sh` هست.
+      - name: Clear any staged engine
+        shell: pwsh
+        run: |
+          # PowerShell، نه bash. `rm -rf` در Git Bash روی ویندوز مسیر را به
+          # شکلی تفسیر می‌کند که پوشه گاهی می‌ماند، و همان فایلِ لینوکسیِ
+          # باقی‌مانده چهار بار پیاپی گاردِ پایین‌تر را خم کرد.
+          if (Test-Path dist-engine) {
+            Remove-Item -Recurse -Force dist-engine
+            Write-Host "cleared the stale dist-engine"
+          } else {
+            Write-Host "no dist-engine to clear"
+          }
+
       - name: Stage the official engine
         shell: bash
         env:
           AETHER_PLATFORM: windows
         run: |
           set -euo pipefail
-          # پوشه پاک می‌شود چون `dist-engine/` در `.gitignore` است و روی یک رانرِ
-          # استفاده‌شده ممکن است از اجرای قبلی چیزی در آن مانده باشد.
-          #
-          # `rm -rf dist-engine` **کافی نبود** و همین‌طور شکست خورد: در
-          # Git Bash مسیرها با `/` کار می‌کنند ولی روی رانرِ ویندوز گاهی
-          # `dist-engine` به شکلِ `C:\...\dist-engine` تفسیر می‌شود. کاراکترِ
-          # اضافه یعنی «چیزی که باید پاک شد نمانده» و گارد پایین‌تر همان فایلِ
-          # لینوکسی را دوباره دید. مسیرِ مطلق و `cmd`-این حالا به‌جای حدس
-          # استفاده می‌شود.
-          cmd //c rmdir /s /q dist-engine 2>/dev/null || true
-          rm -rf "$GITHUB_WORKSPACE/dist-engine"
-          echo "stale engine cleared: $(ls -A dist-engine 2>/dev/null | wc -l) files remain"
+          # پاک‌سازی در قدمِ جدا و با PowerShell انجام می‌شود (بالا)، چون
+          # `rm -rf dist-engine` در Git Bash روی این رانر چهار بار پیاپی
+          # بی‌اثر بود و همان فایلِ لینوکسی را جا گذاشت.
           if ! ./scripts/fetch-engine.sh "$CORE_VERSION" x86_64 \
                > /tmp/engine-fetch.log 2>&1; then
             reason="$(tr '\r' '\n' < /tmp/engine-fetch.log \
