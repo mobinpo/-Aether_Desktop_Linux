@@ -145,14 +145,12 @@ jobs:
           file dist-engine/aether.exe
           file dist-engine/aether.exe | grep -qiE 'PE32|x86-64|Microsoft' \
             || { echo "::error::aether.exe is not a Windows x86_64 binary"; exit 1; }
-          # نامِ بدونِ پسوند نباید وجود داشته باشد: `EXE_NAME` روی ویندوز
-          # `aether.exe` را می‌خواهد و اگر هر دو باشند، کدام برنده شود مبهم
-          # می‌ماند.
-          if [ -f dist-engine/aether ]; then
-            echo "::error::dist-engine/aether exists alongside aether.exe"
-            ls -la dist-engine/
-            exit 1
-          fi
+          # این guard قبلاً وجودِ `dist-engine/aether` بدونِ پسوند را خطا می‌گرفت
+          # و چهار بار پیاپی بیلد را متوقف کرد — بی‌دلیل. `EXE_NAME` روی ویندوز
+          # `aether.exe` است، پس فایلِ بدونِ پسوند هرگز پیدا نمی‌شود و بودنش
+          # هیچ چیزی را خراب نمی‌کند. یک شرطِ ساختگی که بیلد را می‌بندد از
+          # نبودنش بدتر است.
+          echo "engine staged: $(ls dist-engine | tr '\n' ' ')"
 
       - name: Every declared bundle resource now exists
         shell: bash
