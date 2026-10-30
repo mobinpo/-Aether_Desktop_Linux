@@ -21,7 +21,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 STAGE = ROOT / "scripts/stage-tor.ps1"
-WORKFLOW = ROOT / ".github/workflows/build.yml"
+# فورکِ لینوکسی ورک‌فلوها را اسپلیت کرده است؛ نبودِ build.yml اشتباه است.
+WORKFLOWS = [ROOT / ".github/workflows/build.yml",
+             ROOT / ".github/workflows/build-linux.yml",
+             ROOT / ".github/workflows/build-windows.yml"]
+WORKFLOW = next((w for w in WORKFLOWS if w.exists()), WORKFLOWS[0])
 
 # Architektur → (Bezeichner im Dateinamen bei Tor, gepinnter Digest)
 ERWARTET = {

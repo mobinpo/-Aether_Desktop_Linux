@@ -27,6 +27,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # فقط متنِ تغییریافته نباید هر دو Job را روشن کند.
+    paths-ignore:
+      - '**/*.md'
+      - '.github/release-notes.md' 
   pull_request:
     branches: [main]
   workflow_dispatch:

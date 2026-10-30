@@ -4,7 +4,7 @@ set -u
 cd "$(dirname "$0")/.."
 G=scripts/check-session-verdicts.py
 files=(src-tauri/src/tor_native.rs src-tauri/src/state.rs src-tauri/src/leakguard.rs
-        src-tauri/src/diagnostics.rs src-tauri/src/tun.rs src-tauri/src/profile.rs)
+        src-tauri/src/diagnostics.rs src-tauri/src/tun.rs src-tauri/src/profile.rs src-tauri/src/store.rs)
 for f in "${files[@]}"; do cp "$f" "/tmp/sv.$(basename "$f")"; done
 restore() { for f in "${files[@]}"; do cp "/tmp/sv.$(basename "$f")" "$f"; done; }
 trap restore EXIT
@@ -37,20 +37,16 @@ py src-tauri/src/state.rs 'tor.mark_starting();' '/* moved */'
 expect_red "علامتِ انلاق حذف شد"
 
 # ۳) داوریِ نشتی دامنه را نخواند
-# این سطر عیناً باید با `diagnostics.rs` یکی باشد — گهبان با `replace` روی همین
-# متن کار می‌کند و اگر جمله عوض شود، به‌جای «قرمز شد» یک AssertionError می‌دهد.
-# `!enforceable` شرطِ لینوکس است: آنجا WebRTC مهار نمی‌شود و بدون این شرط، هر
-# نشستی «نشتی» خوانده می‌شد.
-py src-tauri/src/diagnostics.rs 'let leaking = !enforceable && !via_tunnel && !browser_policy_only && !udp_open_by_design;' 'let leaking = !enforceable && !via_tunnel && !browser_policy_only;'
+py src-tauri/src/diagnostics.rs 'let leaking = !via_tunnel && !browser_policy_only && !udp_open_by_design;' 'let leaking = !via_tunnel && !browser_policy_only;'
 expect_red "داوری دامنه را نادیده گرفت"
 
 # ۴) تخفیفِ نشتی بی‌شرطِ سیاستِ مرورگر (نشتِ واقعی را می‌بخشد)
 py src-tauri/src/diagnostics.rs 'guard.udp_browser_scoped && guard.browser_policies > 0' 'guard.udp_browser_scoped'
 expect_red "تخفیف بی‌قید شد (fail-open)"
 
-# ۵) SETTINGS_REV به عقب برگردد
-py src-tauri/src/profile.rs 'pub const SETTINGS_REV: u32 = 4;' 'pub const SETTINGS_REV: u32 = 3;'
-expect_red "rev به ۳ برگشت"
+# ۵) در هر اجرا انتخابِ کاربر دوباره به Aether برگردد
+py src-tauri/src/store.rs 'let changed = migrate(&mut profile);' 'let changed = migrate(&mut profile); profile.backend = TransportBackend::Aether;'
+expect_red "انتخاب بک‌اند کاربر هنگام بارگذاری پاک شد"
 
 # ۶) بازگردانیِ رجیستری دوباره سریالی شود
 py src-tauri/src/leakguard.rs 'fn restore_policies(' 'fn unused_restore_policies('
