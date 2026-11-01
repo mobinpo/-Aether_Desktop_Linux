@@ -213,6 +213,37 @@ jobs:
           fi
           cat /tmp/res.log
 
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: System dependencies
+        run: |
+          set -euo pipefail
+          if ! {
+            ./scripts/apt-retry.sh update
+            ./scripts/apt-retry.sh install \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              libssl-dev \
+              file \
+              fuse3 \
+              libfuse2t64
+          } > /tmp/apt.log 2>&1; then
+            reason="$(grep -vE '^(Get:|Hit:|Reading|Building|Preparing|Unpacking|Selecting|Setting up)' \
+                      /tmp/apt.log | tail -14)"
+            reason="$(printf '%s\n' "$reason" | tr '\n' ' ' | tr -s ' ')"
+            echo "::error title=apt deps (${{ matrix.arch }})::$reason"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$reason" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -20 /tmp/apt.log
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
