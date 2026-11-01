@@ -47,7 +47,7 @@ permissions:
 env:
   # نسخهٔ هستهٔ موتور. یک‌جا نگه داشته شده تا این ورک‌فلو، `fetch-engine.sh`
   # و متنِ ریلیز یک عدد را ببینند.
-  CORE_VERSION: '2.3.0'
+  CORE_VERSION: '2.4.0'
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -632,7 +632,7 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF#refs/tags/v}"
-            TAG="$GITHUB_REF"
+            TAG="v$V"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
             TAG="v$V"

@@ -36,7 +36,7 @@ permissions:
   contents: write
 
 env:
-  CORE_VERSION: '2.3.0'
+  CORE_VERSION: '2.4.0'
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -287,7 +287,7 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             V="${GITHUB_REF#refs/tags/v}"
-            TAG="$GITHUB_REF"
+            TAG="v$V"
           else
             V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
             TAG="v$V"
@@ -319,7 +319,6 @@ jobs:
           mapfile -t ASSETS < <(cat /tmp/win-pkgs.txt)
           ASSETS+=("SHA256SUMS-windows.txt")
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
           if gh release view "$TAG" >/dev/null 2>&1; then
             if ! gh release upload "$TAG" "${ASSETS[@]}" --clobber; then
               echo "::error::upload to $TAG failed"

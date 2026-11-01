@@ -316,8 +316,58 @@ fn netsh(args: &[&str]) -> bool {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let mut cmd = Command::new("netsh");
+    let mut cmd = Command::new(
+        std::path::Path::new(&std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()))
+            .join("System32")
+            .join("netsh.exe"),
+    );
     cmd.args(args);
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// Pulls N out of an `... (os error N)` Display string (std::io::Error format).
+pub fn os_code_of(text: &str) -> i32 {
+    text.rsplit("(os error ")
+        .next()
+        .filter(|_| text.contains("(os error "))
+        .and_then(|t| t.split(')').next())
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Honest failure text: names the elevation state and the raw error instead of
+/// always blaming administrator rights. Pure function -> unit-testable.
+pub fn describe_create_failure(err: &str, os_code: i32, elevated: bool) -> String {
+    let hint = if !elevated {
+        "the process is NOT elevated - run Aether as administrator"
+    } else if os_code == 183 || err.contains("already exists") {
+        "an adapter with this name is still registered - it will be reused on the next attempt; if it persists, remove the stale 'Aether' adapter in Device Manager"
+    } else if os_code == 5 || err.to_lowercase().contains("access is denied") {
+        "access denied although elevated - security software or a driver policy is blocking the Wintun driver install"
+    } else {
+        "the Wintun driver could not be installed/started (check antivirus, Core Isolation, and that wintun.dll matches the app architecture)"
+    };
+    format!("could not create the Wintun adapter: {err} (os error {os_code}, elevated={elevated}) - {hint}")
+}
+
+#[cfg(test)]
+mod failure_text_tests {
+    use super::describe_create_failure;
+    #[test]
+    fn not_elevated_is_the_only_case_that_blames_admin() {
+        assert!(describe_create_failure("x", 5, false).contains("NOT elevated"));
+        assert!(!describe_create_failure("x", 5, true).contains("NOT elevated"));
+    }
+    #[test]
+    fn parses_os_code() {
+        assert_eq!(super::os_code_of("Access is denied. (os error 5)"), 5);
+        assert_eq!(super::os_code_of("nothing"), 0);
+    }
+    #[test]
+    fn already_exists_and_denied_are_distinguished() {
+        assert!(describe_create_failure("x", 183, true).contains("still registered"));
+        assert!(describe_create_failure("x", 5, true).contains("access denied although elevated"));
+        assert!(describe_create_failure("boom", 1, true).contains("os error 1"));
+    }
 }

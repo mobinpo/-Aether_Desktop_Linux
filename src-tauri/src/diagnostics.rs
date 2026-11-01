@@ -849,7 +849,7 @@ pub fn run(profile: &ConnectionProfile) -> Report {
 }
 
 #[cfg(windows)]
-fn is_elevated() -> bool {
+pub(crate) fn is_elevated() -> bool {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
     use windows::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
@@ -877,7 +877,7 @@ fn is_elevated() -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_elevated() -> bool {
+pub(crate) fn is_elevated() -> bool {
     true
 }
 
@@ -917,10 +917,12 @@ mod tests {
                                  aether::tor::with_tor] [*] tor reaching the network: 15%: \
                                  connecting successfully; directory is fetching a consensus";
 
-    fn at_15() {
+    fn at_15() -> parking_lot::MutexGuard<'static, ()> {
+        let guard = crate::tor_bootstrap::TEST_SERIAL.lock();
         crate::tor_bootstrap::reset();
         crate::tor_bootstrap::ingest(FIELD_LINE_15);
         assert_eq!(crate::tor_bootstrap::snapshot().percent, Some(15));
+        guard
     }
 
     /// بی تور، همان پیام قدیمی — این مسیر عوض نشده.
@@ -936,7 +938,7 @@ mod tests {
     /// چون تنها چیزی است که کاربر می‌تواند گزارش کند.
     #[test]
     fn tor_inside_the_tunnel_never_advises_bridges() {
-        at_15();
+        let _g = at_15();
         let msg = stage_failure_message(Some(TorShape::ThroughTunnel));
         assert!(msg.contains("15%"), "{msg}");
         assert!(msg.contains("tunnel is up"), "{msg}");
@@ -949,7 +951,7 @@ mod tests {
     /// پیشنهاد می‌دهد.
     #[test]
     fn tor_facing_the_network_with_a_transport_advises_bridges() {
-        at_15();
+        let _g = at_15();
         let msg = stage_failure_message(Some(TorShape::FacingNetwork {
             bridges_allowed: true,
             transport_installed: true,
@@ -963,7 +965,7 @@ mod tests {
     /// پیام باید بگوید فقط پلِ ساده می‌ماند و راهِ واقعی کدام است.
     #[test]
     fn tor_without_a_transport_says_bridges_cannot_run_properly() {
-        at_15();
+        let _g = at_15();
         let msg = stage_failure_message(Some(TorShape::FacingNetwork {
             bridges_allowed: true,
             transport_installed: false,

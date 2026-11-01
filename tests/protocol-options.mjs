@@ -26,6 +26,9 @@ globalThis.cancelAnimationFrame = clearTimeout
 window.__TAURI_INTERNALS__ = {
   invoke: (cmd) => {
     if (cmd === 'plugin:event|listen') return Promise.resolve(1)
+    // Complete bootstrap replies: null snapshots make main.js fail asynchronously.
+    if (cmd === 'get_profile') return Promise.resolve({ backend: 'AETHER', protocol: 'SMART', scanMode: 'BALANCED', ipVersion: 'V4' })
+    if (cmd === 'get_snapshot') return Promise.resolve({ state: 'DISCONNECTED', detail: '', latencyMs: -1, uptimeSecs: 0, rxBytes: 0, txBytes: 0 })
     if (cmd === 'core_caps') {
       return Promise.resolve({
         zeroTrust: true, routing: true, customDns: true,
@@ -52,7 +55,7 @@ const fromRust = [...enumBody.matchAll(/^\s{4}([A-Z][A-Za-z]*),/gm)].map((m) => 
 check(fromRust.length >= 5, `enum Protocol در Rust: ${fromRust.join(', ')}`)
 
 // ---- ۲) آنچه واقعاً رندر می‌شود -------------------------------------------
-const main = await import('../src/main.js')
+const main = await import('../src/main.js').then(async m => { await m.bootReady; return m })
 main.app.profile = { backend: 'AETHER', protocol: 'SMART', scanMode: 'BALANCED', ipVersion: 'V4' }
 const { renderAdvanced } = await import('../src/views/advanced.js')
 
@@ -64,6 +67,25 @@ check(rendered.length > 0, `ردیف Protocol رندر شد (${rendered.length} 
 for (const value of fromRust) {
   check(rendered.includes(value), `گزینهٔ «${value}» در ردیف Protocol رندر می‌شود`)
 }
+
+// GOOL's carrier must be selectable even when Smart Auto later chooses GOOL.
+// The saved value maps to real Core 2.4.0 flags, not just a cosmetic label.
+const modes = [...root.querySelectorAll('.seg[data-key="goolMode"] .seg__item')]
+check(modes.map((b) => b.dataset.value).join(',') === 'MODERN,CLASSIC',
+  'انتخاب هر دو بستر GOOL در بخش اتصال حتی با Smart دیده می‌شود')
+check(!root.innerHTML.includes('[object Object]'), 'توضیح GOOL شیء خام نیست')
+check(modes[0]?.getAttribute('aria-checked') === 'true', 'حالت نوین پیش‌فرض است')
+main.app.profile = { ...main.app.profile, goolMode: 'CLASSIC', protocol: 'GOOL' }
+const classic = renderAdvanced(['connection'])
+check(classic.querySelector('.seg[data-key="goolMode"] [data-value="CLASSIC"]')?.getAttribute('aria-checked') === 'true',
+  'انتخاب ذخیره‌شدهٔ سنتی دوباره رندر می‌شود')
+check(classic.textContent.includes('WireGuard'), 'شرح بستر سنتی نمایش داده می‌شود')
+main.app.profile = { ...main.app.profile, backend: 'TOR_AETHER' }
+check(!renderAdvanced(['connection']).querySelector('.seg[data-key="goolMode"]'),
+  'GOOL در زنجیرهٔ تور→اتر که فقط MASQUE را می‌پذیرد نشان داده نمی‌شود')
+main.app.profile = { backend: 'AETHER', protocol: 'SMART', scanMode: 'BALANCED', ipVersion: 'V4' }
+check(rust.includes('GoolMode::Modern => "--gool"') && rust.includes('GoolMode::Classic => "--gool-classic"'),
+  'انتخاب‌های GOOL به فلگ واقعی هسته متصل هستند')
 for (const value of rendered) {
   check(fromRust.includes(value), `گزینهٔ «${value}» در UI یک مقدار واقعی هسته است`)
 }

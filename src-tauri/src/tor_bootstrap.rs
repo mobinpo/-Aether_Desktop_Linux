@@ -260,12 +260,15 @@ fn parse(line: &str) -> Option<(u8, String)> {
 }
 
 #[cfg(test)]
+pub(crate) static TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     /// تست‌ها یک وضعیت جهانی مشترک دارند، پس هر کدام با `reset` شروع می‌شود
     /// و این قفل جلوی درهم‌رفتنشان را می‌گیرد.
-    static SERIAL: Mutex<()> = Mutex::new(());
+    use super::TEST_SERIAL as SERIAL;
 
     // >>> AETHER-APP-PATCH tor-reverse-gate
     #[test]

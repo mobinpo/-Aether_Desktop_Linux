@@ -7,7 +7,7 @@
 #  safer than rebuilding it, and rebuilding would drag in the Windows-only
 #  build scripts.
 #
-#  Per platform, all from the same official release (v2.3.0, names verified):
+#  Per platform, all from the same official release (v2.4.0, names verified):
 #
 #      linux    aether-linux-<arch>.tar.gz     aether, pt/lyrebird, pt/psiphon-tunnel-core
 #      windows  aether-windows-x86_64.zip      aether.exe, pt/…
@@ -23,11 +23,11 @@
 #      CORE_VERSION            the release tag
 #
 #  Usage:  AETHER_PLATFORM=linux   scripts/fetch-engine.sh [version] [arch]
-#          AETHER_PLATFORM=windows scripts/fetch-engine.sh 2.3.0 x86_64
+#          AETHER_PLATFORM=windows scripts/fetch-engine.sh 2.4.0 x86_64
 # =============================================================================
 set -euo pipefail
 
-VERSION="${1:-${CORE_VERSION:-2.3.0}}"
+VERSION="${1:-${CORE_VERSION:-2.4.0}}"
 ARCH="${2:-$(uname -m)}"
 
 # سکو را صریح می‌گیریم، از `uname` حدس نمی‌زنیم: روی رانرِ `windows-latest`

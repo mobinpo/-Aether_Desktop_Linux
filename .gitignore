@@ -4,6 +4,7 @@
 /src-tauri/target/
 /native/aether/**/target/
 /native/.core-prev/
+/sysroot/
 
 # node
 node_modules/
