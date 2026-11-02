@@ -127,8 +127,8 @@ pub fn ingest(line: &str) {
         Verdict::Mismatch => DiagnosticsLog::e(
             TAG,
             &format!(
-                "ENGINE/CORE VERSION MISMATCH: this app ships core {expected} but aether.exe \
-                 reports {found}. Rebuild the engine (scripts/build-engine.ps1) and reinstall."
+                "ENGINE/CORE VERSION MISMATCH: this app ships core {expected} but engine \
+                 reports {found}. Rebuild or reinstall."
             ),
         ),
     }

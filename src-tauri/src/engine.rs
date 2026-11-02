@@ -144,14 +144,68 @@ pub fn reset_exit_socks_port() {
     set_exit_socks_port(LOCAL_SOCKS_PORT);
 }
 
-/// نسخهٔ هستهٔ همراه برنامه — از فایل CORE_VERSION کنار aether.exe خوانده
+/// نامِ فایلِ اجراییِ موتور روی این سکو.
+#[cfg(windows)]
+pub const EXE_NAME: &str = "aether.exe";
+#[cfg(not(windows))]
+pub const EXE_NAME: &str = "aether";
+
+#[cfg(windows)]
+pub const PSIPHON_EXE: &str = "psiphon-tunnel-core.exe";
+#[cfg(not(windows))]
+pub const PSIPHON_EXE: &str = "psiphon-tunnel-core";
+
+/// این یکی را همهٔ چهار فراخوانی باید بپرسند: `state.rs`، `main.rs::core_caps`،
+/// `main.rs::core_version` و `diagnostics::run`. مسیرِ اشتباه در `core_caps` همهٔ
+/// قابلیت‌ها را false برمی‌گرداند و رابط کاربری هر ورودی را غیرفعال می‌کند.
+pub fn bundled_engine_dir() -> Option<PathBuf> {
+    let exe_parent = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(v) = std::env::var("AETHER_INSTALL_DIR") {
+        let p = PathBuf::from(v);
+        candidates.push(p.join("engine"));
+        candidates.push(p);
+    }
+    if let Some(p) = exe_parent {
+        candidates.push(p.join("engine"));
+        candidates.push(p.join("..").join("lib").join("Aether").join("engine"));
+        candidates.push(p.join("..").join("lib").join("aether").join("engine"));
+        candidates.push(p.join("..").join("Resources").join("engine")); // macOS app bundle
+        candidates.push(p.join("..").join("..").join("dist-engine"));
+        candidates.push(p.clone());
+    }
+    candidates.push(PathBuf::from("/usr/lib/Aether/engine"));
+    candidates.push(PathBuf::from("/usr/lib/aether/engine"));
+    candidates.push(PathBuf::from("/opt/Aether/engine"));
+    candidates.push(PathBuf::from("/opt/aether/engine"));
+    candidates.push(PathBuf::from("dist-engine"));
+    candidates.push(PathBuf::from("engine"));
+
+    candidates
+        .into_iter()
+        .find(|d| d.join(EXE_NAME).is_file())
+}
+
+/// باینری موتورِ همراه برنامه — یا یک مسیرِ خالی اگر پیدا نشد.
+pub fn bundled_engine_exe() -> PathBuf {
+    bundled_engine_dir()
+        .map(|d| d.join(EXE_NAME))
+        .unwrap_or_default()
+}
+
+/// نسخهٔ هستهٔ همراه برنامه — از فایل CORE_VERSION کنار باینری موتور خوانده
 /// می‌شود (همان فایلی که پنل About نشان می‌دهد). در صورت هر ابهامی (0،0)
 /// برمی‌گردد تا رفتار محافظه‌کارانه باشد.
 fn engine_core_version(exe: &Path) -> (u32, u32) {
-    let Some(dir) = exe.parent() else {
-        return (0, 0);
-    };
-    let Ok(raw) = std::fs::read_to_string(dir.join("CORE_VERSION")) else {
+    let raw = exe.parent()
+        .and_then(|dir| std::fs::read_to_string(dir.join("CORE_VERSION")).ok())
+        .or_else(|| {
+            bundled_engine_dir().and_then(|dir| std::fs::read_to_string(dir.join("CORE_VERSION")).ok())
+        });
+    let Some(raw) = raw else {
         return (0, 0);
     };
     let mut parts = raw.trim().trim_start_matches('v').split('.');
@@ -165,6 +219,9 @@ fn engine_core_version(exe: &Path) -> (u32, u32) {
 pub fn core_version_label(exe: &Path) -> String {
     exe.parent()
         .and_then(|dir| std::fs::read_to_string(dir.join("CORE_VERSION")).ok())
+        .or_else(|| {
+            bundled_engine_dir().and_then(|dir| std::fs::read_to_string(dir.join("CORE_VERSION")).ok())
+        })
         .map(|raw| raw.trim().trim_start_matches('v').to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
@@ -262,7 +319,7 @@ pub struct AetherProcess {
 
 impl AetherProcess {
     pub fn new(install_dir: &Path, working_dir: &Path) -> Self {
-        let bundled_dir = install_dir.join("engine");
+        let bundled_dir = bundled_engine_dir().unwrap_or_else(|| install_dir.join("engine"));
         let exe = match prepare_runtime_engine(&bundled_dir, working_dir) {
             Ok(exe) => exe,
             Err(e) => {
@@ -270,7 +327,7 @@ impl AetherProcess {
                     "engine",
                     &format!("Could not stage the engine in a writable folder ({e}); running it from the install folder."),
                 );
-                bundled_dir.join("aether.exe")
+                bundled_dir.join(EXE_NAME)
             }
         };
         Self {
@@ -314,7 +371,7 @@ impl AetherProcess {
                 .ok_or_else(|| anyhow!("Bundled Psiphon asset missing: {name}"))
         };
         Ok((
-            find("psiphon-tunnel-core.exe")?,
+            find(PSIPHON_EXE)?,
             find("server_entries.txt")?,
         ))
     }
@@ -722,7 +779,7 @@ impl AetherProcess {
         let mut child = cmd.spawn()?;
         // Before anything else: from here on the engine and every process it
         // starts die with this app, however the app ends.
-        self.tree = Some(crate::procguard::KillTree::adopt(&child, "aether.exe"));
+        self.tree = Some(crate::procguard::KillTree::adopt(&child, EXE_NAME));
 
         // >>> AETHER-APP-PATCH zt-login-code-prompt
         // موتور بدون کنسول اجرا می‌شود (CREATE_NO_WINDOW) و stdinش یک لولهٔ
@@ -740,7 +797,7 @@ impl AetherProcess {
 
         DiagnosticsLog::i(
             "engine",
-            &format!("Spawned aether.exe {}", redact_args(&args).join(" ")),
+            &format!("Spawned {} {}", EXE_NAME, redact_args(&args).join(" ")),
         );
         for (key, value) in &tor_dirs {
             DiagnosticsLog::i("engine", &format!("{key}={value}"));
@@ -878,7 +935,7 @@ impl Drop for AetherProcess {
 fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<PathBuf> {
     let runtime_dir = working_dir.join("engine");
     if runtime_dir == *bundled_dir {
-        let exe = runtime_dir.join("aether.exe");
+        let exe = runtime_dir.join(EXE_NAME);
         return if exe.exists() {
             Ok(exe)
         } else {
@@ -895,6 +952,15 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
         let dst = runtime_dir.join(entry.file_name());
         if !runtime_copy_is_fresh(&src, &dst) {
             std::fs::copy(&src, &dst)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&dst) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o755);
+                    let _ = std::fs::set_permissions(&dst, perms);
+                }
+            }
         }
     }
     // ۱.۲.۵ — زیرپوشهٔ `pt` هم باید بیاید.
@@ -965,12 +1031,21 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
             let _ = std::fs::copy(&src, &dst);
         }
     }
-    let exe = runtime_dir.join("aether.exe");
+    let exe = runtime_dir.join(EXE_NAME);
     if !exe.exists() {
         return Err(anyhow!(
             "Engine binary missing: {}",
-            bundled_dir.join("aether.exe").display()
+            bundled_dir.join(EXE_NAME).display()
         ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&exe) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(&exe, perms);
+        }
     }
     Ok(exe)
 }

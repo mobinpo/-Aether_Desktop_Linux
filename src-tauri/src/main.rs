@@ -444,11 +444,7 @@ fn about_info() -> serde_json::Value {
 /// می‌شوند تا پنل پیشرفته آن‌ها را روی هستهٔ قدیمی‌تر خاکستری کند.
 #[tauri::command]
 fn core_caps() -> serde_json::Value {
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("engine").join("aether.exe")))
-        .unwrap_or_default();
-    let caps = engine::engine_caps(&exe);
+    let caps = engine::engine_caps(&engine::bundled_engine_exe());
     serde_json::json!({
         "zeroTrust": caps.zero_trust,
         "routing": caps.routing,
@@ -464,10 +460,8 @@ fn core_caps() -> serde_json::Value {
 }
 
 fn core_version() -> String {
-    // Placed next to aether.exe (equivalent of assets/CORE_VERSION on Android).
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("engine").join("CORE_VERSION")))
+    engine::bundled_engine_dir()
+        .map(|d| d.join("CORE_VERSION"))
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "unknown".to_string())

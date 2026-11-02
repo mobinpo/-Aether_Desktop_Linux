@@ -387,10 +387,16 @@ impl AetherController {
         let store = ProfileStore::new(data_dir);
         let mut profile = store.load();
         profile.normalize();
-        let install_dir = std::env::current_exe()
+        let exe_parent = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| data_dir.to_path_buf());
+
+        // بستهٔ deb پروژه را در `/usr/bin` می‌گذارد ولی منابع را در
+        // `/usr/lib/Aether/engine` — پس «کنارِ خودِ باینری» روی لینوکس غلط است.
+        let install_dir = crate::engine::bundled_engine_dir()
+            .and_then(|d| d.parent().map(Path::to_path_buf))
+            .unwrap_or(exe_parent);
 
         crate::procguard::set_own_roots(&[install_dir.clone(), data_dir.to_path_buf()]);
 

@@ -54,9 +54,13 @@ const TAG: &str = "portguard";
 /// باینری‌هایی که خودِ اتر اجرا می‌کند (مستقیم یا به‌عنوان نوه).
 const OWN_IMAGES: &[&str] = &[
     "aether.exe",
+    "aether",
     "psiphon-tunnel-core.exe",
+    "psiphon-tunnel-core",
     "tor.exe",
+    "tor",
     "lyrebird.exe",
+    "lyrebird",
     "snowflake-client.exe",
     "webtunnel-client.exe",
     "conjure-client.exe",
@@ -218,7 +222,10 @@ fn is_own_image(path: &Path) -> bool {
         .to_string_lossy()
         .to_ascii_lowercase()
         .replace('/', "\\");
-    (name == "aether.exe" || name == "psiphon-tunnel-core.exe")
+    (name == "aether.exe"
+        || name == "aether"
+        || name == "psiphon-tunnel-core.exe"
+        || name == "psiphon-tunnel-core")
         && lower.ends_with(&format!("\\engine\\{name}"))
 }
 

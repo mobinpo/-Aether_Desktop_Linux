@@ -695,10 +695,8 @@ fn check(name: &str, verdict: Verdict, detail: impl Into<String>) -> Check {
 pub fn run(profile: &ConnectionProfile) -> Report {
     let mut checks = Vec::new();
 
-    // ۱) باینری موتور
-    let engine_exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("engine").join("aether.exe")));
+    // ۱) باینری موتور — از همان resolverِ مشترک، چون روی لینوکس کنارِ باینری نیست.
+    let engine_exe = Some(crate::engine::bundled_engine_exe());
     checks.push(match &engine_exe {
         Some(p) if p.exists() => check("Engine binary", Verdict::Pass, p.display().to_string()),
         Some(p) => check(
@@ -791,7 +789,7 @@ pub fn run(profile: &ConnectionProfile) -> Report {
             "Build identity",
             Verdict::Fail,
             format!(
-                "WRONG ENGINE: this app ships Aether core {} but aether.exe reports {engine}. \
+                "WRONG ENGINE: this app ships Aether core {} but engine reports {engine}. \
                  Reinstall so the engine and the app match.",
                 crate::provenance::expected_core_version()
             ),
