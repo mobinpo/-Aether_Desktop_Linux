@@ -1680,12 +1680,25 @@ impl AetherController {
             match Tunnel::establish(&profile, &wintun) {
                 Ok(t) => self.tunnel = Some(t),
                 Err(e) => {
-                    // AETHER-APP-FIX no-sysproxy-fallback (1.4.0): without the TUN
-                    // adapter the connection is NOT reported as working; it fails
-                    // visibly instead of silently degrading to the system proxy.
-                    let why = format!("Wintun/TUN failed: {e:#}");
-                    self.fail(&why);
-                    return false;
+                    #[cfg(windows)]
+                    {
+                        // AETHER-APP-FIX no-sysproxy-fallback (1.4.0): without the TUN
+                        // adapter the connection is NOT reported as working; it fails
+                        // visibly instead of silently degrading to the system proxy.
+                        let why = format!("Wintun/TUN failed: {e:#}");
+                        self.fail(&why);
+                        return false;
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        // در لینوکس و مک کاربر بدون sudo/root فقط از پروکسی سیستمی استفاده می‌کند
+                        DiagnosticsLog::w(
+                            "tun",
+                            &format!(
+                                "TUN unavailable ({e}); continuing with the system-proxy data path."
+                            ),
+                        );
+                    }
                 }
             }
         }
