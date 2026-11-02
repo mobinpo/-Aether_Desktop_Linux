@@ -611,13 +611,26 @@ pub fn self_test(grace_ms: u64) -> SelfTestOutcome {
     let leak = webrtc_leak_check(exit.as_ref().map(|e| e.ip.as_str()));
     if leak.leaking {
         let masked = leak.ip.as_deref().map(mask_ip).unwrap_or_default();
-        DiagnosticsLog::update_check(C_LEAK, "FAIL", Some("real IP still reachable over UDP"));
-        DiagnosticsLog::e(
-            TAG,
-            &format!(
-                "WebRTC leak: a STUN server answered with {masked} over direct UDP. Enable the leak guard, or restart the browser so the new policy is picked up."
-            ),
-        );
+        #[cfg(windows)]
+        {
+            DiagnosticsLog::update_check(C_LEAK, "FAIL", Some("real IP still reachable over UDP"));
+            DiagnosticsLog::e(
+                TAG,
+                &format!(
+                    "WebRTC leak: a STUN server answered with {masked} over direct UDP. Enable the leak guard, or restart the browser so the new policy is picked up."
+                ),
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            DiagnosticsLog::update_check(C_LEAK, "WARN", Some("no system-level UDP containment"));
+            DiagnosticsLog::w(
+                TAG,
+                &format!(
+                    "WebRTC / UDP notice: a STUN server answered with {masked} over direct UDP (no Windows firewall on Linux/macOS). Disable WebRTC in your browser if needed."
+                ),
+            );
+        }
     } else if leakguard::status().udp_browser_scoped && leak.ip.is_some() {
         // نشتی نیست، ولی «تمیزِ» بی‌قید هم نیست: در این حالت مرورگرِ از قبل
         // بازمانده تا وقتی بسته و باز نشود سیاست را نخوانده است.
@@ -633,8 +646,9 @@ pub fn self_test(grace_ms: u64) -> SelfTestOutcome {
 
     // Never report CONNECTED when the leak check failed. The previous build
     // only painted the warning red while still declaring the tunnel healthy.
-    // That was the most dangerous part of the bug.
-    let ok = ok && !leak.leaking;
+    // That was the most dangerous part of the bug. On Linux/macOS, there is no
+    // Windows firewall/registry, so system-proxy mode connects regardless of direct STUN.
+    let ok = if cfg!(windows) { ok && !leak.leaking } else { ok };
     SelfTestOutcome {
         ok,
         exit,

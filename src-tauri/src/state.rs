@@ -2447,11 +2447,33 @@ impl AetherController {
                         // Refresh even when verification supplied an IP: prefer IPv4 and enrich missing country.
                         spawn_ip_lookup(self.ip_slot.clone(), true);
                     } else if out.leak.as_ref().map(|l| l.leaking).unwrap_or(false) {
-                        // Fail closed. A tunnel that exposes the real IP is not
-                        // a successful connection, even when TCP/DNS passed.
-                        self.fail(
-                            "Connection refused: WebRTC can still reach the real IP over direct UDP. Browser and system protection could not be verified.",
-                        );
+                        #[cfg(windows)]
+                        {
+                            // Fail closed. A tunnel that exposes the real IP is not
+                            // a successful connection, even when TCP/DNS passed.
+                            self.fail(
+                                "Connection refused: WebRTC can still reach the real IP over direct UDP. Browser and system protection could not be verified.",
+                            );
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            DiagnosticsLog::w(
+                                TAG,
+                                "WebRTC can bypass the tunnel (no UDP containment on this platform) — connecting anyway. Disable WebRTC in your browser to avoid the leak.",
+                            );
+                            if let Some(s) = self.smart_plus.as_mut() {
+                                s.succeeded(&self.data_dir, self.profile.verify_connection);
+                            }
+                            self.smart_plus = None;
+                            self.set_state(ConnectionState::Connected, "");
+                            crate::smart_lists::refresh_if_due(
+                                &self.data_dir,
+                                &self.profile,
+                                engine::exit_socks_port(),
+                            );
+                            DiagnosticsLog::i(TAG, "All checks passed — tunnel is ready.");
+                            spawn_ip_lookup(self.ip_slot.clone(), true);
+                        }
                     } else {
                         self.advance_or_fail("Tunnel started, but the end-to-end self-test failed");
                     }

@@ -183,9 +183,15 @@ impl LeakGuard {
 
         if me.rules == 0 {
             if me.edits.is_empty() {
+                #[cfg(windows)]
                 DiagnosticsLog::e(
                     TAG,
                     "Leak guard could not install any protection. The connection must fail closed; administrator rights are required for the firewall kill-switch.",
+                );
+                #[cfg(not(windows))]
+                DiagnosticsLog::w(
+                    TAG,
+                    "No system-level leak containment on this platform (no netsh/registry). The tunnel runs, but WebRTC inside the browser can bypass it — disable WebRTC in the browser for full protection.",
                 );
             } else {
                 DiagnosticsLog::w(
