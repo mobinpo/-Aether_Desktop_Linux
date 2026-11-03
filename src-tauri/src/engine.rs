@@ -495,13 +495,60 @@ impl AetherProcess {
     }
     // <<< AETHER-APP-PATCH the-tor-in-front-is-the-real-tor
 
+    /// بررسی می‌کند آیا این دایرکتوری برای فرآیند فعلی قابلیت نوشتن دارد یا خیر.
+    pub fn is_writable_dir(dir: &Path) -> bool {
+        if !dir.is_dir() {
+            return false;
+        }
+        let test_file = dir.join(format!(".w_test_{}_{}", std::process::id(), crate::custom::now_millis()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&test_file)
+        {
+            Ok(file) => {
+                drop(file);
+                let _ = std::fs::remove_file(test_file);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// پوشه‌ای که موتور در آن اجرا می‌شود و فایل‌های هویتش (`aether-team-*.toml`)
     /// را می‌نویسد. ورودِ Zero Trust با آن می‌فهمد دستگاه عضوِ تیم هست یا نه.
+    /// تضمین می‌شود این مسیر همیشه یک پوشهٔ قابل‌نوشتن برای کاربر باشد.
     pub fn run_dir(&self) -> PathBuf {
-        self.exe
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.working_dir.clone())
+        let runtime = self.working_dir.join("engine");
+        let _ = std::fs::create_dir_all(&runtime);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&runtime) {
+                let mut perms = meta.permissions();
+                if perms.mode() & 0o700 != 0o700 {
+                    perms.set_mode(0o755);
+                    let _ = std::fs::set_permissions(&runtime, perms);
+                }
+            }
+        }
+        if Self::is_writable_dir(&runtime) {
+            return runtime;
+        }
+
+        if let Some(p) = self.exe.parent() {
+            if Self::is_writable_dir(p) {
+                return p.to_path_buf();
+            }
+        }
+
+        if Self::is_writable_dir(&self.working_dir) {
+            return self.working_dir.clone();
+        }
+
+        let tmp = std::env::temp_dir().join("aether_runtime");
+        let _ = std::fs::create_dir_all(&tmp);
+        tmp
     }
 
     // >>> AETHER-APP-FIX forget-a-gateway-that-failed-its-proof
@@ -621,16 +668,11 @@ impl AetherProcess {
             }
             // <<< AETHER-APP-FIX perf-tier-matches-the-machine
         }
-        // ریشهٔ قطعی خطای Access is denied (code 5): تست‌های تشخیصی روی
-        // سیستم کاربر ثابت کرد هستهٔ 1.4.0 با CWD=ریشهٔ پوشهٔ داده می‌میرد
-        // (T1/T2) ولی با CWD=پوشهٔ خود موتور کامل وصل می‌شود (T3).
-        // پس موتور را در پوشهٔ خودش اجرا می‌کنیم؛ فایل‌های هویت/کانفیگ هم
-        // در prepare_runtime_engine به همین پوشه منتقل می‌شوند.
-        let run_dir = self
-            .exe
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.working_dir.clone());
+        // ریشهٔ قطعی خطای Access is denied (code 5 در ویندوز، code 13 در لینوکس):
+        // موتور در CWD وضعیت خود و فایل‌های هویت (aether.toml و...) را می‌نویسد.
+        // پوشهٔ اجرا حتماً باید یک دایرکتوری با مجوز نوشتن باشد، وگرنه روی لینوکس
+        // در صورت اجرای مستقیم از /usr/lib خطای Permission denied رخ می‌دهد.
+        let run_dir = self.run_dir();
         // ----- تور (هستهٔ ۲.۰.۰) ----------------------------------------
         //
         // دو مسیری که موتور نمی‌تواند خودش حدس بزند، پس این‌جا تحویل داده
@@ -733,6 +775,9 @@ impl AetherProcess {
             .envs(smart_env)
             .envs(tor_dirs.clone())
             .current_dir(&run_dir)
+            .env("AETHER_CONFIG", run_dir.join("aether.toml"))
+            .env("AETHER_TOR_DIR", self.working_dir.join("tor"))
+            .env("AETHER_PSIPHON_DIR", self.working_dir.join("psiphon"))
             // v11: متغیرهای هستهٔ 1.7.0 هم مثل فلگ‌ها گِیت شده‌اند.
             .envs(
                 if self.psiphon_only_run(profile) {
@@ -747,13 +792,23 @@ impl AetherProcess {
             // >>> AETHER-APP-PATCH tor-reverse-latch
             // بعد از پروفایل، تا هیچ مقدارِ پروفایلی (مثلاً `AETHER_MASQUE_HTTP2=0`
             // یا بودجهٔ fast_endpoint_only) حاملِ داخلِ تور را پس نزند.
-            .envs(self.upstream_env())
+            .envs(self.upstream_env());
             // <<< AETHER-APP-PATCH tor-reverse-latch
             // Core 2.4.0 (upstream, unmodified) sizes its own endpoint scan from
             // `--scan` and has no rung-budget variable; the ladder in
             // `smart_auto.rs` sizes every rung to fit that scan instead.
-            .env("HOME", &run_dir)
-            .env("TMPDIR", &run_dir)
+        #[cfg(windows)]
+        {
+            cmd.env("HOME", &run_dir);
+            cmd.env("TMPDIR", &run_dir);
+        }
+        #[cfg(not(windows))]
+        {
+            if Self::is_writable_dir(&run_dir) {
+                cmd.env("TMPDIR", &run_dir);
+            }
+        }
+        cmd
             // هستهٔ 1.4.0 بلافاصله بعد از مرحلهٔ جدید sysprofile با
             // Error: Io(code 5, Access is denied) خارج می‌شود. این دو متغیر
             // backtrace کامل از خود هسته در صورت خطا در کنسول لاگ برنامه ثبت شود؛
@@ -942,23 +997,42 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
             Err(anyhow!("Engine binary missing: {}", exe.display()))
         };
     }
-    std::fs::create_dir_all(&runtime_dir)?;
-    for entry in std::fs::read_dir(bundled_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
+    let _ = std::fs::create_dir_all(&runtime_dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&runtime_dir) {
+            let mut perms = meta.permissions();
+            if perms.mode() & 0o700 != 0o700 {
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&runtime_dir, perms);
+            }
         }
-        let src = entry.path();
-        let dst = runtime_dir.join(entry.file_name());
-        if !runtime_copy_is_fresh(&src, &dst) {
-            std::fs::copy(&src, &dst)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&dst) {
-                    let mut perms = meta.permissions();
-                    perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&dst, perms);
+    }
+    if let Ok(entries) = std::fs::read_dir(bundled_dir) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let src = entry.path();
+            let dst = runtime_dir.join(entry.file_name());
+            if !runtime_copy_is_fresh(&src, &dst) {
+                let _ = std::fs::remove_file(&dst);
+                if let Err(e) = std::fs::copy(&src, &dst) {
+                    DiagnosticsLog::w(
+                        "engine",
+                        &format!("Could not stage {}: {e}", entry.file_name().to_string_lossy()),
+                    );
+                } else {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = std::fs::metadata(&dst) {
+                            let mut perms = meta.permissions();
+                            perms.set_mode(0o755);
+                            let _ = std::fs::set_permissions(&dst, perms);
+                        }
+                    }
                 }
             }
         }
@@ -977,11 +1051,23 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
     let tor_src = bundled_dir.join("tor");
     if tor_src.is_dir() {
         let tor_dst = runtime_dir.join("tor");
-        std::fs::create_dir_all(&tor_dst)?;
-        for entry in std::fs::read_dir(&tor_src)? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() {
-                let _ = std::fs::copy(entry.path(), tor_dst.join(entry.file_name()));
+        let _ = std::fs::create_dir_all(&tor_dst);
+        if let Ok(entries) = std::fs::read_dir(&tor_src) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let dst = tor_dst.join(entry.file_name());
+                    let _ = std::fs::remove_file(&dst);
+                    let _ = std::fs::copy(entry.path(), &dst);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = std::fs::metadata(&dst) {
+                            let mut perms = meta.permissions();
+                            perms.set_mode(0o755);
+                            let _ = std::fs::set_permissions(&dst, perms);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1006,6 +1092,7 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
                 let src = entry.path();
                 let dst = pt_dst.join(entry.file_name());
                 if !runtime_copy_is_fresh(&src, &dst) {
+                    let _ = std::fs::remove_file(&dst);
                     if let Err(e) = std::fs::copy(&src, &dst) {
                         DiagnosticsLog::w(
                             "engine",
@@ -1014,6 +1101,16 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
                                 entry.file_name().to_string_lossy()
                             ),
                         );
+                    } else {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            if let Ok(meta) = std::fs::metadata(&dst) {
+                                let mut perms = meta.permissions();
+                                perms.set_mode(0o755);
+                                let _ = std::fs::set_permissions(&dst, perms);
+                            }
+                        }
                     }
                 }
             }
@@ -1024,7 +1121,7 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
     // پوشهٔ اجرای موتور منتقل می‌شود تا دوباره ثبت‌نام لازم نشود.
     // (فایل‌های دیگر مثل masque/lastconn عمداً کپی نمی‌شوند؛ هستهٔ
     // جدید خودش نسخهٔ سالم می‌سازد.)
-    for name in ["aether.toml", "aether-secondary.toml"] {
+    for name in ["aether.toml", "aether-secondary.toml", "aether-masque.toml"] {
         let src = working_dir.join(name);
         let dst = runtime_dir.join(name);
         if src.is_file() && !dst.exists() {
@@ -1032,22 +1129,29 @@ fn prepare_runtime_engine(bundled_dir: &Path, working_dir: &Path) -> Result<Path
         }
     }
     let exe = runtime_dir.join(EXE_NAME);
-    if !exe.exists() {
-        return Err(anyhow!(
-            "Engine binary missing: {}",
-            bundled_dir.join(EXE_NAME).display()
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&exe) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o755);
-            let _ = std::fs::set_permissions(&exe, perms);
+    if exe.is_file() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&exe) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&exe, perms);
+            }
         }
+        return Ok(exe);
     }
-    Ok(exe)
+
+    let bundled_exe = bundled_dir.join(EXE_NAME);
+    if bundled_exe.is_file() {
+        return Ok(bundled_exe);
+    }
+
+    Err(anyhow!(
+        "Engine binary missing: neither {} nor {} exists",
+        exe.display(),
+        bundled_exe.display()
+    ))
 }
 
 /// فقط وقتی دوباره کپی می‌کنیم که نسخهٔ نصب‌شده عوض شده باشد (آپدیت برنامه).
@@ -1224,6 +1328,17 @@ mod perf_tier_tests {
     fn a_big_machine_still_gets_the_high_tier() {
         assert_eq!(forced_perf_tier(8), Some("high"));
         assert_eq!(forced_perf_tier(16), Some("high"));
+    }
+
+    #[test]
+    fn writable_dir_detection() {
+        let temp = std::env::temp_dir();
+        assert!(super::AetherProcess::is_writable_dir(&temp));
+        #[cfg(unix)]
+        {
+            assert!(!super::AetherProcess::is_writable_dir(std::path::Path::new("/proc")));
+            assert!(!super::AetherProcess::is_writable_dir(std::path::Path::new("/nonexistent_path_xyz_123")));
+        }
     }
 }
 // <<< AETHER-APP-FIX perf-tier-matches-the-machine
